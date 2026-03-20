@@ -32,7 +32,13 @@ BQ27220 bq27220;
 Audio audio;
 
 // TouchDrvCSTXXX touch;
-GxEPD2_BW<GxEPD2_310_GDEQ031T10, GxEPD2_310_GDEQ031T10::HEIGHT> display(GxEPD2_310_GDEQ031T10(BOARD_EPD_CS, BOARD_EPD_DC, BOARD_EPD_RST, BOARD_EPD_BUSY)); // GDEQ031T10 240x320, UC8253, (no inking, backside mark KEGMO 3100)
+using InkPanel = GxEPD2_310_GDEQ031T10;
+using InkDisplay = GxEPD2_BW<InkPanel, InkPanel::HEIGHT>;
+static constexpr int16_t BOARD_EPD_RST_UNUSED = -1;
+
+InkDisplay display_v1_1(InkPanel(BOARD_EPD_CS, BOARD_EPD_DC, BOARD_EPD_RST, BOARD_EPD_BUSY)); // GDEQ031T10 240x320, UC8253, (no inking, backside mark KEGMO 3100)
+InkDisplay display_v1_0(InkPanel(BOARD_EPD_CS, BOARD_EPD_DC, BOARD_EPD_RST_UNUSED, BOARD_EPD_BUSY));
+InkDisplay *display = &display_v1_1;
 
 uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
@@ -47,43 +53,52 @@ bool peri_init_st[E_PERI_NUM_MAX] = {0};
 /*********************************************************************************
  *                              STATIC PROTOTYPES
  * *******************************************************************************/
+static void select_ink_display()
+{
+    display = isT_Deck_Pro_v1_1 ? &display_v1_1 : &display_v1_0;
+    Serial.printf("[EPD] reset mode: %s (RST=%d)\n",
+                  isT_Deck_Pro_v1_1 ? "hardware" : "soft-only",
+                  isT_Deck_Pro_v1_1 ? BOARD_EPD_RST : BOARD_EPD_RST_UNUSED);
+}
+
 static bool ink_screen_init()
 {
     // SPI.begin(BOARD_SPI_SCK, -1, BOARD_SPI_MOSI, BOARD_EPD_CS);
-    display.init(115200, true, 2, false);
+    display->init(115200, true, 2, false);
     //Serial.println("helloWorld");
-    display.setRotation(0);
-    display.setFont(&FreeMonoBold9pt7b);
-    if (display.epd2.WIDTH < 104) display.setFont(0);
-    display.setTextColor(GxEPD_BLACK);
+    display->setRotation(0);
+    display->setFont(&FreeMonoBold9pt7b);
+    if (display->epd2.WIDTH < 104) display->setFont(0);
+    display->setTextColor(GxEPD_BLACK);
     int16_t tbx, tby; uint16_t tbw, tbh;
     if(isT_Deck_Pro_v1_1) {
-        display.getTextBounds(Version_str2, 0, 0, &tbx, &tby, &tbw, &tbh);
+        display->getTextBounds(Version_str2, 0, 0, &tbx, &tby, &tbw, &tbh);
     }
     else {
-        display.getTextBounds(Version_str1, 0, 0, &tbx, &tby, &tbw, &tbh);
+        display->getTextBounds(Version_str1, 0, 0, &tbx, &tby, &tbw, &tbh);
     }
     // center bounding box by transposition of origin:
-    uint16_t x = ((display.width() - tbw) / 2) - tbx;
-    uint16_t y = ((display.height() - tbh) / 2) - tby;
-    display.setFullWindow();
-    display.firstPage();
+    uint16_t x = ((display->width() - tbw) / 2) - tbx;
+    uint16_t y = ((display->height() - tbh) / 2) - tby;
+    display->setFullWindow();
+    display->firstPage();
     do
     {
-        display.fillScreen(GxEPD_WHITE);
-        display.setCursor(x, y);
+        display->fillScreen(GxEPD_WHITE);
+        display->setCursor(x, y);
         if(isT_Deck_Pro_v1_1) {
-            display.print(Version_str2);
+            display->print(Version_str2);
         }
         else {
-            display.print(Version_str1);
+            display->print(Version_str1);
         }
 
-        display.setCursor(x+20, y+20);
-        display.print(UI_T_DECK_PRO_VERSION);
+        display->setCursor(x+20, y+20);
+        display->print(UI_T_DECK_PRO_VERSION);
     }
-    while (display.nextPage());
-    display.hibernate();
+    while (display->nextPage());
+    // Some board revisions don't wire the panel reset line, so avoid deep sleep.
+    display->powerOff();
     return true;
 }
 
@@ -96,17 +111,17 @@ static void flush_timer_cb(lv_timer_t *t)
         lv_coord_t h = LV_VER_RES;
 
         if(disp_refr_mode == DISP_REFR_MODE_PART) {
-            display.setPartialWindow(0, 0, w, h);
+            display->setPartialWindow(0, 0, w, h);
         } else if(disp_refr_mode == DISP_REFR_MODE_FULL){
-            display.setFullWindow();
+            display->setFullWindow();
         }
 
-        display.firstPage();
+        display->firstPage();
         do {
-            display.drawInvertedBitmap(0, 0, decodebuffer, w, h - 3, GxEPD_BLACK);
+            display->drawInvertedBitmap(0, 0, decodebuffer, w, h - 3, GxEPD_BLACK);
         }
-        while (display.nextPage());
-        display.hibernate();
+        while (display->nextPage());
+        display->powerOff();
         
         Serial.printf("flush_timer_cb:%d, %s\n", idx++, (disp_refr_mode == 0 ?"full":"part"));
 
@@ -150,18 +165,18 @@ static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_colo
     // lv_coord_t h = LV_VER_RES;
 
     if(disp_refr_mode == DISP_REFR_MODE_PART) {
-        display.setPartialWindow(0, 0, w, h);
+        display->setPartialWindow(0, 0, w, h);
     } else if(disp_refr_mode == DISP_REFR_MODE_FULL){
-        display.setFullWindow();
+        display->setFullWindow();
     }
 
-    display.firstPage();
+    display->firstPage();
     do {
-        display.fillScreen(GxEPD_WHITE);
-        display.drawInvertedBitmap(0, 0, decodebuffer, w, h - 3, GxEPD_BLACK);
+        display->fillScreen(GxEPD_WHITE);
+        display->drawInvertedBitmap(0, 0, decodebuffer, w, h - 3, GxEPD_BLACK);
     }
-    while (display.nextPage());
-    // display.hibernate();
+    while (display->nextPage());
+    display->powerOff();
     
     static int idx = 0;
     Serial.printf("flush_timer_cb:%d, %s\n", idx++, (disp_refr_mode == 0 ?"full":"part"));
@@ -458,6 +473,8 @@ void setup()
         }
     }
 
+    select_ink_display();
+
     if(isT_Deck_Pro_v1_1) {
         Serial.println("Adafruit DRV2605 Basic test");
         if (!drv.begin()) {
@@ -474,11 +491,10 @@ void setup()
 
 #ifdef T_DECK_PRO_V1_1
     if(!isT_Deck_Pro_v1_1){
-        Serial.printf(" ------------- ERROR ------------- \n");
-        Serial.printf("Firmware mismatch\n");
-        Serial.printf("Your hardware might be the T-Deck-Pro V1.0, but please download the H693_factory_v2.x.bin firmware.\n");
-        Serial.printf("T-Deck-Pro V1.0   ---   H693_factory_v1.x.bin \n");
-        Serial.printf("T-Deck-Pro V1.1   ---   H693_factory_v2.x.bin\n");
+        Serial.printf(" ------------- WARN ------------- \n");
+        Serial.printf("Detected T-Deck-Pro V1.0 hardware\n");
+        Serial.printf("EPD compatibility mode enabled: panel reset is disabled for stable refresh.\n");
+        Serial.printf("If other peripherals behave differently, prefer H693_factory_v1.x.bin.\n");
     }
 #endif
 
