@@ -316,7 +316,17 @@ const char * ui_batt_25896_get_ntc_st(void)
 }
 /* 27220 */
 bool ui_battery_27220_is_vaild(void) {return peri_init_st[E_PERI_BQ27220]; }
-bool ui_battery_27220_get_input(void) { return bq27220.getIsCharging();}
+bool ui_battery_is_external_power_present(void)
+{
+    if (peri_init_st[E_PERI_BQ25896]) {
+        return PPM.isVbusIn();
+    }
+    if (peri_init_st[E_PERI_BQ27220]) {
+        return bq27220.getAverageCurrent() > 0;
+    }
+    return false;
+}
+bool ui_battery_27220_get_input(void) { return ui_battery_is_external_power_present(); }
 bool ui_battery_27220_get_charge_finish(void) { return bq27220.getCharingFinish();}
 uint16_t ui_battery_27220_get_status(void) 
 {
@@ -332,6 +342,21 @@ uint16_t ui_battery_27220_get_design_capacity(void) { return bq27220.getDesignCa
 uint16_t ui_battery_27220_get_remain_capacity(void) { return bq27220.getRemainingCapacity(); }
 uint16_t ui_battery_27220_get_percent(void) { return bq27220.getStateOfCharge(); }
 uint16_t ui_battery_27220_get_health(void) { return bq27220.getStateOfHealth(); }
+bool ui_battery_27220_is_low_alarm(void)
+{
+    if (!peri_init_st[E_PERI_BQ27220]) {
+        return false;
+    }
+
+    BQ27220BatteryStatus batt = {0};
+    BQ27220OperationStatus oper = {0};
+    BQ27220GaugingStatus gauging = {0};
+
+    bq27220.getBatteryStatus(&batt);
+    bq27220.getGaugingStatus(&gauging);
+
+    return batt.reg.SYSDWN || batt.reg.TDA || gauging.reg.EDV;
+}
 const char * ui_battert_27220_get_percent_level(void)
 {
     int percent = bq27220.getStateOfCharge();
