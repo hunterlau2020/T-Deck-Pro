@@ -5,6 +5,7 @@
  *                                  INCLUDES
  * *******************************************************************************/
 #include "peripheral.h"
+#include "utilities.h"
 #define XPOWERS_CHIP_BQ25896
 #include <XPowersLib.h>
 #include "bq27220.h"
@@ -22,6 +23,8 @@
 
 #define DISP_REFR_MODE_FULL 0
 #define DISP_REFR_MODE_PART 1
+#define EPD_BITMAP_STRIDE(width) (((width) + 7) / 8)
+#define EPD_BITMAP_BUF_SIZE (EPD_BITMAP_STRIDE(LCD_HOR_SIZE) * LCD_VER_SIZE)
 
 #define TINY_GSM_MODEM_SIM7672
 #define TINY_GSM_RX_BUFFER 1024 // Set RX buffer to 1Kb
@@ -61,6 +64,7 @@ union flush_buf_pixel
  *                              GLOBAL PROTOTYPES
  * *******************************************************************************/
 void disp_full_refr(void); // Next global refresh
+void ink_screen_prepare_shutdown(void);
 
 int hyn_touch_init(void);
 uint8_t hyn_touch_get_point(int16_t *x_array, int16_t *y_array, uint8_t get_point);

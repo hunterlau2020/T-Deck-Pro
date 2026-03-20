@@ -452,6 +452,7 @@ void ui_a7682_loop_suspend(void)
 
 void ui_shutdown_on(void)
 {
+    ink_screen_prepare_shutdown();
     PPM.shutdown();
     Serial.println("Shutdown .....");
 }
