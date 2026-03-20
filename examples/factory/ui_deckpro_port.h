@@ -122,6 +122,8 @@ uint16_t ui_battery_27220_get_design_capacity(void);
 uint16_t ui_battery_27220_get_remain_capacity(void);
 uint16_t ui_battery_27220_get_percent(void);
 uint16_t ui_battery_27220_get_health(void);
+bool ui_battery_27220_is_low_alarm(void);
+bool ui_battery_is_external_power_present(void);
 const char * ui_battert_27220_get_percent_level(void);
 
 // [ screen 7 ] --- Input
