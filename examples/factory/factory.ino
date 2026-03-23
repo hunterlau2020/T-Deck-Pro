@@ -19,6 +19,7 @@
 #include "factory.h"
 #include "peripheral.h"
 #include <Preferences.h>
+#include <freertos/semphr.h>
 
 Adafruit_DRV2605 drv;
 
@@ -40,6 +41,7 @@ static constexpr uint16_t FACTORY_BQ25896_INPUT_LIMIT_MA = 1000;
 static constexpr uint16_t FACTORY_BQ25896_SYS_POWER_DOWN_MV = 3300;
 static constexpr uint32_t FACTORY_BQ25896_RUNTIME_CHECK_MS = 5000;
 static constexpr uint32_t FACTORY_BQ25896_RECOVERY_COOLDOWN_MS = 30000;
+static constexpr uint32_t FACTORY_EPD_SPI_HZ = 2000000;
 
 // TouchDrvCSTXXX touch;
 using InkPanel = GxEPD2_310_GDEQ031T10;
@@ -59,6 +61,52 @@ const char Version_str1[] = "T-Deck-Pro V1.0";
 const char Version_str2[] = "T-Deck-Pro V1.1";
 
 bool peri_init_st[E_PERI_NUM_MAX] = {0};
+static SemaphoreHandle_t shared_spi_mutex = nullptr;
+
+static void shared_spi_release_all_cs()
+{
+    digitalWrite(BOARD_LORA_CS, HIGH);
+    digitalWrite(BOARD_SD_CS, HIGH);
+    digitalWrite(BOARD_EPD_CS, HIGH);
+}
+
+void shared_spi_bus_init(void)
+{
+    if (shared_spi_mutex == nullptr) {
+        shared_spi_mutex = xSemaphoreCreateRecursiveMutex();
+        if (shared_spi_mutex == nullptr) {
+            Serial.println("[SPI] Failed to create shared bus mutex");
+            return;
+        }
+    }
+    shared_spi_release_all_cs();
+}
+
+void shared_spi_lock(void)
+{
+    if (shared_spi_mutex == nullptr) {
+        shared_spi_bus_init();
+    }
+    if (shared_spi_mutex != nullptr) {
+        xSemaphoreTakeRecursive(shared_spi_mutex, portMAX_DELAY);
+    }
+}
+
+void shared_spi_unlock(void)
+{
+    if (shared_spi_mutex != nullptr) {
+        shared_spi_release_all_cs();
+        xSemaphoreGiveRecursive(shared_spi_mutex);
+    }
+}
+
+void shared_spi_prepare_device(int cs_pin)
+{
+    shared_spi_release_all_cs();
+    if (cs_pin >= 0) {
+        digitalWrite(cs_pin, HIGH);
+    }
+}
 
 /*********************************************************************************
  *                              STATIC PROTOTYPES
@@ -73,7 +121,11 @@ static void select_ink_display()
 
 static bool ink_screen_init()
 {
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_EPD_CS);
+
     // SPI.begin(BOARD_SPI_SCK, -1, BOARD_SPI_MOSI, BOARD_EPD_CS);
+    display->epd2.selectSPI(SPI, SPISettings(FACTORY_EPD_SPI_HZ, MSBFIRST, SPI_MODE0));
     display->init(115200, true, 2, false);
     //Serial.println("helloWorld");
     display->setRotation(0);
@@ -109,6 +161,7 @@ static bool ink_screen_init()
     while (display->nextPage());
     // Some board revisions don't wire the panel reset line, so avoid deep sleep.
     display->powerOff();
+    shared_spi_unlock();
     return true;
 }
 
@@ -139,6 +192,9 @@ static void flush_epd_bitmap(const lv_area_t *area)
         return;
     }
 
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_EPD_CS);
+
     if (disp_refr_mode == DISP_REFR_MODE_PART) {
         display->setPartialWindow(area->x1, area->y1, width, height);
     } else {
@@ -155,6 +211,7 @@ static void flush_epd_bitmap(const lv_area_t *area)
     while (display->nextPage());
 
     display->powerOff();
+    shared_spi_unlock();
 }
 
 static void flush_timer_cb(lv_timer_t *t)
@@ -266,7 +323,10 @@ void ink_screen_prepare_shutdown(void)
     }
 
     digitalWrite(BOARD_EPD_BL, LOW);
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_EPD_CS);
     display->powerOff();
+    shared_spi_unlock();
 }
 
 static bool bq25896_apply_factory_profile(void)
@@ -346,7 +406,11 @@ static void bq25896_runtime_maintain(void)
 
 static bool sd_care_init(void)
 {
-    if(!SD.begin(BOARD_SD_CS)){
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_SD_CS);
+
+    if(!SD.begin(BOARD_SD_CS, SPI)){
+        shared_spi_unlock();
         Serial.println("[SD CARD] Card Mount Failed");
         return false;
     }
@@ -359,6 +423,7 @@ static bool sd_care_init(void)
 
     uint64_t usedSize = SD.usedBytes() / (1024 * 1024);
     Serial.printf("SD Card Used: %lluMB\n", usedSize);
+    shared_spi_unlock();
     return true;
 }
 
@@ -506,6 +571,7 @@ void setup()
     digitalWrite(BOARD_SD_CS, HIGH);
     pinMode(BOARD_EPD_CS, OUTPUT); 
     digitalWrite(BOARD_EPD_CS, HIGH);
+    shared_spi_bus_init();
 
     // i2c devices
     byte error, address;

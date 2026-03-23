@@ -65,6 +65,10 @@ union flush_buf_pixel
  * *******************************************************************************/
 void disp_full_refr(void); // Next global refresh
 void ink_screen_prepare_shutdown(void);
+void shared_spi_bus_init(void);
+void shared_spi_lock(void);
+void shared_spi_unlock(void);
+void shared_spi_prepare_device(int cs_pin);
 
 int hyn_touch_init(void);
 uint8_t hyn_touch_get_point(int16_t *x_array, int16_t *y_array, uint8_t get_point);
