@@ -29,6 +29,15 @@ XPowersPPM PPM;
 BQ27220 bq27220;
 Audio audio;
 
+static constexpr uint16_t FACTORY_BATTERY_DESIGN_CAPACITY_MAH = 1400;
+static constexpr uint16_t FACTORY_BQ25896_CHARGE_TARGET_MV = 4208;
+static constexpr uint16_t FACTORY_BQ25896_FAST_CHARGE_MA = 512;
+static constexpr uint16_t FACTORY_BQ25896_PRECHARGE_MA = 128;
+static constexpr uint16_t FACTORY_BQ25896_TERMINATION_MA = 128;
+static constexpr uint16_t FACTORY_BQ25896_INPUT_LIMIT_MA = 1000;
+static constexpr uint16_t FACTORY_BQ25896_SYS_POWER_DOWN_MV = 3300;
+static constexpr uint32_t FACTORY_BQ25896_RUNTIME_CHECK_MS = 5000;
+static constexpr uint32_t FACTORY_BQ25896_RECOVERY_COOLDOWN_MS = 30000;
 TouchDrvCSTXXX touch;
 GxEPD2_BW<GxEPD2_310_GDEQ031T10, GxEPD2_310_GDEQ031T10::HEIGHT> display(GxEPD2_310_GDEQ031T10(BOARD_EPD_CS, BOARD_EPD_DC, BOARD_EPD_RST, BOARD_EPD_BUSY)); // GDEQ031T10 240x320, UC8253, (no inking, backside mark KEGMO 3100)
 
@@ -81,7 +90,7 @@ static bool ink_screen_init()
         display.print(UI_T_DECK_PRO_VERSION);
     }
     while (display.nextPage());
-    display.hibernate();
+    display.powerOff();
     return true;
 }
 
@@ -104,7 +113,7 @@ static void flush_timer_cb(lv_timer_t *t)
             display.drawInvertedBitmap(0, 0, decodebuffer, w, h - 3, GxEPD_BLACK);
         }
         while (display.nextPage());
-        display.hibernate();
+        display.powerOff();
         
         Serial.printf("flush_timer_cb:%d, %s\n", idx++, (disp_refr_mode == 0 ?"full":"part"));
 
@@ -205,34 +214,79 @@ static void lvgl_init(void)
     lv_indev_drv_register(&indev_drv);
 }
 
+static bool bq25896_apply_factory_profile(void)
+{
+    PPM.resetDefault();
+    PPM.disableWatchdog();
+    PPM.exitHizMode();
+    PPM.disableOTG();
+    PPM.enableBatterPowerPath();
+    PPM.setInputCurrentLimit(FACTORY_BQ25896_INPUT_LIMIT_MA);
+    PPM.setSysPowerDownVoltage(FACTORY_BQ25896_SYS_POWER_DOWN_MV);
+    PPM.setChargeTargetVoltage(FACTORY_BQ25896_CHARGE_TARGET_MV);
+    PPM.setChargerConstantCurr(FACTORY_BQ25896_FAST_CHARGE_MA);
+    PPM.setPrechargeCurr(FACTORY_BQ25896_PRECHARGE_MA);
+    PPM.setTerminationCurr(FACTORY_BQ25896_TERMINATION_MA);
+    PPM.enableChargingTermination();
+    PPM.enableCharge();
+    return PPM.enableMeasure();
+}
+
 static bool bq25896_init(void)
 {
     // BQ25896 --- 0x6B
     Wire.beginTransmission(BOARD_I2C_ADDR_BQ25896);
     if (Wire.endTransmission() == 0)
     {
-        // battery_25896.begin();
-        PPM.init(Wire, BOARD_I2C_SDA, BOARD_I2C_SCL, BOARD_I2C_ADDR_BQ25896);
-        // set battery charge voltage
-        PPM.setChargeTargetVoltage(4288);
+        if (!PPM.init(Wire, BOARD_I2C_SDA, BOARD_I2C_SCL, BOARD_I2C_ADDR_BQ25896)) {
+            return false;
+        }
 
-        // Set charge current
-        PPM.setChargerConstantCurr(1024);
-
-        // Enable measure
-        PPM.enableMeasure();
-
-        return true;
+        return bq25896_apply_factory_profile();
     }
     return false;
 }
 
 static bool bq27220_init(void)
 {
+    bq27220.setDefaultCapacity(FACTORY_BATTERY_DESIGN_CAPACITY_MAH);
     bool ret = bq27220.init();
     // if(ret) 
     //     bq27220.reset();
     return ret;
+}
+
+static void bq25896_runtime_maintain(void)
+{
+    static uint32_t last_check_ms = 0;
+    static uint32_t last_recovery_ms = 0;
+
+    if (!peri_init_st[E_PERI_BQ25896]) {
+        return;
+    }
+    if (millis() - last_check_ms < FACTORY_BQ25896_RUNTIME_CHECK_MS) {
+        return;
+    }
+    last_check_ms = millis();
+
+    if (!PPM.isVbusIn()) {
+        return;
+    }
+
+    bool need_recover = !PPM.isCharging();
+    if (!need_recover && peri_init_st[E_PERI_BQ27220]) {
+        need_recover = (bq27220.getAverageCurrent() < 0);
+    }
+    if (!need_recover) {
+        return;
+    }
+    if (millis() - last_recovery_ms < FACTORY_BQ25896_RECOVERY_COOLDOWN_MS) {
+        return;
+    }
+
+    Serial.println("[BQ25896] Restore charge path");
+    bq25896_apply_factory_profile();
+    last_recovery_ms = millis();
 }
 
 static bool sd_care_init(void)
@@ -528,6 +582,7 @@ void loop()
 {
     lv_task_handler();
     keypad_loop();
+    bq25896_runtime_maintain();
 
     if(peri_init_st[E_PERI_PCM5102A] == true) 
     {

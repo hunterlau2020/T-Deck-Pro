@@ -23,12 +23,154 @@
 #define FONT_BOLD_MONO_SIZE_19 &Font_Mono_Bold_19
 
 #define GLOBAL_BUF_LEN 30
+#define LOW_VOLTAGE_THRESHOLD_MV 3300
+#define LOW_VOLTAGE_SOC_THRESHOLD 5
+#define LOW_VOLTAGE_SHUTDOWN_DELAY_MS 20000
+#define LOW_VOLTAGE_POLL_MS 250
 static char global_buf[GLOBAL_BUF_LEN];
 
 static lv_timer_t *touch_chk_timer = NULL;
 static lv_timer_t *taskbar_update_timer = NULL;
+static lv_timer_t *low_voltage_timer = NULL;
 static lv_obj_t *label_list[10] = {0};
 uint16_t taskbar_statue[TASKBAR_ID_MAX] = {0};
+static lv_obj_t *low_voltage_popup = NULL;
+static lv_obj_t *low_voltage_countdown_label = NULL;
+static bool low_voltage_latched = false;
+static bool low_voltage_shutdown_requested = false;
+static uint32_t low_voltage_shutdown_deadline_ms = 0;
+static int low_voltage_last_countdown_sec = -1;
+
+static void low_voltage_popup_set_visible(bool visible)
+{
+    if (!low_voltage_popup) {
+        return;
+    }
+
+    if (visible) {
+        lv_obj_clear_flag(low_voltage_popup, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(low_voltage_popup);
+    } else {
+        lv_obj_add_flag(low_voltage_popup, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void low_voltage_popup_update(int countdown_sec)
+{
+    if (!low_voltage_countdown_label) {
+        return;
+    }
+
+    lv_label_set_text_fmt(low_voltage_countdown_label,
+                          "Battery voltage is too low.\nPlease charge now.\nAuto shutdown in %ds.",
+                          countdown_sec);
+}
+
+static void low_voltage_popup_create(void)
+{
+    if (low_voltage_popup) {
+        return;
+    }
+
+    low_voltage_popup = lv_obj_create(lv_layer_top());
+    lv_obj_set_width(low_voltage_popup, 220);
+    lv_obj_set_height(low_voltage_popup, LV_SIZE_CONTENT);
+    lv_obj_center(low_voltage_popup);
+    lv_obj_clear_flag(low_voltage_popup, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(low_voltage_popup, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_radius(low_voltage_popup, 12, LV_PART_MAIN);
+    lv_obj_set_style_border_width(low_voltage_popup, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(low_voltage_popup, DECKPRO_COLOR_FG, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(low_voltage_popup, DECKPRO_COLOR_BG, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(low_voltage_popup, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(low_voltage_popup, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(low_voltage_popup, 10, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(low_voltage_popup, 8, LV_PART_MAIN);
+    lv_obj_set_flex_flow(low_voltage_popup, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(low_voltage_popup, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *title = lv_label_create(low_voltage_popup);
+    lv_obj_set_style_text_font(title, FONT_BOLD_SIZE_17, LV_PART_MAIN);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_label_set_text(title, "LOW VOLTAGE");
+
+    low_voltage_countdown_label = lv_label_create(low_voltage_popup);
+    lv_obj_set_width(low_voltage_countdown_label, lv_pct(100));
+    lv_obj_set_style_text_font(low_voltage_countdown_label, FONT_BOLD_SIZE_15, LV_PART_MAIN);
+    lv_obj_set_style_text_align(low_voltage_countdown_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_label_set_long_mode(low_voltage_countdown_label, LV_LABEL_LONG_WRAP);
+    low_voltage_popup_update(LOW_VOLTAGE_SHUTDOWN_DELAY_MS / 1000);
+
+    low_voltage_popup_set_visible(false);
+}
+
+static bool low_voltage_should_latch(void)
+{
+    bool voltage_low = false;
+    bool gauge_low = false;
+    bool soc_low = false;
+
+    if (ui_test_get(E_PERI_BQ27220)) {
+        uint16_t vbat_mv = (uint16_t)ui_battery_27220_get_voltage();
+        voltage_low = (vbat_mv <= LOW_VOLTAGE_THRESHOLD_MV);
+    }
+
+    if (ui_battery_27220_is_vaild()) {
+        gauge_low = ui_battery_27220_is_low_alarm();
+        // soc_low = (ui_battery_27220_get_percent() <= LOW_VOLTAGE_SOC_THRESHOLD);
+    }
+
+    return voltage_low || gauge_low || soc_low;
+}
+
+static void low_voltage_reset_state(void)
+{
+    low_voltage_latched = false;
+    low_voltage_shutdown_requested = false;
+    low_voltage_shutdown_deadline_ms = 0;
+    low_voltage_last_countdown_sec = -1;
+    low_voltage_popup_set_visible(false);
+}
+
+static void low_voltage_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+
+    if (!low_voltage_popup) {
+        low_voltage_popup_create();
+    }
+
+    if (ui_battery_is_external_power_present()) {
+        low_voltage_reset_state();
+        return;
+    }
+
+    // Latch until external power is inserted so the popup does not flicker near 3.3V.
+    if (!low_voltage_latched && low_voltage_should_latch()) {
+        low_voltage_latched = true;
+        low_voltage_shutdown_requested = false;
+        low_voltage_shutdown_deadline_ms = lv_tick_get() + LOW_VOLTAGE_SHUTDOWN_DELAY_MS;
+        low_voltage_last_countdown_sec = -1;
+    }
+
+    if (!low_voltage_latched) {
+        return;
+    }
+
+    low_voltage_popup_set_visible(true);
+
+    int32_t remaining_ms = (int32_t)(low_voltage_shutdown_deadline_ms - lv_tick_get());
+    int countdown_sec = remaining_ms > 0 ? (int)((remaining_ms + 999) / 1000) : 0;
+    if (countdown_sec != low_voltage_last_countdown_sec) {
+        low_voltage_popup_update(countdown_sec);
+        low_voltage_last_countdown_sec = countdown_sec;
+    }
+
+    if (remaining_ms <= 0 && !low_voltage_shutdown_requested) {
+        low_voltage_shutdown_requested = true;
+        ui_shutdown_on();
+    }
+}
 
 //************************************[ Other fun ]******************************************
 #if 1
@@ -2842,6 +2984,9 @@ void ui_deckpro_entry(void)
 
     taskbar_update_timer = lv_timer_create(menu_taskbar_update_timer_cb, 1000, NULL);
     lv_timer_pause(taskbar_update_timer);
+
+    low_voltage_popup_create();
+    low_voltage_timer = lv_timer_create(low_voltage_timer_cb, LOW_VOLTAGE_POLL_MS, NULL);
 
     scr_mgr_init();
 
