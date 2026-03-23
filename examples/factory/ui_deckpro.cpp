@@ -3033,6 +3033,44 @@ static void menu_taskbar_update_timer_cb(lv_timer_t *t)
 
 }
 
+
+static int cursor = 0;
+#define SCREEN_POP -1
+
+int menu_buf[] = {
+    SCREEN1_ID, SCREEN1_1_ID, SCREEN_POP, SCREEN1_2_ID, SCREEN_POP, 0,
+    SCREEN2_ID, 0,
+    SCREEN3_ID, 0,
+    SCREEN4_ID, SCREEN4_1_ID, SCREEN_POP, SCREEN4_2_ID, SCREEN_POP, 0,
+    SCREEN5_ID, 0,
+    SCREEN6_ID, SCREEN6_1_ID, SCREEN_POP, SCREEN6_2_ID, SCREEN_POP, 0,
+    SCREEN7_ID, 0,
+    // SCREEN8_ID, SCREEN8_1_ID, SCREEN_POP, SCREEN8_2_ID, SCREEN_POP, 0,
+    // SCREEN9_ID, 0,
+    // SCREEN10_ID, 0,
+    // SCREEN11_ID, 0,
+    SCREEN12_ID, 0,
+};
+
+void ui_auto_timer_cb(lv_timer_t *t)
+{
+    if(menu_buf[cursor] != 0 && menu_buf[cursor] != -1) {
+        scr_mgr_push(menu_buf[cursor], false);
+        printf("push = %d\n", menu_buf[cursor]);
+    } else if(menu_buf[cursor] == -1) {
+        scr_mgr_pop(false);
+        printf("pop\n");
+    } else {
+        scr_mgr_switch(SCREEN0_ID, false);
+        printf("back\n");
+    }
+
+    cursor++;
+    if(cursor > (sizeof(menu_buf)/sizeof(menu_buf[0]) - 1)) {
+        cursor = 0;
+    }
+}
+
 void ui_deckpro_entry(void)
 {
     lv_disp_t *disp = lv_disp_get_default();
@@ -3046,6 +3084,9 @@ void ui_deckpro_entry(void)
 
     low_voltage_popup_create();
     low_voltage_timer = lv_timer_create(low_voltage_timer_cb, LOW_VOLTAGE_POLL_MS, NULL);
+
+    // auto test
+    // lv_timer_create(ui_auto_timer_cb, 3000, NULL);
 
     scr_mgr_init();
 
