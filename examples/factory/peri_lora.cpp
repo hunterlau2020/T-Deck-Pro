@@ -2,6 +2,7 @@
 
 #include <RadioLib.h>
 #include "utilities.h"
+#include "factory.h"
 #include "peripheral.h"
 #include "ui_deckpro_port.h"
 
@@ -29,6 +30,9 @@ static void set_receive_flag(void){
 
 bool lora_init(void)
 {
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_LORA_CS);
+
     Serial.print(F("[SX1262] Initializing ... "));
     int state = radio.begin(ui_lora_get_freq());
     if (state == RADIOLIB_ERR_NONE) {
@@ -36,6 +40,7 @@ bool lora_init(void)
     } else {
         Serial.print(F("failed, code "));
         Serial.println(state);
+        shared_spi_unlock();
         return false;
     }
 
@@ -119,11 +124,15 @@ bool lora_init(void)
     transmissionState = radio.startTransmit("Hello World!");
     // radio.sleep();
 
+    shared_spi_unlock();
     return true;
 }
 
 void lora_set_mode(int mode) 
 {
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_LORA_CS);
+
     if(mode == LORA_MODE_SEND){
         radio.setPacketSentAction(set_transmit_flag);
         Serial.println(F("[LORA] Sending first packet ... "));
@@ -140,6 +149,7 @@ void lora_set_mode(int mode)
         }
     }
     lora_mode = mode;
+    shared_spi_unlock();
 }
 
 int lora_get_mode(void)
@@ -153,6 +163,9 @@ void lora_receive_loop(void)
         receivedFlag = false;
 
         lora_recv_success = true;
+
+        shared_spi_lock();
+        shared_spi_prepare_device(BOARD_LORA_CS);
 
         // String str;
         receivedState = radio.readData(lora_recv_data);
@@ -171,6 +184,8 @@ void lora_receive_loop(void)
             Serial.print(F("failed, code "));
             Serial.println(receivedState);
         }
+
+        shared_spi_unlock();
     }
 }
 
@@ -178,6 +193,10 @@ void lora_transmit(const char *str)
 {
     if(transmittedFlag){
         transmittedFlag = false;
+
+        shared_spi_lock();
+        shared_spi_prepare_device(BOARD_LORA_CS);
+
         if(transmissionState == RADIOLIB_ERR_NONE){
             Serial.println(F("transmission finished!"));
         } else {
@@ -188,6 +207,7 @@ void lora_transmit(const char *str)
         radio.finishTransmit();
         Serial.print(F("[Lora] Sending another packet ... "));
         transmissionState = radio.startTransmit(str);
+        shared_spi_unlock();
     }
 }
 
@@ -205,11 +225,17 @@ void lora_set_recv_flag(void)
 
 void lora_sleep(void)
 {
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_LORA_CS);
     radio.sleep();
+    shared_spi_unlock();
 }
 
 void lora_param_set(void)
 {
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_LORA_CS);
+
     // set carrier frequency to 433.5 MHz
     if (radio.setFrequency(ui_lora_get_freq()) == RADIOLIB_ERR_INVALID_FREQUENCY) {
         Serial.println(F("Selected frequency is invalid for this module!"));
@@ -227,4 +253,6 @@ void lora_param_set(void)
         Serial.println(F("Selected output power is invalid for this module!"));
         while (true);
     }
+
+    shared_spi_unlock();
 }
