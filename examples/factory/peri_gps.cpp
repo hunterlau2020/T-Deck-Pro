@@ -7,36 +7,75 @@
 
 TinyGPSPlus gps;
 static bool GPS_Recovery();
+static bool gps_try_baud(uint32_t baud);
+static void gps_power_cycle();
 bool setupGPS();
 void displayInfo();
 
-static TaskHandle_t gps_handle;
+static TaskHandle_t gps_handle = nullptr;
 static double gps_lat=0, gps_lng=0, gps_altitude=0, gps_speed=0;
 static uint16_t gps_year=0;
 static uint8_t gps_month=0, gps_day=0;
 static uint8_t gps_hour=0, gps_minute=0, gps_second=0;
 static uint32_t gps_vsat=0;
+static uint32_t gps_active_baud = 0;
 
 uint8_t buffer[256];
+
+static constexpr uint32_t GPS_BAUD_CANDIDATES[] = {
+    38400,
+    9600,
+    115200,
+    57600,
+    19200,
+    4800,
+};
+
+static void gps_power_cycle()
+{
+    SerialGPS.end();
+    digitalWrite(BOARD_GPS_EN, LOW);
+    delay(300);
+    digitalWrite(BOARD_GPS_EN, HIGH);
+    delay(600);
+}
+
+static bool gps_try_baud(uint32_t baud)
+{
+    SerialGPS.begin(baud, SERIAL_8N1, BOARD_GPS_RXD, BOARD_GPS_TXD);
+    delay(50);
+
+    while (SerialGPS.available()) {
+        SerialGPS.read();
+    }
+
+    if (!GPS_Recovery()) {
+        return false;
+    }
+
+    gps_active_baud = baud;
+    Serial.printf("GPS connected at %lu baud\n", static_cast<unsigned long>(baud));
+    return true;
+}
 
 bool gps_init(void)
 {   
     bool result = false;
+    gps_active_baud = 0;
+
+    gps_power_cycle();
     // L76K GPS USE 9600 BAUDRATE
     // result = setupGPS();
-    if(!result) {
-        // Set u-blox m10q gps baudrate 38400
-        SerialGPS.begin(38400, SERIAL_8N1, BOARD_GPS_RXD, BOARD_GPS_TXD);
-        result = GPS_Recovery();
-        if (!result) {
-            SerialGPS.updateBaudRate(9600);
-            result = GPS_Recovery();
-            if (!result) {
-                Serial.println("GPS Connect failed~!");
-                result = false;
+    if (!result) {
+        for (size_t i = 0; i < (sizeof(GPS_BAUD_CANDIDATES) / sizeof(GPS_BAUD_CANDIDATES[0])); ++i) {
+            result = gps_try_baud(GPS_BAUD_CANDIDATES[i]);
+            if (result) {
+                break;
             }
-            SerialGPS.updateBaudRate(38400);
         }
+    }
+    if (!result) {
+        Serial.println("GPS Connect failed~!");
     }
     if(result) {
         Serial.println("GPS Task Create...!");
@@ -78,12 +117,16 @@ void gps_task_create(void)
 
 void gps_task_suspend(void)
 {
-    vTaskSuspend(gps_handle);
+    if (gps_handle != nullptr) {
+        vTaskSuspend(gps_handle);
+    }
 }
 
 void gps_task_resume(void)
 {
-    vTaskResume(gps_handle);
+    if (gps_handle != nullptr) {
+        vTaskResume(gps_handle);
+    }
 }
 
 void gps_get_coord(double *lat, double *lng)
