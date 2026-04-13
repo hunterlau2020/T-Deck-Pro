@@ -1,0 +1,324 @@
+/**
+ * @file      ui_dictionary.cpp
+ * @author    LilyGo
+ * @license   MIT
+ * @copyright Copyright (c) 2025  ShenZhen XinYuan Electronic Technology Co., Ltd
+ * @date      2025-04-01
+ * @brief     Dictionary app with offline (SD) and online lookup.
+ *            Supports multiple StarDict dictionaries with a selection dropdown.
+ */
+#include "ui_define.h"
+#include "dict_lookup.h"
+#include "http_utils.h"
+#ifdef ARDUINO
+#include "factory.h"
+#endif
+
+static lv_obj_t *menu = NULL;
+static lv_obj_t *quit_btn = NULL;
+static lv_obj_t *dict_dropdown = NULL;
+static lv_obj_t *search_ta = NULL;
+static lv_obj_t *result_label = NULL;
+static lv_obj_t *status_label = NULL;
+
+#if LV_USE_TINY_TTF && defined(ARDUINO)
+#include <esp_heap_caps.h>
+#include <SD.h>
+static lv_font_t *ttf_font = NULL;
+static uint8_t *ttf_data = NULL;
+#endif
+static lv_font_t dict_font;
+
+// selected_dict: 0 = "All Dictionaries", 1..N = specific dict (index 0..N-1)
+static int selected_dict = 0;
+
+static void do_search()
+{
+    const char *word = lv_textarea_get_text(search_ta);
+    if (!word || word[0] == '\0') return;
+
+    Serial.printf("[Dictionary] Searching for: \"%s\"\n", word);
+    lv_label_set_text(status_label, "Searching...");
+    lv_refr_now(NULL);
+
+    dict_result_t result;
+    bool found = false;
+
+    int sd_count = dict_get_stardict_count();
+
+    if (sd_count > 0) {
+        if (selected_dict == 0) {
+            // Search all StarDict dictionaries
+            found = dict_lookup_stardict_all(word, result);
+        } else {
+            // Search specific dictionary (dropdown index 1 = dict index 0)
+            found = dict_lookup_stardict_single(selected_dict - 1, word, result);
+        }
+    }
+
+    // Try custom binary format
+    if (!found && dict_offline_en_available()) {
+        found = dict_lookup_offline_en(word, result);
+    }
+
+    // If offline exact match failed, try prefix search for suggestions
+    if (!found) {
+        const char *suggestions[MAX_SUGGESTIONS];
+        int dict_idx = (selected_dict == 0) ? -1 : (selected_dict - 1);
+        int n = dict_prefix_search(word, suggestions, MAX_SUGGESTIONS, dict_idx);
+        if (n > 0) {
+            static char suggest_buf[1024];
+            int pos = snprintf(suggest_buf, sizeof(suggest_buf), "Did you mean:\n");
+            for (int i = 0; i < n && pos < (int)sizeof(suggest_buf) - 1; i++) {
+                pos += snprintf(suggest_buf + pos, sizeof(suggest_buf) - pos,
+                                "  %s\n", suggestions[i]);
+            }
+            lv_label_set_text(result_label, suggest_buf);
+            lv_label_set_text(status_label, "");
+            return;
+        }
+    }
+
+    // Try online if offline not found or not available
+    if (!found) {
+        found = dict_lookup_online(word, result);
+    }
+
+    if (found && result.found) {
+        static char display_buf[2048];
+        snprintf(display_buf, sizeof(display_buf),
+                 "%s  %s\n%s",
+                 result.phonetic.c_str(),
+                 result.part_of_speech.c_str(),
+                 result.definition.c_str());
+        lv_label_set_text(result_label, display_buf);
+        lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_label_set_text(result_label, "Word not found.");
+        lv_label_set_text(status_label, "Try connecting WiFi for online lookup.");
+    }
+}
+
+static void dropdown_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        lv_obj_t *dd = (lv_obj_t *)lv_event_get_target(e);
+        selected_dict = lv_dropdown_get_selected(dd);
+    }
+}
+
+static void ta_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *ta = (lv_obj_t *)lv_event_get_target(e);
+    lv_indev_t *indev = lv_indev_get_act();
+    if (!indev) return;
+
+    if (lv_indev_get_type(indev) == LV_INDEV_TYPE_ENCODER) {
+        bool edited = lv_obj_has_state(ta, LV_STATE_EDITED);
+        if (code == LV_EVENT_CLICKED) {
+            if (edited) {
+                lv_group_set_editing((lv_group_t *)lv_obj_get_group(ta), false);
+                disable_keyboard();
+            }
+        } else if (code == LV_EVENT_FOCUSED) {
+            if (edited) {
+                enable_keyboard();
+            }
+        }
+    }
+
+    if (code == LV_EVENT_KEY) {
+        lv_key_t key = *(lv_key_t *)lv_event_get_param(e);
+        if (key == LV_KEY_ENTER) {
+            do_search();
+            lv_event_stop_processing(e);
+        }
+    }
+}
+
+static void back_event_handler(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+    if (lv_menu_back_btn_is_root(menu, obj)) {
+#if LV_USE_TINY_TTF
+        if (ttf_font) { lv_tiny_ttf_destroy(ttf_font); ttf_font = NULL; }
+        if (ttf_data) { free(ttf_data); ttf_data = NULL; }
+#endif
+        disable_keyboard();
+        lv_obj_clean(menu);
+        lv_obj_del(menu);
+        if (quit_btn) { lv_obj_del_async(quit_btn); quit_btn = NULL; }
+        menu_show();
+    }
+}
+
+void ui_dictionary_enter(lv_obj_t *parent)
+{
+    menu = create_menu(parent, back_event_handler);
+    lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
+
+    lv_obj_t *cont = lv_obj_create(main_page);
+    lv_obj_set_size(cont, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_border_width(cont, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(cont, 5, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(cont, 2, LV_PART_MAIN);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+
+    // Scan for dictionaries
+    int sd_count = dict_scan_stardict();
+
+    // Search row: dropdown (if multiple dicts) + search textarea on the same row
+    lv_obj_t *search_row = lv_obj_create(cont);
+    lv_obj_set_size(search_row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_border_width(search_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(search_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(search_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(search_row, 5, LV_PART_MAIN);
+    lv_obj_set_flex_flow(search_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(search_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(search_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Dictionary selection dropdown (only show if multiple dicts available)
+    if (sd_count > 1) {
+        dict_dropdown = lv_dropdown_create(search_row);
+        lv_obj_set_width(dict_dropdown, lv_pct(40));
+
+        // Build options string: "All Dictionaries\nDict1\nDict2\n..."
+        static char dd_options[512];
+        strcpy(dd_options, "All Dictionaries");
+        for (int i = 0; i < sd_count; i++) {
+            const char *name = dict_get_stardict_name(i);
+            if (name) {
+                strncat(dd_options, "\n", sizeof(dd_options) - strlen(dd_options) - 1);
+                strncat(dd_options, name, sizeof(dd_options) - strlen(dd_options) - 1);
+            }
+        }
+        lv_dropdown_set_options(dict_dropdown, dd_options);
+        lv_dropdown_set_selected(dict_dropdown, 0);
+        selected_dict = 0;
+        lv_obj_add_event_cb(dict_dropdown, dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    } else {
+        dict_dropdown = NULL;
+        selected_dict = 0;
+    }
+
+    // Search textarea
+    search_ta = lv_textarea_create(search_row);
+    lv_obj_set_height(search_ta, 40);
+    lv_obj_set_flex_grow(search_ta, 1);
+    lv_textarea_set_placeholder_text(search_ta, "Type a word and press Enter");
+    lv_textarea_set_one_line(search_ta, true);
+    lv_textarea_set_max_length(search_ta, 64);
+    lv_obj_add_event_cb(search_ta, ta_event_cb, LV_EVENT_ALL, NULL);
+
+    // Status label
+    status_label = lv_label_create(cont);
+    lv_obj_set_width(status_label, lv_pct(100));
+    lv_obj_set_style_text_color(status_label, lv_color_make(180, 180, 180), LV_PART_MAIN);
+    if (sd_count > 0) {
+        if (sd_count == 1) {
+            const char *name = dict_get_stardict_name(0);
+            static char status_buf[128];
+            snprintf(status_buf, sizeof(status_buf), "Dict: %s", name ? name : "StarDict");
+            lv_label_set_text(status_label, status_buf);
+        } else {
+            static char status_buf[64];
+            snprintf(status_buf, sizeof(status_buf), "%d dictionaries available", sd_count);
+            lv_label_set_text(status_label, status_buf);
+        }
+    } else if (dict_offline_en_available()) {
+        lv_label_set_text(status_label, "Offline dict available");
+    } else {
+        lv_label_set_text(status_label, "Online only (WiFi required)");
+    }
+
+    // Result label (scrollable)
+    result_label = lv_label_create(cont);
+    lv_obj_set_width(result_label, lv_pct(100));
+    lv_label_set_long_mode(result_label, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(result_label, "");
+
+    // Set CJK fallback font on result label: try TTF from SD
+    dict_font = *MAIN_FONT;
+    dict_font.fallback = NULL;
+#if LV_USE_TINY_TTF && defined(ARDUINO)
+    ttf_font = NULL;
+    ttf_data = NULL;
+    printf("[Dictionary] TTF: locking SPI...\n");
+    shared_spi_lock();
+    if (hw_sd_begin()) {
+        printf("[Dictionary] TTF: SD mounted, opening fonts/dict_font.ttf\n");
+        File f = SD.open("/fonts/dict_font.ttf", FILE_READ);
+        if (f) {
+            size_t fsize = f.size();
+            printf("[Dictionary] TTF: file opened, size=%zu bytes\n", fsize);
+            size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+            printf("[Dictionary] TTF: free PSRAM: %zu\n", free_psram);
+            ttf_data = (uint8_t *)heap_caps_malloc(fsize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (ttf_data) {
+                printf("[Dictionary] TTF: malloc OK, reading in chunks...\n");
+                size_t total_read = 0;
+                while (total_read < fsize) {
+                    size_t to_read = fsize - total_read;
+                    if (to_read > 4096) to_read = 4096;
+                    size_t n = f.read(ttf_data + total_read, to_read);
+                    if (n == 0) break;
+                    total_read += n;
+                }
+                printf("[Dictionary] TTF: read %zu / %zu bytes\n", total_read, fsize);
+                if (total_read == fsize) {
+                    ttf_font = lv_tiny_ttf_create_data(ttf_data, fsize, 16);
+                    if (ttf_font) {
+                        printf("[Dictionary] TTF: font created OK, line_height=%d\n",
+                               ttf_font->line_height);
+                        dict_font.fallback = ttf_font;
+                    } else {
+                        printf("[Dictionary] TTF: lv_tiny_ttf_create_data FAILED\n");
+                        free(ttf_data); ttf_data = NULL;
+                    }
+                } else {
+                    printf("[Dictionary] TTF: read incomplete, aborting\n");
+                    free(ttf_data); ttf_data = NULL;
+                }
+            } else {
+                printf("[Dictionary] TTF: malloc FAILED for %zu bytes\n", fsize);
+            }
+            f.close();
+        } else {
+            printf("[Dictionary] TTF: file not found on SD\n");
+        }
+    } else {
+        printf("[Dictionary] TTF: hw_sd_begin FAILED\n");
+    }
+    shared_spi_unlock();
+    printf("[Dictionary] TTF: done, ttf_font=%p\n", ttf_font);
+#else
+    printf("[Dictionary] TTF: DISABLED (LV_USE_TINY_TTF=0 in lv_conf.h)\n");
+#endif
+    lv_obj_set_style_text_font(result_label, &dict_font, LV_PART_MAIN);
+
+    lv_menu_set_page(menu, main_page);
+
+    // Focus and enable keyboard
+    lv_group_add_obj(lv_group_get_default(), search_ta);
+    lv_group_focus_obj(search_ta);
+    lv_group_set_editing(lv_group_get_default(), true);
+    enable_keyboard();
+
+#ifdef USING_TOUCHPAD
+    quit_btn = create_floating_button([](lv_event_t *e) {
+        lv_event_send(lv_menu_get_main_header_back_btn(menu), LV_EVENT_CLICKED, NULL);
+    }, NULL);
+#endif
+}
+
+void ui_dictionary_exit(lv_obj_t *parent) {}
+
+app_t ui_dictionary_main = {
+    .setup_func_cb = ui_dictionary_enter,
+    .exit_func_cb = ui_dictionary_exit,
+    .user_data = nullptr,
+};
