@@ -1,0 +1,33 @@
+/**
+ * @file      config_keys.h
+ * @author    LilyGo
+ * @license   MIT
+ * @copyright Copyright (c) 2025  ShenZhen XinYuan Electronic Technology Co., Ltd
+ * @date      2025-04-01
+ * @brief     User-configurable compile-time settings for network-connected features.
+ *
+ * Copy this file to config_keys.h and fill in your values.
+ * config_keys.h is gitignored to protect your credentials.
+ */
+#pragma once
+
+// ---- WiFi Credentials ----
+// Primary WiFi network
+// #define WIFI_SSID         "your-wifi-ssid"
+// #define WIFI_PASSWORD     "your-wifi-password"
+
+// Optional: Secondary WiFi network (auto-fills password when selected in UI)
+// #define WIFI_SSID2        "your-second-ssid"
+// #define WIFI_PASSWORD2    "your-second-password"
+
+// ---- Google Gemini API Key (for Voice AI feature) ----
+// Get your key at: https://aistudio.google.com/app/apikey
+// #define GEMINI_API_KEY    "YOUR_GEMINI_API_KEY_HERE"
+
+// ---- OpenWeatherMap API Key (for Weather feature) ----
+// Get your free key at: https://openweathermap.org/api
+// #define OWM_API_KEY       "YOUR_OWM_API_KEY_HERE"
+
+// ---- Default location for Weather when GPS is unavailable ----
+// Format: "lat=XX.XX&lon=YY.YY" (use https://www.latlong.net to find coordinates)
+// #define WEATHER_DEFAULT_COORDS  "lat=37.49&lon=-122.27"
