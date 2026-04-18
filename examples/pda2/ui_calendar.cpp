@@ -118,8 +118,18 @@ static void start_async_fetch(int year, int month)
     xTaskCreatePinnedToCore(fetch_task_func, "hol_fetch", 8192, NULL, 5, &fetch_task_handle, 0);
 }
 
+static volatile bool month_changed_pending = false;
+
 static void fetch_check_cb(lv_timer_t *t)
 {
+    if (month_changed_pending) {
+        month_changed_pending = false;
+        lv_calendar_set_showed_date(calendar_obj, current_year, current_month);
+        cached_year = 0; cached_month = 0;
+        update_holidays(current_year, current_month);
+        start_async_fetch(current_year, current_month);
+    }
+
     if (fetch_pending) {
         fetch_pending = false;
         cached_year = 0; cached_month = 0;
@@ -127,7 +137,7 @@ static void fetch_check_cb(lv_timer_t *t)
     } else if (fetch_task_handle && holiday_label) {
         const char *cur_text = lv_label_get_text(holiday_label);
         if (cur_text && !strstr(cur_text, "Fetching"))
-            lv_label_set_text_fmt(holiday_label, "%s\n[Fetching holidays...]", cur_text);
+            lv_label_set_text_fmt(holiday_label, "%s\n[Fetching...]", cur_text);
     }
 }
 
@@ -142,7 +152,7 @@ static void calendar_event_handler(lv_event_t *e)
             if (date.year != current_year || date.month != current_month) {
                 current_year = date.year;
                 current_month = date.month;
-                update_holidays(current_year, current_month);
+                month_changed_pending = true;
             }
         }
     }
