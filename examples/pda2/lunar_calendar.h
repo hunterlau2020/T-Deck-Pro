@@ -25,4 +25,4 @@ int get_month_holidays(int year, int month, int *days, const char **names);
  *        Call from a FreeRTOS task (blocks on HTTP). Safe to call multiple times —
  *        skips if already cached for the given year+country.
  */
-void holidays_fetch_api(int year);
+void holidays_fetch_api(int year, int month);
