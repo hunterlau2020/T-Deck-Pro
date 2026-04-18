@@ -19,7 +19,9 @@
 #include "factory.h"
 #include "peripheral.h"
 #include <Preferences.h>
+#include <WiFi.h>
 #include <freertos/semphr.h>
+#include "config_keys.h"
 
 Adafruit_DRV2605 drv;
 
@@ -680,6 +682,14 @@ void setup()
     digitalWrite(BOARD_LORA_EN, HIGH);
     digitalWrite(BOARD_GPS_EN, HIGH);
     digitalWrite(BOARD_A7682E_PWRKEY, HIGH);
+
+    /* Auto-connect WiFi if credentials defined */
+#if defined(WIFI_SSID) && defined(WIFI_PASSWORD)
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.printf("[WiFi] Connecting to %s...\n", WIFI_SSID);
+#endif
 }
 
 
@@ -691,6 +701,8 @@ void loop()
     keypad_loop();
     extern void calc_keyboard_poll();
     calc_keyboard_poll();
+    extern void weather_keyboard_poll();
+    weather_keyboard_poll();
     bq25896_runtime_maintain();
 
     if(peri_init_st[E_PERI_PCM5102A] == true) 

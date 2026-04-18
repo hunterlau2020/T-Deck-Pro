@@ -69,6 +69,7 @@ enum {
     SCREEN11_ID,
     SCREEN12_ID,
     SCREEN_CALCULATOR_ID,
+    SCREEN_WEATHER_ID,
 };
 
 typedef void (*ui_indev_read_cb)(int);

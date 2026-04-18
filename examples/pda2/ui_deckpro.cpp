@@ -262,6 +262,7 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN12_ID,           &img_motor,   "Motor",    23,     13},  // Page two
     {SCREEN11_ID,           &img_PCM5102, "Sleep",    95,     13},
     {SCREEN_CALCULATOR_ID, &img_calculator, "Calc",   167,    13},
+    {SCREEN_WEATHER_ID,    &img_weather,    "Weather", 23,   101},
 };
 
 static void menu_btn_event_cb(lv_event_t *e)
@@ -334,15 +335,17 @@ static void menu_btn_create(lv_obj_t *parent, struct menu_btn *info)
     lv_obj_set_x(btn, info->pos_x);
     lv_obj_set_y(btn, info->pos_y);
 
-    /* Use lv_img child so oversized icons get scaled to fit */
     const lv_img_dsc_t *dsc = (const lv_img_dsc_t *)info->icon;
-    lv_obj_t *icon = lv_img_create(btn);
-    lv_img_set_src(icon, info->icon);
-    if (dsc->header.w > 50) {
-        uint16_t zoom = (uint16_t)(256 * 45 / dsc->header.w);
+    if (dsc->header.w <= 50) {
+        lv_obj_set_style_bg_img_src(btn, info->icon, LV_PART_MAIN | LV_STATE_DEFAULT);
+    } else {
+        lv_obj_t *icon = lv_img_create(btn);
+        lv_img_set_src(icon, info->icon);
+        uint16_t zoom = (uint16_t)(256 * 40 / dsc->header.w);
         lv_img_set_zoom(icon, zoom);
+        lv_obj_set_size(icon, 40, 40);
+        lv_obj_align(icon, LV_ALIGN_CENTER, 0, -8);
     }
-    lv_obj_align(icon, LV_ALIGN_CENTER, 0, -8);
 
     lv_label_set_text(label, (info->name));
     lv_obj_set_style_border_width(label, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -3126,6 +3129,9 @@ void ui_deckpro_entry(void)
 
     extern scr_lifecycle_t screen_calculator;
     scr_mgr_register(SCREEN_CALCULATOR_ID, &screen_calculator);
+
+    extern scr_lifecycle_t screen_weather;
+    scr_mgr_register(SCREEN_WEATHER_ID, &screen_weather);
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);
