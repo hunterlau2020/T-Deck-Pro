@@ -72,6 +72,7 @@ enum {
     SCREEN_WEATHER_ID,
     SCREEN_CALENDAR_ID,
     SCREEN_DICTIONARY_ID,
+    SCREEN_GPS_ENHANCED_ID,
 };
 
 typedef void (*ui_indev_read_cb)(int);

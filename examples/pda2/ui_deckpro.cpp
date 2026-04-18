@@ -252,7 +252,7 @@ static struct menu_btn menu_btn_list[] =
 {
     {SCREEN1_ID,  &img_lora,    "Lora",     23,     13},  // Page one
     {SCREEN2_ID,  &img_setting, "Setting",  95,     13},
-    {SCREEN3_ID,  &img_GPS,     "GPS",      167,    13},
+    {SCREEN_GPS_ENHANCED_ID, &img_GPS, "GPS", 167, 13},
     {SCREEN4_ID,  &img_wifi,    "Wifi",     23,     101},
     {SCREEN5_ID,  &img_test,    "Test",     95,     101},
     {SCREEN6_ID,  &img_batt,    "Battery",  167,    101},
@@ -3140,6 +3140,9 @@ void ui_deckpro_entry(void)
 
     extern scr_lifecycle_t screen_dictionary;
     scr_mgr_register(SCREEN_DICTIONARY_ID, &screen_dictionary);
+
+    extern scr_lifecycle_t screen_gps_enhanced;
+    scr_mgr_register(SCREEN_GPS_ENHANCED_ID, &screen_gps_enhanced);
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);
