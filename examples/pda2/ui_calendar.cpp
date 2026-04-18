@@ -89,6 +89,7 @@ static void navigate_month(int delta)
     if (current_month > 12) { current_month = 1; current_year++; }
     if (current_month < 1)  { current_month = 12; current_year--; }
     lv_calendar_set_showed_date(calendar_obj, current_year, current_month);
+    holidays_fetch_api(current_year, current_month);
     update_holidays(current_year, current_month);
 }
 
@@ -205,8 +206,7 @@ static void cal_create(lv_obj_t *parent)
     lv_label_set_long_mode(holiday_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(holiday_label, "");
 
-    /* Fetch holidays from API in background (caches in NVS) */
-    holidays_fetch_api(year);
+    holidays_fetch_api(year, month);
 
     update_holidays(year, month);
     show_cal_page(0);

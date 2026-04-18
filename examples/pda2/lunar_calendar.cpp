@@ -175,29 +175,33 @@ struct api_holiday_t {
 static api_holiday_t api_cache[API_CACHE_MAX];
 static int api_cache_count = 0;
 static int api_cached_year = 0;
+static int api_cached_month = 0;
 static bool api_fetched = false;
 
-static void load_api_cache(int year)
+static void load_api_cache(int year, int month)
 {
     Preferences prefs;
     prefs.begin("holidays", true);
     int cached_yr = prefs.getInt("year", 0);
-    if (cached_yr == year) {
+    int cached_mo = prefs.getInt("month", 0);
+    if (cached_yr == year && cached_mo == month) {
         api_cache_count = prefs.getInt("count", 0);
         if (api_cache_count > API_CACHE_MAX) api_cache_count = API_CACHE_MAX;
         prefs.getBytes("data", api_cache, sizeof(api_holiday_t) * api_cache_count);
         api_cached_year = year;
+        api_cached_month = month;
         api_fetched = true;
-        Serial.printf("[Holiday] Loaded %d cached entries for %d\n", api_cache_count, year);
+        Serial.printf("[Holiday] Loaded %d cached entries for %d/%d\n", api_cache_count, year, month);
     }
     prefs.end();
 }
 
-static void save_api_cache(int year)
+static void save_api_cache(int year, int month)
 {
     Preferences prefs;
     prefs.begin("holidays", false);
     prefs.putInt("year", year);
+    prefs.putInt("month", month);
     prefs.putInt("count", api_cache_count);
     prefs.putBytes("data", api_cache, sizeof(api_holiday_t) * api_cache_count);
     prefs.end();
@@ -239,13 +243,13 @@ static void parse_calendarific(const char *json)
     cJSON_Delete(root);
 }
 
-void holidays_fetch_api(int year)
+void holidays_fetch_api(int year, int month)
 {
 #if defined(CALENDARIFIC_API_KEY)
-    if (api_fetched && api_cached_year == year) return;
+    if (api_fetched && api_cached_year == year && api_cached_month == month) return;
 
-    load_api_cache(year);
-    if (api_fetched && api_cached_year == year) return;
+    load_api_cache(year, month);
+    if (api_fetched && api_cached_year == year && api_cached_month == month) return;
 
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[Holiday] No WiFi, using computed fallback");
@@ -257,12 +261,12 @@ void holidays_fetch_api(int year)
     int num_countries = sizeof(countries) / sizeof(countries[0]);
 
     for (int c = 0; c < num_countries && api_cache_count < API_CACHE_MAX; c++) {
-        char url[256];
+        char url[320];
         snprintf(url, sizeof(url),
-                 "https://calendarific.com/api/v2/holidays?api_key=%s&country=%s&year=%d",
-                 CALENDARIFIC_API_KEY, countries[c], year);
+                 "https://calendarific.com/api/v2/holidays?api_key=%s&country=%s&year=%d&month=%d&type=national",
+                 CALENDARIFIC_API_KEY, countries[c], year, month);
 
-        Serial.printf("[Holiday] Fetching %s/%d...\n", countries[c], year);
+        Serial.printf("[Holiday] Fetching %s/%d/%d...\n", countries[c], year, month);
         http_response_t resp = http_get(url, 15000);
         if (resp.success) {
             parse_calendarific(resp.body.c_str());
@@ -274,17 +278,19 @@ void holidays_fetch_api(int year)
 
     if (api_cache_count > 0) {
         api_cached_year = year;
+        api_cached_month = month;
         api_fetched = true;
-        save_api_cache(year);
+        save_api_cache(year, month);
     }
 #else
     (void)year;
+    (void)month;
 #endif
 }
 
 static int get_api_holidays(int year, int month, int *days, const char **names, int max_out)
 {
-    if (!api_fetched || api_cached_year != year) return 0;
+    if (!api_fetched || api_cached_year != year || api_cached_month != month) return 0;
     int count = 0;
     for (int i = 0; i < api_cache_count && count < max_out; i++) {
         if (api_cache[i].month == month) {
