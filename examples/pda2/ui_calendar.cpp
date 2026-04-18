@@ -122,9 +122,12 @@ static void fetch_check_cb(lv_timer_t *t)
 {
     if (fetch_pending) {
         fetch_pending = false;
-        /* Re-populate with API data now available */
         cached_year = 0; cached_month = 0;
         update_holidays(current_year, current_month);
+    } else if (fetch_task_handle && holiday_label) {
+        const char *cur_text = lv_label_get_text(holiday_label);
+        if (cur_text && !strstr(cur_text, "Fetching"))
+            lv_label_set_text_fmt(holiday_label, "%s\n[Fetching holidays...]", cur_text);
     }
 }
 
