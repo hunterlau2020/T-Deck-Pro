@@ -94,7 +94,9 @@ static void navigate_month(int delta)
     if (current_month > 12) { current_month = 1; current_year++; }
     if (current_month < 1)  { current_month = 12; current_year--; }
     lv_calendar_set_showed_date(calendar_obj, current_year, current_month);
-    /* Show computed holidays immediately, then fetch API in background */
+    Serial.printf("[Cal] navigate to %d/%d\n", current_year, current_month);
+    /* Force cache invalidation so update_holidays re-reads */
+    cached_year = 0; cached_month = 0;
     update_holidays(current_year, current_month);
     start_async_fetch(current_year, current_month);
 }
@@ -143,19 +145,7 @@ static void fetch_check_cb(lv_timer_t *t)
 
 static void calendar_event_handler(lv_event_t *e)
 {
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_calendar_date_t date;
-        if (lv_calendar_get_pressed_date(obj, &date) == LV_RES_OK) {
-            if (date.year != current_year || date.month != current_month) {
-                current_year = date.year;
-                current_month = date.month;
-                month_changed_pending = true;
-            }
-        }
-    }
+    /* Disabled — date click was causing crashes. Use keyboard A/D to navigate. */
 }
 
 // --- Keyboard ---
@@ -235,7 +225,7 @@ static void cal_create(lv_obj_t *parent)
 
     lv_calendar_set_today_date(calendar_obj, year, month, day);
     lv_calendar_set_showed_date(calendar_obj, year, month);
-    lv_obj_add_event_cb(calendar_obj, calendar_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
+    /* No date click handler — header arrows handle month nav via touch, A/D keys via keyboard */
 
     lv_calendar_header_arrow_create(calendar_obj);
 
