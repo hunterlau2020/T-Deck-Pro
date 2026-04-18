@@ -265,6 +265,7 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN_WEATHER_ID,    &img_weather,    "Weather", 23,   101},
     {SCREEN_CALENDAR_ID,   &img_calendar,   "Calendar",95,   101},
     {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    167,  101},
+    {SCREEN_VOICE_AI_ID,   &img_voice_ai,   "AI Chat", 23,   189},
 };
 
 static void menu_btn_event_cb(lv_event_t *e)
@@ -3143,6 +3144,9 @@ void ui_deckpro_entry(void)
 
     extern scr_lifecycle_t screen_gps_enhanced;
     scr_mgr_register(SCREEN_GPS_ENHANCED_ID, &screen_gps_enhanced);
+
+    extern scr_lifecycle_t screen_voice_ai;
+    scr_mgr_register(SCREEN_VOICE_AI_ID, &screen_voice_ai);
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);

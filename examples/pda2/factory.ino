@@ -710,6 +710,8 @@ void loop()
     dict_keyboard_poll();
     extern void gps_keyboard_poll();
     gps_keyboard_poll();
+    extern void voiceai_keyboard_poll();
+    voiceai_keyboard_poll();
     bq25896_runtime_maintain();
 
     if(peri_init_st[E_PERI_PCM5102A] == true) 
