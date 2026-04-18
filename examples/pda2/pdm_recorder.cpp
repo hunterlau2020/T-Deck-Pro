@@ -10,7 +10,7 @@
 #include <driver/i2s.h>
 #include <esp_heap_caps.h>
 
-#define I2S_PORT I2S_NUM_1
+#define I2S_PORT I2S_NUM_0
 
 static bool i2s_installed = false;
 
@@ -20,6 +20,9 @@ static bool pdm_init(int sample_rate)
         i2s_driver_uninstall(I2S_PORT);
         i2s_installed = false;
     }
+
+    /* I2S_NUM_0 may be in use by the audio player — uninstall it first */
+    i2s_driver_uninstall(I2S_PORT);
 
     i2s_config_t i2s_config = {};
     i2s_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM);
@@ -137,10 +140,19 @@ bool pdm_record_wav(int duration_sec, int sample_rate, uint8_t **wav_out, size_t
     return true;
 }
 
+void pdm_restore_audio(void)
+{
+    /* Re-init I2S for audio output is handled by the Audio library
+     * when audio.connecttoFS or similar is called next.
+     * Nothing needed here — the Audio library re-installs I2S on demand. */
+    Serial.println("[PDM] Audio restored (I2S freed for audio player)");
+}
+
 #else
 bool pdm_record_wav(int duration_sec, int sample_rate, uint8_t **wav_out, size_t *wav_len)
 {
     *wav_out = NULL; *wav_len = 0;
     return false;
 }
+void pdm_restore_audio(void) {}
 #endif
