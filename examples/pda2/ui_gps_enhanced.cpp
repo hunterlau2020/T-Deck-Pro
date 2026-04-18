@@ -229,7 +229,7 @@ static void draw_track()
         ld.color = lv_color_black();
         ld.font = &lv_font_montserrat_14;
         lv_canvas_draw_text(track_canvas, 20, 80, 180, &ld,
-            tracking ? "Recording...\nWaiting for points" : "Press Enter to start");
+            tracking ? "Recording...\nWaiting for points" : "Press S to start");
         return;
     }
 
@@ -277,7 +277,7 @@ static void update_track_info()
 {
     if (!lbl_track_info) return;
     if (!tracking && track.empty()) {
-        lv_label_set_text(lbl_track_info, "Enter: start tracking");
+        lv_label_set_text(lbl_track_info, "S: start tracking");
         return;
     }
     uint32_t elapsed = tracking ? (millis() - track_start_ms) / 1000 : 0;
@@ -351,11 +351,10 @@ void gps_keyboard_poll()
     if (c == '\b') {
         if (gps_page > 0) show_gps_page(gps_page - 1);
         else { gps_kbd_active = false; scr_mgr_pop(false); }
-    } else if (c == ' ') {
+    } else if (c == '\n' || c == ' ') {
         show_gps_page((gps_page + 1) % GPS_PAGE_COUNT);
-    } else if (c == '\n') {
-        if (gps_page == 2) track_toggle();
-        else show_gps_page((gps_page + 1) % GPS_PAGE_COUNT);
+    } else if (c == 's' && gps_page == 2) {
+        track_toggle();
     }
 }
 
@@ -412,7 +411,7 @@ static void gps_create(lv_obj_t *parent)
     lbl_track_info = lv_label_create(pages[2]);
     lv_obj_set_width(lbl_track_info, lv_pct(100));
     lv_obj_set_style_text_font(lbl_track_info, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_label_set_text(lbl_track_info, "Enter: start tracking");
+    lv_label_set_text(lbl_track_info, "S: start tracking");
 
     track_buf = (lv_color_t *)ps_calloc(TRACK_VIEW_W * TRACK_VIEW_H, sizeof(lv_color_t));
     if (track_buf) {
