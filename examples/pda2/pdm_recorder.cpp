@@ -10,7 +10,7 @@
 #include <driver/i2s.h>
 #include <esp_heap_caps.h>
 
-#define I2S_PORT I2S_NUM_0
+#define I2S_PORT I2S_NUM_1
 
 static bool i2s_installed = false;
 
