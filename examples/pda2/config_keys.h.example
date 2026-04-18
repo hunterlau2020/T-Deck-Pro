@@ -28,6 +28,14 @@
 // Get your free key at: https://openweathermap.org/api
 // #define OWM_API_KEY       "YOUR_OWM_API_KEY_HERE"
 
+// ---- Calendarific API Key (for Calendar holidays) ----
+// Get your free key at: https://calendarific.com/signup
+// Free tier: 1000 requests/month
+// #define CALENDARIFIC_API_KEY "YOUR_CALENDARIFIC_API_KEY_HERE"
+
+// ---- Calendar country codes ----
+// #define CALENDAR_COUNTRIES "US", "CN"
+
 // ---- Default location for Weather when GPS is unavailable ----
 // Format: "lat=XX.XX&lon=YY.YY" (use https://www.latlong.net to find coordinates)
 // #define WEATHER_DEFAULT_COORDS  "lat=37.49&lon=-122.27"
