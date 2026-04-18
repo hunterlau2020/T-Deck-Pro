@@ -121,17 +121,17 @@ static void ai_text_task(void *param)
     char *prompt = (char *)param;
 #ifdef GEMINI_API_KEY
     Serial.printf("[VoiceAI] prompt: %s\n", prompt);
-    ui_post(UI_MSG_STATUS, "Thinking...");
+    ui_post(UI_MSG_STATUS, "Waiting for Gemini...");
 
     gemini_response_t resp = gemini_send_text(prompt, GEMINI_API_KEY);
     if (resp.success) {
         ui_post(UI_MSG_APPEND, resp.text.c_str());
-        ui_post(UI_MSG_STATUS, "");
+        ui_post(UI_MSG_STATUS, "V:voice Enter:text");
     } else {
         char buf[256];
         snprintf(buf, sizeof(buf), "Error: %s", resp.error.c_str());
         ui_post(UI_MSG_APPEND, buf);
-        ui_post(UI_MSG_STATUS, "");
+        ui_post(UI_MSG_STATUS, "V:voice Enter:text");
     }
 #else
     ui_post(UI_MSG_APPEND, "Set GEMINI_API_KEY in config_keys.h");
@@ -145,7 +145,7 @@ static void ai_voice_task(void *param)
 {
 #ifdef GEMINI_API_KEY
     ui_post(UI_MSG_STATUS, "Recording 5 sec...");
-    ui_post(UI_MSG_APPEND, "> [Voice]");
+    ui_post(UI_MSG_APPEND, "> [Voice recording]");
 
     uint8_t *wav = NULL;
     size_t wav_len = 0;
@@ -153,7 +153,7 @@ static void ai_voice_task(void *param)
     pdm_restore_audio();
 
     if (ok && wav && wav_len > 0) {
-        ui_post(UI_MSG_STATUS, "Processing...");
+        ui_post(UI_MSG_STATUS, "Sending to Gemini...");
         gemini_response_t resp = gemini_send_audio(wav, wav_len, GEMINI_API_KEY);
         free(wav);
 
@@ -164,12 +164,12 @@ static void ai_voice_task(void *param)
             char buf[256];
             snprintf(buf, sizeof(buf), "Error: %s", resp.error.c_str());
             ui_post(UI_MSG_APPEND, buf);
-            ui_post(UI_MSG_STATUS, "");
+            ui_post(UI_MSG_STATUS, "V:voice Enter:text");
         }
     } else {
         if (wav) free(wav);
         ui_post(UI_MSG_APPEND, "Recording failed");
-        ui_post(UI_MSG_STATUS, "");
+        ui_post(UI_MSG_STATUS, "V:voice Enter:text");
     }
 #else
     ui_post(UI_MSG_APPEND, "Set GEMINI_API_KEY in config_keys.h");
