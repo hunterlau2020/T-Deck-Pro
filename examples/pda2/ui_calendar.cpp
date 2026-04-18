@@ -205,6 +205,9 @@ static void cal_create(lv_obj_t *parent)
     lv_label_set_long_mode(holiday_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(holiday_label, "");
 
+    /* Fetch holidays from API in background (caches in NVS) */
+    holidays_fetch_api(year);
+
     update_holidays(year, month);
     show_cal_page(0);
     cal_kbd_active = true;
