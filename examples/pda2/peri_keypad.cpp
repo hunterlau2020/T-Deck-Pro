@@ -99,6 +99,10 @@ void keypad_loop(void)
     row = k / KEYPAD_COLS;
     col = (KEYPAD_COLS - 1) - k % KEYPAD_COLS;
 
+    if (state == KEYPAD_PRESS) {
+        Serial.printf("[KBD RAW] k=%d row=%d col=%d\n", k, row, col);
+    }
+
     if (row == KEY_SYM_ROW && col == KEY_SYM_COL) {
         if (state == KEYPAD_PRESS) {
             sym_lock = !sym_lock;

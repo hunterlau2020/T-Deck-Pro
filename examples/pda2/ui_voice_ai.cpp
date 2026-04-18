@@ -180,21 +180,6 @@ void voiceai_keyboard_poll()
         } else {
             lv_textarea_del_char(input_ta);
         }
-    } else if (c == 'w') {
-        /* Check if input is empty — use W for page up */
-        const char *text = lv_textarea_get_text(input_ta);
-        if (!text || text[0] == '\0') {
-            show_response_page(response_page - 1);
-        } else {
-            lv_textarea_add_char(input_ta, c);
-        }
-    } else if (c == 's') {
-        const char *text = lv_textarea_get_text(input_ta);
-        if (!text || text[0] == '\0') {
-            show_response_page(response_page + 1);
-        } else {
-            lv_textarea_add_char(input_ta, c);
-        }
     } else if (c >= ' ' && c <= '~') {
         lv_textarea_add_char(input_ta, c);
     }
