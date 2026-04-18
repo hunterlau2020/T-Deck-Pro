@@ -10,12 +10,16 @@
 #define KEYPAD_RELEASE_VAL_MIN 1
 #define KEYPAD_RELEASE_VAL_MAX 35
 
+// Row 3 physical layout (decoded from raw events):
+//   col: 0  1  2  3  4  5      6    7      8    9
+//        ?  ?  ?  ?  ?  LCtrl  Mic  Space  Sym  RCtrl
+
 // Primary layer (normal)
 const char keymap[KEYPAD_ROWS][KEYPAD_COLS] = {
     {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'},
     {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', '\b'},
     {  0, 'z', 'x', 'c', 'v', 'b', 'n', 'm', '$', '\n'},
-    {  0,   0, ' ', ' ', ' ',   0,   0,   0,   0,   0},
+    {  0,   0,   0,   0,   0,   0,   0, ' ',   0,   0},
 };
 
 // Secondary layer (sym / shift)
@@ -23,14 +27,14 @@ const char keymap_sym[KEYPAD_ROWS][KEYPAD_COLS] = {
     {'#', '1', '2', '3', '(', ')', '_', '-', '+', '@'},
     {'*', '4', '5', '6', '/', ':', ';', '\'','"', '\b'},
     {  0, '7', '8', '9', '?', '!', ',', '.', '0', '\n'},
-    {  0,   0, ' ', ' ', ' ',   0,   0,   0,   0,   0},
+    {  0,   0,   0,   0,   0,   0,   0, ' ',   0,   0},
 };
 
-// Key codes for modifiers (row, col positions that are modifiers)
+// Modifier positions
 #define KEY_ALT_ROW   2
 #define KEY_ALT_COL   0
 #define KEY_SYM_ROW   3
-#define KEY_SYM_COL   5
+#define KEY_SYM_COL   8
 
 Adafruit_TCA8418 keypad;
 keypad_cb keypad_listener = NULL;
@@ -85,31 +89,6 @@ void keypad_loop(void)
     int k = keypad.getEvent();
 
     if (k == 0) return;
-
-    /* Log ALL events for debugging */
-    if (k != 0) {
-        Serial.printf("[KBD EVT] raw=0x%02x (%d)\n", k, k);
-    }
-
-    /* GPI events: pins not in the matrix fire as GPI events
-     * GPI falling (press): event codes depend on which GPI pin
-     * TCA8418: GPI events are flagged differently from matrix events */
-    if (k >= 97 && k <= 114) {
-        /* GPI rising edge — treat as release */
-        int gpi_pin = k - 97;
-        Serial.printf("[KBD GPI] pin=%d release\n", gpi_pin);
-        return;
-    }
-    if (k >= 225 && k <= 242) {
-        /* GPI falling edge — treat as press */
-        int gpi_pin = k - 225;
-        Serial.printf("[KBD GPI] pin=%d press\n", gpi_pin);
-        /* Map GPI pins to characters — space bar is likely on one of these */
-        keypad_curr_val = ' ';
-        keypad_state = KEYPAD_PRESS;
-        keypad_update = true;
-        return;
-    }
 
     if (k >= KEYPAD_RELEASE_VAL_MIN && k <= KEYPAD_RELEASE_VAL_MAX) {
         k = k - KEYPAD_RELEASE_VAL_MIN;
