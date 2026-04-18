@@ -1,7 +1,7 @@
 /**
  * @file      ui_calendar.cpp
  * @brief     Calendar app with US Federal & Chinese Traditional holidays.
- *            Adapted for T-Deck Pro factory framework.
+ *            Two pages: calendar view + holiday list.
  */
 #include "Arduino.h"
 #include "ui_deckpro.h"
@@ -11,11 +11,15 @@
 
 static lv_obj_t *calendar_obj = NULL;
 static lv_obj_t *holiday_label = NULL;
+static lv_obj_t *page_cal = NULL;
+static lv_obj_t *page_holidays = NULL;
+static lv_obj_t *page_indicator = NULL;
 static lv_calendar_date_t highlighted_days_buf[31];
 static int highlighted_count = 0;
 
-static int current_year = 2025;
-static int current_month = 1;
+static int current_year = 2026;
+static int current_month = 4;
+static int cal_page = 0;
 static bool cal_kbd_active = false;
 
 static int cached_year = 0;
@@ -32,13 +36,18 @@ static void cache_holidays(int year, int month)
     cached_count = get_month_holidays(year, month, cached_days, cached_names);
 }
 
-static const char *cached_holiday_name(int year, int month, int day)
+static void show_cal_page(int pg)
 {
-    if (year != cached_year || month != cached_month) cache_holidays(year, month);
-    for (int i = 0; i < cached_count; i++) {
-        if (cached_days[i] == day) return cached_names[i];
+    cal_page = pg;
+    if (pg == 0) {
+        if (page_cal) lv_obj_clear_flag(page_cal, LV_OBJ_FLAG_HIDDEN);
+        if (page_holidays) lv_obj_add_flag(page_holidays, LV_OBJ_FLAG_HIDDEN);
+        if (page_indicator) lv_label_set_text(page_indicator, "Calendar [1/2]  Enter:holidays");
+    } else {
+        if (page_cal) lv_obj_add_flag(page_cal, LV_OBJ_FLAG_HIDDEN);
+        if (page_holidays) lv_obj_clear_flag(page_holidays, LV_OBJ_FLAG_HIDDEN);
+        if (page_indicator) lv_label_set_text(page_indicator, "Holidays [2/2]  Bksp:calendar");
     }
-    return NULL;
 }
 
 static void update_holidays(int year, int month)
@@ -53,25 +62,23 @@ static void update_holidays(int year, int month)
     }
 
     if (calendar_obj) {
-        if (highlighted_count > 0) {
+        if (highlighted_count > 0)
             lv_calendar_set_highlighted_dates(calendar_obj, highlighted_days_buf, highlighted_count);
-        } else {
+        else
             lv_calendar_set_highlighted_dates(calendar_obj, NULL, 0);
-        }
     }
 
     if (holiday_label) {
         if (highlighted_count > 0) {
-            char buf[256];
-            int pos = snprintf(buf, sizeof(buf), "%d/%d ", year, month);
+            char buf[1024];
+            int pos = snprintf(buf, sizeof(buf), "Holidays & Jieqi %d/%d\n", year, month);
             for (int i = 0; i < highlighted_count && pos < (int)sizeof(buf) - 1; i++) {
-                if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, " | ");
-                pos += snprintf(buf + pos, sizeof(buf) - pos, "%d:%s",
+                pos += snprintf(buf + pos, sizeof(buf) - pos, " %2d: %s\n",
                                 cached_days[i], cached_names[i]);
             }
             lv_label_set_text(holiday_label, buf);
         } else {
-            lv_label_set_text_fmt(holiday_label, "%d/%d - No holidays", year, month);
+            lv_label_set_text_fmt(holiday_label, "No holidays in %d/%d", year, month);
         }
     }
 }
@@ -98,14 +105,6 @@ static void calendar_event_handler(lv_event_t *e)
                 current_month = date.month;
                 update_holidays(current_year, current_month);
             }
-            const char *name = cached_holiday_name(date.year, date.month, date.day);
-            if (name) {
-                lv_label_set_text_fmt(holiday_label, "%d/%d/%d: %s",
-                                      date.year, date.month, date.day, name);
-            } else {
-                lv_label_set_text_fmt(holiday_label, "%d/%d/%d",
-                                      date.year, date.month, date.day);
-            }
         }
     }
 }
@@ -120,11 +119,17 @@ void calendar_keyboard_poll()
     keypad_set_flag();
 
     if (c == '\b') {
-        cal_kbd_active = false;
-        scr_mgr_pop(false);
-    } else if (c == 'a' || c == 'z') {
+        if (cal_page > 0) {
+            show_cal_page(cal_page - 1);
+        } else {
+            cal_kbd_active = false;
+            scr_mgr_pop(false);
+        }
+    } else if (c == '\n' || c == ' ') {
+        show_cal_page(cal_page == 0 ? 1 : 0);
+    } else if (c == 'a') {
         navigate_month(-1);
-    } else if (c == 'd' || c == 'x') {
+    } else if (c == 'd') {
         navigate_month(1);
     }
 }
@@ -141,22 +146,43 @@ static void cal_create(lv_obj_t *parent)
 {
     scr_back_btn_create(parent, "Calendar", cal_back_cb);
 
-    /* Get current date */
+    /* Get current date from system clock (NTP-synced) */
     struct tm timeinfo;
     time_t now = time(NULL);
     localtime_r(&now, &timeinfo);
     int year = timeinfo.tm_year + 1900;
     int month = timeinfo.tm_mon + 1;
     int day = timeinfo.tm_mday;
-    if (year < 2020 || year > 2099) { year = 2025; month = 1; day = 1; }
+    if (year < 2020 || year > 2099) {
+        /* NTP not synced yet — try to get from GPS */
+        uint16_t gy; uint8_t gm, gd;
+        ui_gps_get_data(&gy, &gm, &gd);
+        if (gy >= 2020 && gy <= 2099) {
+            year = gy; month = gm; day = gd;
+        }
+    }
+    Serial.printf("[Calendar] date: %d/%d/%d\n", year, month, day);
 
     current_year = year;
     current_month = month;
 
-    /* Calendar widget */
-    calendar_obj = lv_calendar_create(parent);
-    lv_obj_set_size(calendar_obj, 230, 220);
-    lv_obj_align(calendar_obj, LV_ALIGN_TOP_MID, 0, 28);
+    /* Page indicator at bottom */
+    page_indicator = lv_label_create(parent);
+    lv_obj_set_style_text_font(page_indicator, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(page_indicator, LV_ALIGN_BOTTOM_MID, 0, -4);
+
+    /* === Page 0: Calendar === */
+    page_cal = lv_obj_create(parent);
+    lv_obj_set_size(page_cal, 236, 264);
+    lv_obj_align(page_cal, LV_ALIGN_TOP_MID, 0, 28);
+    lv_obj_set_style_border_width(page_cal, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(page_cal, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(page_cal, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(page_cal, LV_OBJ_FLAG_SCROLLABLE);
+
+    calendar_obj = lv_calendar_create(page_cal);
+    lv_obj_set_size(calendar_obj, 234, 260);
+    lv_obj_align(calendar_obj, LV_ALIGN_TOP_MID, 0, 0);
 
     lv_calendar_set_today_date(calendar_obj, year, month, day);
     lv_calendar_set_showed_date(calendar_obj, year, month);
@@ -164,16 +190,23 @@ static void cal_create(lv_obj_t *parent)
 
     lv_calendar_header_arrow_create(calendar_obj);
 
-    /* Holiday label at bottom */
-    holiday_label = lv_label_create(parent);
-    lv_obj_set_width(holiday_label, 230);
-    lv_obj_align(holiday_label, LV_ALIGN_BOTTOM_MID, 0, -8);
+    /* === Page 1: Holiday list === */
+    page_holidays = lv_obj_create(parent);
+    lv_obj_set_size(page_holidays, 236, 264);
+    lv_obj_align(page_holidays, LV_ALIGN_TOP_MID, 0, 28);
+    lv_obj_set_style_border_width(page_holidays, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(page_holidays, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(page_holidays, 4, LV_PART_MAIN);
+    lv_obj_clear_flag(page_holidays, LV_OBJ_FLAG_SCROLLABLE);
+
+    holiday_label = lv_label_create(page_holidays);
+    lv_obj_set_width(holiday_label, lv_pct(100));
     lv_obj_set_style_text_font(holiday_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_align(holiday_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_label_set_long_mode(holiday_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_label_set_text(holiday_label, "A/Z:prev  D/X:next  Tap:info");
+    lv_label_set_long_mode(holiday_label, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(holiday_label, "");
 
     update_holidays(year, month);
+    show_cal_page(0);
     cal_kbd_active = true;
 }
 
@@ -184,6 +217,7 @@ static void cal_destroy(void)
     cal_kbd_active = false;
     calendar_obj = NULL;
     holiday_label = NULL;
+    page_cal = page_holidays = page_indicator = NULL;
     cached_year = 0;
     cached_month = 0;
 }
