@@ -690,6 +690,7 @@ void setup()
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.printf("[WiFi] Connecting to %s...\n", WIFI_SSID);
 #endif
+    configTzTime("PST8PDT,M3.2.0,M11.1.0", "pool.ntp.org");
 }
 
 
