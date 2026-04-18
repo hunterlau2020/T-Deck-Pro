@@ -703,6 +703,8 @@ void loop()
     calc_keyboard_poll();
     extern void weather_keyboard_poll();
     weather_keyboard_poll();
+    extern void calendar_keyboard_poll();
+    calendar_keyboard_poll();
     bq25896_runtime_maintain();
 
     if(peri_init_st[E_PERI_PCM5102A] == true) 
