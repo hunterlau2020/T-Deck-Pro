@@ -24,6 +24,7 @@ LV_IMG_DECLARE(img_start)
 LV_IMG_DECLARE(img_motor)
 LV_IMG_DECLARE(img_calculator)
 LV_IMG_DECLARE(img_weather)
+LV_IMG_DECLARE(img_calendar)
 
 // font
 LV_FONT_DECLARE(Font_Mono_Bold_14)
