@@ -150,6 +150,7 @@ static void ai_voice_task(void *param)
     uint8_t *wav = NULL;
     size_t wav_len = 0;
     bool ok = pdm_record_wav(5, 16000, &wav, &wav_len);
+    pdm_restore_audio();
 
     if (ok && wav && wav_len > 0) {
         ui_post(UI_MSG_STATUS, "Processing...");

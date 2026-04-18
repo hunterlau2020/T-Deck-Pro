@@ -17,3 +17,9 @@
  * @return true if recording succeeded.
  */
 bool pdm_record_wav(int duration_sec, int sample_rate, uint8_t **wav_out, size_t *wav_len);
+
+/**
+ * @brief Re-initialize the I2S audio player after PDM recording.
+ *        Call this after pdm_record_wav to restore audio output.
+ */
+void pdm_restore_audio(void);
