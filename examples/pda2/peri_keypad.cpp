@@ -84,6 +84,33 @@ void keypad_loop(void)
     int row, col;
     int k = keypad.getEvent();
 
+    if (k == 0) return;
+
+    /* Log ALL events for debugging */
+    if (k != 0) {
+        Serial.printf("[KBD EVT] raw=0x%02x (%d)\n", k, k);
+    }
+
+    /* GPI events: pins not in the matrix fire as GPI events
+     * GPI falling (press): event codes depend on which GPI pin
+     * TCA8418: GPI events are flagged differently from matrix events */
+    if (k >= 97 && k <= 114) {
+        /* GPI rising edge — treat as release */
+        int gpi_pin = k - 97;
+        Serial.printf("[KBD GPI] pin=%d release\n", gpi_pin);
+        return;
+    }
+    if (k >= 225 && k <= 242) {
+        /* GPI falling edge — treat as press */
+        int gpi_pin = k - 225;
+        Serial.printf("[KBD GPI] pin=%d press\n", gpi_pin);
+        /* Map GPI pins to characters — space bar is likely on one of these */
+        keypad_curr_val = ' ';
+        keypad_state = KEYPAD_PRESS;
+        keypad_update = true;
+        return;
+    }
+
     if (k >= KEYPAD_RELEASE_VAL_MIN && k <= KEYPAD_RELEASE_VAL_MAX) {
         k = k - KEYPAD_RELEASE_VAL_MIN;
         state = KEYPAD_RELEASE;
@@ -98,10 +125,6 @@ void keypad_loop(void)
 
     row = k / KEYPAD_COLS;
     col = (KEYPAD_COLS - 1) - k % KEYPAD_COLS;
-
-    if (state == KEYPAD_PRESS) {
-        Serial.printf("[KBD RAW] k=%d row=%d col=%d\n", k, row, col);
-    }
 
     if (row == KEY_SYM_ROW && col == KEY_SYM_COL) {
         if (state == KEYPAD_PRESS) {
