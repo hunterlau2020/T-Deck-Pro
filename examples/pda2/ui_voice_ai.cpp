@@ -8,6 +8,7 @@
 #include "ui_deckpro.h"
 #include "ui_deckpro_port.h"
 #include "gemini_api.h"
+#include "pdm_recorder.h"
 #include "config_keys.h"
 #include <WiFi.h>
 #include <esp_heap_caps.h>
@@ -140,6 +141,52 @@ static void ai_text_task(void *param)
     vTaskDelete(NULL);
 }
 
+static void ai_voice_task(void *param)
+{
+#ifdef GEMINI_API_KEY
+    ui_post(UI_MSG_STATUS, "Recording 5 sec...");
+    ui_post(UI_MSG_APPEND, "> [Voice]");
+
+    uint8_t *wav = NULL;
+    size_t wav_len = 0;
+    bool ok = pdm_record_wav(5, 16000, &wav, &wav_len);
+
+    if (ok && wav && wav_len > 0) {
+        ui_post(UI_MSG_STATUS, "Processing...");
+        gemini_response_t resp = gemini_send_audio(wav, wav_len, GEMINI_API_KEY);
+        free(wav);
+
+        if (resp.success) {
+            ui_post(UI_MSG_APPEND, resp.text.c_str());
+            ui_post(UI_MSG_STATUS, "V:voice Enter:text");
+        } else {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "Error: %s", resp.error.c_str());
+            ui_post(UI_MSG_APPEND, buf);
+            ui_post(UI_MSG_STATUS, "");
+        }
+    } else {
+        if (wav) free(wav);
+        ui_post(UI_MSG_APPEND, "Recording failed");
+        ui_post(UI_MSG_STATUS, "");
+    }
+#else
+    ui_post(UI_MSG_APPEND, "Set GEMINI_API_KEY in config_keys.h");
+#endif
+    ai_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void start_voice_record()
+{
+    if (ai_task) return;
+    if (WiFi.status() != WL_CONNECTED) {
+        chat_append("WiFi not connected.");
+        return;
+    }
+    xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 16384, NULL, 5, &ai_task, 0);
+}
+
 static void do_send()
 {
     if (!input_ta || ai_task) return;
@@ -172,6 +219,14 @@ void voiceai_keyboard_poll()
 
     if (c == '\n') {
         do_send();
+    } else if (c == 'v' && ai_task == NULL) {
+        const char *text = lv_textarea_get_text(input_ta);
+        if (!text || text[0] == '\0') {
+            start_voice_record();
+            return;
+        }
+        lv_textarea_add_char(input_ta, c);
+        return;
     } else if (c == '\b') {
         const char *text = lv_textarea_get_text(input_ta);
         if (!text || text[0] == '\0') {
@@ -217,7 +272,7 @@ static void ai_create(lv_obj_t *parent)
     lv_label_set_long_mode(response_label, LV_LABEL_LONG_WRAP);
 
 #ifdef GEMINI_API_KEY
-    lv_label_set_text(response_label, "Type a question, Enter to send.");
+    lv_label_set_text(response_label, "Enter: send text\nV: voice (5 sec record)");
 #else
     lv_label_set_text(response_label, "Set GEMINI_API_KEY\nin config_keys.h");
 #endif
