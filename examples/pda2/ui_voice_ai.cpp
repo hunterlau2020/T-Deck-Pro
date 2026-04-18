@@ -13,14 +13,19 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <freertos/queue.h>
+#include "Audio.h"
 
 static lv_obj_t *response_label = NULL;
 static lv_obj_t *input_ta = NULL;
 static lv_obj_t *status_label = NULL;
 static TaskHandle_t ai_task = NULL;
 static bool ai_kbd_active = false;
+static bool tts_playing = false;
 
 static char *chat_history = NULL;
+static char *last_response = NULL;
+
+extern Audio audio;
 
 /* Thread-safe UI queue */
 enum { UI_MSG_APPEND = 1, UI_MSG_STATUS = 2 };
@@ -114,6 +119,11 @@ static void ui_timer_cb(lv_timer_t *t)
         else if (msg.type == UI_MSG_STATUS) chat_show_status(msg.text);
         free(msg.text);
     }
+
+    if (tts_playing && !audio.isRunning()) {
+        tts_playing = false;
+        if (status_label) lv_label_set_text(status_label, "V:voice R:read Enter:text");
+    }
 }
 
 static void ai_text_task(void *param)
@@ -125,8 +135,10 @@ static void ai_text_task(void *param)
 
     gemini_response_t resp = gemini_send_text(prompt, GEMINI_API_KEY);
     if (resp.success) {
+        if (last_response) free(last_response);
+        last_response = strdup(resp.text.c_str());
         ui_post(UI_MSG_APPEND, resp.text.c_str());
-        ui_post(UI_MSG_STATUS, "V:voice Enter:text");
+        ui_post(UI_MSG_STATUS, "V:voice R:read Enter:text");
     } else {
         char buf[256];
         snprintf(buf, sizeof(buf), "Error: %s", resp.error.c_str());
@@ -158,8 +170,10 @@ static void ai_voice_task(void *param)
         free(wav);
 
         if (resp.success) {
+            if (last_response) free(last_response);
+            last_response = strdup(resp.text.c_str());
             ui_post(UI_MSG_APPEND, resp.text.c_str());
-            ui_post(UI_MSG_STATUS, "V:voice Enter:text");
+            ui_post(UI_MSG_STATUS, "V:voice R:read Enter:text");
         } else {
             char buf[256];
             snprintf(buf, sizeof(buf), "Error: %s", resp.error.c_str());
@@ -186,6 +200,29 @@ static void start_voice_record()
         return;
     }
     xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 16384, NULL, 5, &ai_task, 0);
+}
+
+static void start_tts()
+{
+    if (!last_response || last_response[0] == '\0') {
+        if (status_label) lv_label_set_text(status_label, "No response to read");
+        return;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        if (status_label) lv_label_set_text(status_label, "WiFi needed for TTS");
+        return;
+    }
+
+    /* Truncate to ~500 chars for TTS (Google TTS has length limits) */
+    char tts_buf[501];
+    strncpy(tts_buf, last_response, 500);
+    tts_buf[500] = '\0';
+
+    Serial.printf("[VoiceAI] TTS: %d chars\n", (int)strlen(tts_buf));
+    if (status_label) lv_label_set_text(status_label, "Reading aloud...");
+
+    audio.connecttospeech(tts_buf, "en");
+    tts_playing = true;
 }
 
 static void do_send()
@@ -220,6 +257,14 @@ void voiceai_keyboard_poll()
 
     if (c == '\n') {
         do_send();
+    } else if (c == 'r' && ai_task == NULL) {
+        const char *text = lv_textarea_get_text(input_ta);
+        if (!text || text[0] == '\0') {
+            start_tts();
+            return;
+        }
+        lv_textarea_add_char(input_ta, c);
+        return;
     } else if (c == 'v' && ai_task == NULL) {
         const char *text = lv_textarea_get_text(input_ta);
         if (!text || text[0] == '\0') {
@@ -273,7 +318,7 @@ static void ai_create(lv_obj_t *parent)
     lv_label_set_long_mode(response_label, LV_LABEL_LONG_WRAP);
 
 #ifdef GEMINI_API_KEY
-    lv_label_set_text(response_label, "Enter: send text\nV: voice (5 sec record)");
+    lv_label_set_text(response_label, "Enter: send text\nV: voice (5s record)\nR: read last response");
 #else
     lv_label_set_text(response_label, "Set GEMINI_API_KEY\nin config_keys.h");
 #endif
@@ -312,6 +357,8 @@ static void ai_destroy(void)
         vQueueDelete(ui_queue); ui_queue = NULL;
     }
     if (chat_history) { free(chat_history); chat_history = NULL; }
+    if (last_response) { free(last_response); last_response = NULL; }
+    tts_playing = false;
     response_label = input_ta = status_label = NULL;
 }
 
