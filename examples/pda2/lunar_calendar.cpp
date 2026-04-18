@@ -313,15 +313,12 @@ int get_month_holidays(int year, int month, int *days, const char **names)
 #ifdef ARDUINO
     count = get_api_holidays(year, month, days, names, 31);
     if (count > 0) {
-        // API had data — still append jieqi (API doesn't cover solar terms)
+        /* API succeeded — use API results + jieqi only */
         for (int i = 0; i < (int)JIEQI_COUNT && count < 31; i++) {
             if (jieqi_table[i].year == year && jieqi_table[i].month == month) {
-                // Check not already in API results
                 bool dup = false;
                 for (int j = 0; j < count; j++) {
-                    if (days[j] == jieqi_table[i].day && strstr(names[j], "Qingming")) {
-                        dup = true; break;
-                    }
+                    if (days[j] == (int)jieqi_table[i].day) { dup = true; break; }
                 }
                 if (!dup) {
                     days[count] = jieqi_table[i].day;
@@ -334,7 +331,7 @@ int get_month_holidays(int year, int month, int *days, const char **names)
     }
 #endif
 
-    // Fallback: computed US + Chinese + Jieqi
+    /* Fallback: computed US + Chinese + Jieqi */
     static const int mdays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
     int dim = mdays[month - 1];
     if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) dim = 29;
@@ -345,7 +342,7 @@ int get_month_holidays(int year, int month, int *days, const char **names)
         const char *cn = get_chinese_holiday(year, month, d);
         if (cn && count < 31) { days[count] = d; names[count] = cn; count++; }
         const char *jq = lookup_table(jieqi_table, JIEQI_COUNT, year, month, d);
-        if (jq && jq != cn && count < 31) { days[count] = d; names[count] = jq; count++; }
+        if (jq && !cn && count < 31) { days[count] = d; names[count] = jq; count++; }
     }
     return count;
 }

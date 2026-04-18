@@ -27,6 +27,9 @@ static int cached_month = 0;
 static int cached_count = 0;
 static int cached_days[31];
 static const char *cached_names[31];
+static TaskHandle_t fetch_task_handle = NULL;
+static volatile bool fetch_pending = false;
+static lv_timer_t *fetch_check_timer = NULL;
 
 static void cache_holidays(int year, int month)
 {
@@ -83,14 +86,46 @@ static void update_holidays(int year, int month)
     }
 }
 
+static void start_async_fetch(int year, int month);
+
 static void navigate_month(int delta)
 {
     current_month += delta;
     if (current_month > 12) { current_month = 1; current_year++; }
     if (current_month < 1)  { current_month = 12; current_year--; }
     lv_calendar_set_showed_date(calendar_obj, current_year, current_month);
-    holidays_fetch_api(current_year, current_month);
+    /* Show computed holidays immediately, then fetch API in background */
     update_holidays(current_year, current_month);
+    start_async_fetch(current_year, current_month);
+}
+
+static int fetch_year_req = 0;
+static int fetch_month_req = 0;
+
+static void fetch_task_func(void *param)
+{
+    holidays_fetch_api(fetch_year_req, fetch_month_req);
+    fetch_pending = true;
+    fetch_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+static void start_async_fetch(int year, int month)
+{
+    if (fetch_task_handle) { vTaskDelete(fetch_task_handle); fetch_task_handle = NULL; }
+    fetch_year_req = year;
+    fetch_month_req = month;
+    xTaskCreatePinnedToCore(fetch_task_func, "hol_fetch", 8192, NULL, 5, &fetch_task_handle, 0);
+}
+
+static void fetch_check_cb(lv_timer_t *t)
+{
+    if (fetch_pending) {
+        fetch_pending = false;
+        /* Re-populate with API data now available */
+        cached_year = 0; cached_month = 0;
+        update_holidays(current_year, current_month);
+    }
 }
 
 static void calendar_event_handler(lv_event_t *e)
@@ -206,9 +241,9 @@ static void cal_create(lv_obj_t *parent)
     lv_label_set_long_mode(holiday_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(holiday_label, "");
 
-    holidays_fetch_api(year, month);
-
     update_holidays(year, month);
+    start_async_fetch(year, month);
+    fetch_check_timer = lv_timer_create(fetch_check_cb, 500, NULL);
     show_cal_page(0);
     cal_kbd_active = true;
 }
@@ -218,6 +253,9 @@ static void cal_exit(void) { ui_disp_full_refr(); }
 static void cal_destroy(void)
 {
     cal_kbd_active = false;
+    if (fetch_task_handle) { vTaskDelete(fetch_task_handle); fetch_task_handle = NULL; }
+    if (fetch_check_timer) { lv_timer_del(fetch_check_timer); fetch_check_timer = NULL; }
+    fetch_pending = false;
     calendar_obj = NULL;
     holiday_label = NULL;
     page_cal = page_holidays = page_indicator = NULL;
