@@ -352,6 +352,19 @@ static void calc_create(lv_obj_t *parent)
     lv_obj_set_style_pad_row(cont, 4, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
 
+    result_label = lv_label_create(cont);
+    lv_obj_set_width(result_label, lv_pct(100));
+    lv_obj_set_style_text_font(result_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_label_set_text(result_label, "= ");
+
+    history_list = lv_label_create(cont);
+    lv_obj_set_width(history_list, lv_pct(100));
+    lv_obj_set_flex_grow(history_list, 1);
+    lv_obj_set_style_text_font(history_list, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(history_list, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_label_set_long_mode(history_list, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(history_list, "Enter to eval, Bksp to back");
+
     expr_ta = lv_textarea_create(cont);
     lv_obj_set_width(expr_ta, lv_pct(100));
     lv_obj_set_height(expr_ta, 36);
@@ -359,24 +372,6 @@ static void calc_create(lv_obj_t *parent)
     lv_textarea_set_one_line(expr_ta, true);
     lv_textarea_set_max_length(expr_ta, MAX_EXPR_LEN);
     lv_obj_set_style_text_font(expr_ta, FONT_CALC, LV_PART_MAIN);
-
-    result_label = lv_label_create(cont);
-    lv_obj_set_width(result_label, lv_pct(100));
-    lv_obj_set_style_text_font(result_label, &lv_font_montserrat_18, LV_PART_MAIN);
-    lv_label_set_text(result_label, "= ");
-
-    lv_obj_t *hint = lv_label_create(cont);
-    lv_obj_set_width(hint, lv_pct(100));
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(hint, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
-    lv_label_set_text(hint, "Type expr, Enter to eval");
-
-    history_list = lv_label_create(cont);
-    lv_obj_set_width(history_list, lv_pct(100));
-    lv_obj_set_style_text_font(history_list, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(history_list, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
-    lv_label_set_long_mode(history_list, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(history_list, "");
 
     calc_active = true;
 }

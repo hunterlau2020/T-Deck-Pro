@@ -264,6 +264,7 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN_CALCULATOR_ID, &img_calculator, "Calc",   167,    13},
     {SCREEN_WEATHER_ID,    &img_weather,    "Weather", 23,   101},
     {SCREEN_CALENDAR_ID,   &img_calendar,   "Calendar",95,   101},
+    {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    167,  101},
 };
 
 static void menu_btn_event_cb(lv_event_t *e)
@@ -3136,6 +3137,9 @@ void ui_deckpro_entry(void)
 
     extern scr_lifecycle_t screen_calendar;
     scr_mgr_register(SCREEN_CALENDAR_ID, &screen_calendar);
+
+    extern scr_lifecycle_t screen_dictionary;
+    scr_mgr_register(SCREEN_DICTIONARY_ID, &screen_dictionary);
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);
