@@ -25,7 +25,12 @@
 extern void shared_spi_lock(void);
 extern void shared_spi_unlock(void);
 #include "utilities.h"
-static bool sd_care_init(void) { return SD.begin(BOARD_SD_CS); }
+static bool sd_care_init(void) {
+    shared_spi_lock();
+    bool ok = SD.begin(BOARD_SD_CS, SPI, 1000000);
+    shared_spi_unlock();
+    return ok;
+}
 
 
 // ---- Multi-StarDict support ----
