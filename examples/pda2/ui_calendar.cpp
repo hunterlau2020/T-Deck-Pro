@@ -74,7 +74,7 @@ static void update_holidays(int year, int month)
     if (holiday_label) {
         if (highlighted_count > 0) {
             char buf[1024];
-            int pos = snprintf(buf, sizeof(buf), "Holidays & Jieqi %d/%d\n", year, month);
+            int pos = 0;
             for (int i = 0; i < highlighted_count && pos < (int)sizeof(buf) - 1; i++) {
                 pos += snprintf(buf + pos, sizeof(buf) - pos, " %2d: %s\n",
                                 cached_days[i], cached_names[i]);
