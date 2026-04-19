@@ -15,6 +15,7 @@
 #include <freertos/queue.h>
 #include "Audio.h"
 #include "utilities.h"
+#include <driver/i2s.h>
 
 static lv_obj_t *response_label = NULL;
 static lv_obj_t *input_ta = NULL;
@@ -203,15 +204,13 @@ static void start_voice_record()
     xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 16384, NULL, 5, &ai_task, 0);
 }
 
-static bool audio_ready = false;
-
 static void ensure_audio_init()
 {
-    if (audio_ready) return;
-    Serial.println("[VoiceAI] Initializing audio...");
+    Serial.println("[VoiceAI] Re-initializing audio I2S...");
+    /* Re-install I2S driver for audio output (PDM recorder uninstalls it) */
+    i2s_driver_uninstall(I2S_NUM_0);
     audio.setPinout(BOARD_I2S_BCLK, BOARD_I2S_LRC, BOARD_I2S_DOUT);
     audio.setVolume(15);
-    audio_ready = true;
 }
 
 static void start_tts()
