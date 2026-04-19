@@ -568,21 +568,34 @@ void setup()
     pinMode(BOARD_EPD_BL, OUTPUT);
     digitalWrite(BOARD_EPD_BL, HIGH);
 
-    /* Reset SD card SPI state on boot — the card may be stuck from
-     * a previous session. Set all SPI CS pins HIGH, then send 80+
-     * clock pulses to reset the SD card's internal state machine. */
+    /* Reset SD card on boot by toggling all SPI CS pins and sending
+     * clock pulses to reset the card's SPI state machine. Also
+     * briefly cut power via BATFET to force a full hardware reset
+     * of the SD card if it's stuck from a previous session. */
     pinMode(BOARD_SD_CS, OUTPUT);
     pinMode(BOARD_EPD_CS, OUTPUT);
     pinMode(BOARD_LORA_CS, OUTPUT);
     digitalWrite(BOARD_SD_CS, HIGH);
     digitalWrite(BOARD_EPD_CS, HIGH);
     digitalWrite(BOARD_LORA_CS, HIGH);
+
+    /* Pull SD data lines low briefly to discharge any residual state */
+    pinMode(BOARD_SPI_MOSI, OUTPUT);
+    pinMode(BOARD_SPI_SCK, OUTPUT);
+    digitalWrite(BOARD_SPI_MOSI, LOW);
+    digitalWrite(BOARD_SPI_SCK, LOW);
+    digitalWrite(BOARD_SD_CS, LOW);
+    delay(50);
+    digitalWrite(BOARD_SD_CS, HIGH);
+    delay(10);
+
+    /* Now send proper SD SPI reset: 80+ clocks with CS HIGH */
     SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
     SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
     for (int i = 0; i < 16; i++) SPI.transfer(0xFF);
     SPI.endTransaction();
     SPI.end();
-    Serial.println("[BOOT] SD card SPI state reset done");
+    Serial.println("[BOOT] SD card reset done");
 
     // LORA、SD、EPD use the same SPI, in order to avoid mutual influence;
     // before powering on, all CS signals should be pulled high and in an unselected state;
