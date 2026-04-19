@@ -23,6 +23,7 @@ static lv_obj_t *status_label = NULL;
 static TaskHandle_t ai_task = NULL;
 static bool ai_kbd_active = false;
 static bool tts_playing = false;
+static volatile bool tts_auto_read = false;
 
 static char *chat_history = NULL;
 static char *last_response = NULL;
@@ -113,6 +114,8 @@ static void ui_post(int type, const char *text)
         free(msg.text);
 }
 
+static void start_tts();
+
 static void ui_timer_cb(lv_timer_t *t)
 {
     ui_msg_t msg;
@@ -120,6 +123,11 @@ static void ui_timer_cb(lv_timer_t *t)
         if (msg.type == UI_MSG_APPEND) chat_append(msg.text);
         else if (msg.type == UI_MSG_STATUS) chat_show_status(msg.text);
         free(msg.text);
+    }
+
+    if (tts_auto_read && ai_task == NULL) {
+        tts_auto_read = false;
+        start_tts();
     }
 
     if (tts_playing && !audio.isRunning()) {
@@ -175,7 +183,7 @@ static void ai_voice_task(void *param)
             if (last_response) free(last_response);
             last_response = strdup(resp.text.c_str());
             ui_post(UI_MSG_APPEND, resp.text.c_str());
-            ui_post(UI_MSG_STATUS, "V:voice R:read Enter:text");
+            tts_auto_read = true;
         } else {
             char buf[256];
             snprintf(buf, sizeof(buf), "Error: %s", resp.error.c_str());
@@ -387,6 +395,7 @@ static void ai_destroy(void)
     if (chat_history) { free(chat_history); chat_history = NULL; }
     if (last_response) { free(last_response); last_response = NULL; }
     tts_playing = false;
+    tts_auto_read = false;
     response_label = input_ta = status_label = NULL;
 }
 
