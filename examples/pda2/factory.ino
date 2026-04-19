@@ -687,19 +687,23 @@ void setup()
     // SPI
     SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
 
-    // Init SD FIRST — before EPD/LoRa touch the SPI bus
+    // Init SD FIRST — before EPD touches the SPI bus
     peri_init_st[E_PERI_SD]         = sd_care_init();
     Serial.printf("[BOOT] SD init: %d\n", peri_init_st[E_PERI_SD]);
 
     // init peripheral
-    // touch.setPins(BOARD_TOUCH_RST, BOARD_TOUCH_INT);
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
-    peri_init_st[E_PERI_LORA]       = lora_init();
-    // peri_init_st[E_PERI_TOUCH]      = touch.begin(Wire, BOARD_I2C_ADDR_TOUCH, BOARD_TOUCH_SDA, BOARD_TOUCH_SCL);
+
+    // LoRa and GPS disabled by default — only enabled when apps need them.
+    // LoRa's SX1262 holds MISO low when active, breaking SD on shared SPI.
+    // peri_init_st[E_PERI_LORA]    = lora_init();
+    // peri_init_st[E_PERI_GPS]     = gps_init();
+    digitalWrite(BOARD_LORA_EN, LOW);
+    digitalWrite(BOARD_GPS_EN, LOW);
+
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
     peri_init_st[E_PERI_BQ25896]    = bq25896_init();
     peri_init_st[E_PERI_BQ27220]    = bq27220_init();
-    peri_init_st[E_PERI_GPS]        = gps_init();
     peri_init_st[E_PERI_BHI260AP]   = BHI260AP_init();
     peri_init_st[E_PERI_A7682E]     = A7682E_init();
 
@@ -719,7 +723,6 @@ void setup()
     digitalWrite(BOARD_KEYBOARD_LED, LOW);
     digitalWrite(BOARD_MOTOR_PIN, HIGH);
     digitalWrite(BOARD_6609_EN, HIGH);
-    digitalWrite(BOARD_LORA_EN, HIGH);
     digitalWrite(BOARD_GPS_EN, HIGH);
     digitalWrite(BOARD_A7682E_PWRKEY, HIGH);
 
