@@ -162,9 +162,8 @@ void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
 {
     if(ui_test_sd_card())
     {
-        extern void shared_spi_prepare_sd(void);
         shared_spi_lock();
-        shared_spi_prepare_sd();
+        shared_spi_prepare_device(BOARD_SD_CS);
 
         if(total)
             *total = SD.totalBytes() / (1024 * 1024);

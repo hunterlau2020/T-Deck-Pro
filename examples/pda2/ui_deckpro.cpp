@@ -5,8 +5,6 @@
 #include "ui_deckpro_port.h"
 #include "Arduino.h"
 
-extern bool peri_init_st[];
-
 #define SETTING_PAGE_MAX_ITEM 7
 #define GET_BUFF_LEN(a) sizeof(a)/sizeof(a[0])
 
@@ -601,7 +599,7 @@ static void create1(lv_obj_t *parent)
     scr_back_btn_create(parent, "Lora", scr1_btn_event_cb);
 }
 
-static void entry1(void)
+static void entry1(void) 
 {
     ui_disp_full_refr();
 }

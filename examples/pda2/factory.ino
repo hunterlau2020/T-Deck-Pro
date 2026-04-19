@@ -110,11 +110,6 @@ void shared_spi_prepare_device(int cs_pin)
     }
 }
 
-void shared_spi_prepare_sd(void)
-{
-    shared_spi_prepare_device(BOARD_SD_CS);
-}
-
 /*********************************************************************************
  *                              STATIC PROTOTYPES
  * *******************************************************************************/
@@ -557,7 +552,7 @@ void setup()
     pinMode(BOARD_6609_EN, OUTPUT);         // enable 7682 module
     pinMode(BOARD_LORA_EN, OUTPUT);         // enable LORA module
     pinMode(BOARD_GPS_EN, OUTPUT);          // enable GPS module
-    pinMode(BOARD_A7682E_PWRKEY, OUTPUT);
+    pinMode(BOARD_A7682E_PWRKEY, OUTPUT); 
     digitalWrite(BOARD_KEYBOARD_LED, LOW);
     digitalWrite(BOARD_MOTOR_PIN, HIGH);
     digitalWrite(BOARD_6609_EN, HIGH);
@@ -565,37 +560,8 @@ void setup()
     digitalWrite(BOARD_GPS_EN, HIGH);
     digitalWrite(BOARD_A7682E_PWRKEY, HIGH);
 
-    pinMode(BOARD_EPD_BL, OUTPUT);
+    pinMode(BOARD_EPD_BL, OUTPUT); 
     digitalWrite(BOARD_EPD_BL, HIGH);
-
-    /* Reset SD card on boot by toggling all SPI CS pins and sending
-     * clock pulses to reset the card's SPI state machine. Also
-     * briefly cut power via BATFET to force a full hardware reset
-     * of the SD card if it's stuck from a previous session. */
-    pinMode(BOARD_SD_CS, OUTPUT);
-    pinMode(BOARD_EPD_CS, OUTPUT);
-    pinMode(BOARD_LORA_CS, OUTPUT);
-    digitalWrite(BOARD_SD_CS, HIGH);
-    digitalWrite(BOARD_EPD_CS, HIGH);
-    digitalWrite(BOARD_LORA_CS, HIGH);
-
-    /* Pull SD data lines low briefly to discharge any residual state */
-    pinMode(BOARD_SPI_MOSI, OUTPUT);
-    pinMode(BOARD_SPI_SCK, OUTPUT);
-    digitalWrite(BOARD_SPI_MOSI, LOW);
-    digitalWrite(BOARD_SPI_SCK, LOW);
-    digitalWrite(BOARD_SD_CS, LOW);
-    delay(50);
-    digitalWrite(BOARD_SD_CS, HIGH);
-    delay(10);
-
-    /* Now send proper SD SPI reset: 80+ clocks with CS HIGH */
-    SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
-    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
-    for (int i = 0; i < 16; i++) SPI.transfer(0xFF);
-    SPI.endTransaction();
-    SPI.end();
-    Serial.println("[BOOT] SD card reset done");
 
     // LORA、SD、EPD use the same SPI, in order to avoid mutual influence;
     // before powering on, all CS signals should be pulled high and in an unselected state;
@@ -684,24 +650,15 @@ void setup()
     // SPI
     SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
 
-    // init peripheral — SAME ORDER as original factory
+    // init peripheral
+    // touch.setPins(BOARD_TOUCH_RST, BOARD_TOUCH_INT);
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
     peri_init_st[E_PERI_LORA]       = lora_init();
+    // peri_init_st[E_PERI_TOUCH]      = touch.begin(Wire, BOARD_I2C_ADDR_TOUCH, BOARD_TOUCH_SDA, BOARD_TOUCH_SCL);
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
     peri_init_st[E_PERI_BQ25896]    = bq25896_init();
     peri_init_st[E_PERI_BQ27220]    = bq27220_init();
     peri_init_st[E_PERI_SD]         = sd_care_init();
-    Serial.printf("[BOOT] SD init: %d\n", peri_init_st[E_PERI_SD]);
-
-    // SD test: read after boot
-    if (peri_init_st[E_PERI_SD]) {
-        shared_spi_lock();
-        shared_spi_prepare_device(BOARD_SD_CS);
-        Serial.printf("[SD TEST] after boot: totalBytes=%llu usedBytes=%llu\n",
-                      SD.totalBytes(), SD.usedBytes());
-        shared_spi_unlock();
-    }
-
     peri_init_st[E_PERI_GPS]        = gps_init();
     peri_init_st[E_PERI_BHI260AP]   = BHI260AP_init();
     peri_init_st[E_PERI_A7682E]     = A7682E_init();
@@ -713,29 +670,11 @@ void setup()
 
     peri_init_st[E_PERI_TOUCH] = hyn_touch_init();
 
-    // SD test: after all peripheral init (before LVGL)
-    if (peri_init_st[E_PERI_SD]) {
-        shared_spi_lock();
-        shared_spi_prepare_device(BOARD_SD_CS);
-        Serial.printf("[SD TEST] after all peri init: totalBytes=%llu usedBytes=%llu\n",
-                      SD.totalBytes(), SD.usedBytes());
-        shared_spi_unlock();
-    }
-
     lvgl_init();
 
     ui_deckpro_entry();
 
     disp_full_refr();
-
-    // SD test: after first EPD full refresh
-    if (peri_init_st[E_PERI_SD]) {
-        shared_spi_lock();
-        shared_spi_prepare_device(BOARD_SD_CS);
-        Serial.printf("[SD TEST] after disp_full_refr: totalBytes=%llu usedBytes=%llu\n",
-                      SD.totalBytes(), SD.usedBytes());
-        shared_spi_unlock();
-    }
 
     digitalWrite(BOARD_KEYBOARD_LED, LOW);
     digitalWrite(BOARD_MOTOR_PIN, HIGH);

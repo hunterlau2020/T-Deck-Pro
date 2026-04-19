@@ -8,7 +8,6 @@
 #include "Arduino.h"
 #include "ui_deckpro.h"
 #include "ui_deckpro_port.h"
-extern bool peri_init_st[];
 #include <vector>
 #include <math.h>
 
