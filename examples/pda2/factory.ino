@@ -112,27 +112,7 @@ void shared_spi_prepare_device(int cs_pin)
 
 void shared_spi_prepare_sd(void)
 {
-    shared_spi_release_all_cs();
-
-    /* Put LoRa radio to sleep if initialized — SX1262 holds MISO low */
-    if (peri_init_st[E_PERI_LORA]) {
-        extern void lora_sleep(void);
-        lora_sleep();
-    }
-
-    delay(1);
-
-    /* Send 128+ clock pulses with all CS HIGH to reset SD card
-     * SPI state machine (SD spec requires minimum 74 clocks) */
-    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
-    for (int i = 0; i < 16; i++) SPI.transfer(0xFF);
-    SPI.endTransaction();
-
-    /* Force SD re-init — the only reliable way after EPD has used SPI.
-     * SD.begin() re-establishes the card connection from scratch. */
-    SD.end();
-    delay(10);
-    SD.begin(BOARD_SD_CS, SPI, 4000000);
+    shared_spi_prepare_device(BOARD_SD_CS);
 }
 
 /*********************************************************************************
@@ -328,7 +308,7 @@ static void lvgl_init(void)
     // disp_drv.render_start_cb = dips_render_start_cb;
     disp_drv.draw_buf = &draw_buf_dsc_1;
     // disp_drv.rounder_cb = display_driver_rounder_cb;
-    disp_drv.full_refresh = 0;
+    disp_drv.full_refresh = 1;
 
     lv_disp_drv_register(&disp_drv);
 
@@ -433,32 +413,13 @@ static void bq25896_runtime_maintain(void)
 
 static bool sd_care_init(void)
 {
-    Serial.printf("[SD] CS=%d SCK=%d MOSI=%d MISO=%d\n",
-                  BOARD_SD_CS, BOARD_SPI_SCK, BOARD_SPI_MOSI, BOARD_SPI_MISO);
-
-    /* Ensure CS pin is output and HIGH before init */
-    pinMode(BOARD_SD_CS, OUTPUT);
-    digitalWrite(BOARD_SD_CS, HIGH);
-    delay(10);
-
     shared_spi_lock();
     shared_spi_prepare_device(BOARD_SD_CS);
 
-    /* Try slow SPI first (some cards need 400kHz for init) */
-    Serial.println("[SD] Trying SD.begin at default speed...");
-    if(!SD.begin(BOARD_SD_CS, SPI, 400000)){
-        Serial.println("[SD] 400kHz failed, trying 1MHz...");
-        if(!SD.begin(BOARD_SD_CS, SPI, 1000000)){
-            Serial.println("[SD] 1MHz failed, trying 4MHz...");
-            if(!SD.begin(BOARD_SD_CS, SPI, 4000000)){
-                shared_spi_unlock();
-                Serial.println("[SD CARD] Card Mount Failed (all speeds)");
-
-                /* Debug: try toggling CS to see if card responds */
-                Serial.printf("[SD] MISO pin %d state: %d\n", BOARD_SPI_MISO, digitalRead(BOARD_SPI_MISO));
-                return false;
-            }
-        }
+    if(!SD.begin(BOARD_SD_CS, SPI)){
+        shared_spi_unlock();
+        Serial.println("[SD CARD] Card Mount Failed");
+        return false;
     }
 
     uint64_t cardSize = SD.cardSize() / (1024 * 1024);
@@ -694,23 +655,15 @@ void setup()
     // SPI
     SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
 
-    // Init SD FIRST — before EPD touches the SPI bus
-    peri_init_st[E_PERI_SD]         = sd_care_init();
-    Serial.printf("[BOOT] SD init: %d\n", peri_init_st[E_PERI_SD]);
-
-    // init peripheral
+    // init peripheral — SAME ORDER as original factory
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
-
-    // LoRa and GPS disabled by default — only enabled when apps need them.
-    // LoRa's SX1262 holds MISO low when active, breaking SD on shared SPI.
-    // peri_init_st[E_PERI_LORA]    = lora_init();
-    // peri_init_st[E_PERI_GPS]     = gps_init();
-    digitalWrite(BOARD_LORA_EN, LOW);
-    digitalWrite(BOARD_GPS_EN, LOW);
-
+    peri_init_st[E_PERI_LORA]       = lora_init();
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
     peri_init_st[E_PERI_BQ25896]    = bq25896_init();
     peri_init_st[E_PERI_BQ27220]    = bq27220_init();
+    peri_init_st[E_PERI_SD]         = sd_care_init();
+    Serial.printf("[BOOT] SD init: %d\n", peri_init_st[E_PERI_SD]);
+    peri_init_st[E_PERI_GPS]        = gps_init();
     peri_init_st[E_PERI_BHI260AP]   = BHI260AP_init();
     peri_init_st[E_PERI_A7682E]     = A7682E_init();
 
@@ -730,6 +683,7 @@ void setup()
     digitalWrite(BOARD_KEYBOARD_LED, LOW);
     digitalWrite(BOARD_MOTOR_PIN, HIGH);
     digitalWrite(BOARD_6609_EN, HIGH);
+    digitalWrite(BOARD_LORA_EN, HIGH);
     digitalWrite(BOARD_GPS_EN, HIGH);
     digitalWrite(BOARD_A7682E_PWRKEY, HIGH);
 

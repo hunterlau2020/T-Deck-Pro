@@ -603,20 +603,9 @@ static void create1(lv_obj_t *parent)
 
 static void entry1(void)
 {
-    /* Enable LoRa on demand */
-    digitalWrite(BOARD_LORA_EN, HIGH);
-    delay(10);
-    if (!peri_init_st[E_PERI_LORA]) {
-        peri_init_st[E_PERI_LORA] = lora_init();
-        Serial.printf("[LoRa] init on demand: %d\n", peri_init_st[E_PERI_LORA]);
-    }
     ui_disp_full_refr();
 }
 static void exit1(void) {
-    /* Disable LoRa — releases MISO for SD card */
-    lora_sleep();
-    digitalWrite(BOARD_LORA_EN, LOW);
-    Serial.println("[LoRa] disabled on exit");
     ui_disp_full_refr();
 }
 static void destroy1(void) { }
