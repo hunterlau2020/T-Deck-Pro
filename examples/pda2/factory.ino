@@ -308,7 +308,7 @@ static void lvgl_init(void)
     // disp_drv.render_start_cb = dips_render_start_cb;
     disp_drv.draw_buf = &draw_buf_dsc_1;
     // disp_drv.rounder_cb = display_driver_rounder_cb;
-    disp_drv.full_refresh = 1;
+    disp_drv.full_refresh = 0;
 
     lv_disp_drv_register(&disp_drv);
 
