@@ -29,14 +29,11 @@ extern void shared_spi_prepare_device(int cs_pin);
 #include "peripheral.h"
 extern bool peri_init_st[];
 
-/* Use existing SD mount. Caller must hold shared_spi_lock.
- * Set SPI to SD-compatible settings before access. */
+/* Just check if SD mounted at boot. Do NOT touch SPI or SD at all —
+ * any SPI manipulation here corrupts the SD card state permanently
+ * (requires physical card reseat to recover). */
 static bool sd_care_init(void) {
-    if (!peri_init_st[E_PERI_SD]) return false;
-    shared_spi_prepare_device(BOARD_SD_CS);
-    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
-    SPI.endTransaction();
-    return true;
+    return peri_init_st[E_PERI_SD];
 }
 
 
