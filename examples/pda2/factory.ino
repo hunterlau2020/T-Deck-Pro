@@ -487,7 +487,7 @@ static bool A7682E_init(void)
     return (retry < retry_cnt);
 }
 
-static bool pcm5102a_init(void)
+bool pcm5102a_init(void)
 {
     bool ret = audio.setPinout(BOARD_I2S_BCLK, BOARD_I2S_LRC, BOARD_I2S_DOUT);
 
