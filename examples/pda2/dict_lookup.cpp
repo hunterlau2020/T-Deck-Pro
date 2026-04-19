@@ -27,13 +27,16 @@ extern void shared_spi_unlock(void);
 extern void shared_spi_prepare_device(int cs_pin);
 #include "utilities.h"
 #include "peripheral.h"
-/* Re-init SD on shared SPI bus. Caller must hold shared_spi_lock.
- * We must call SD.begin() each time because other SPI devices
- * (E-Paper, LoRa) change the bus settings between accesses. */
+extern bool peri_init_st[];
+
+/* Use existing SD mount. Caller must hold shared_spi_lock.
+ * Set SPI to SD-compatible settings before access. */
 static bool sd_care_init(void) {
+    if (!peri_init_st[E_PERI_SD]) return false;
     shared_spi_prepare_device(BOARD_SD_CS);
-    SD.end();
-    return SD.begin(BOARD_SD_CS, SPI, 400000);
+    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
+    SPI.endTransaction();
+    return true;
 }
 
 
