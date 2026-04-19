@@ -212,12 +212,36 @@ static void start_voice_record()
     xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 16384, NULL, 5, &ai_task, 0);
 }
 
-extern bool pcm5102a_init(void);
-
 static void ensure_audio_init()
 {
     Serial.println("[VoiceAI] Re-initializing audio...");
-    pcm5102a_init();
+
+    /* The Audio library's internal I2S handle is stale after PDM recording.
+     * We must install a basic I2S TX driver so setPinout has a valid handle.
+     * The Audio library will reconfigure it as needed for playback. */
+    i2s_config_t cfg = {};
+    cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+    cfg.sample_rate = 44100;
+    cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
+    cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
+    cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    cfg.dma_buf_count = 8;
+    cfg.dma_buf_len = 1024;
+
+    esp_err_t err = i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL);
+    Serial.printf("[VoiceAI] i2s_driver_install: %s\n", esp_err_to_name(err));
+
+    i2s_pin_config_t pins = {};
+    pins.bck_io_num = BOARD_I2S_BCLK;
+    pins.ws_io_num = BOARD_I2S_LRC;
+    pins.data_out_num = BOARD_I2S_DOUT;
+    pins.data_in_num = I2S_PIN_NO_CHANGE;
+    err = i2s_set_pin(I2S_NUM_0, &pins);
+    Serial.printf("[VoiceAI] i2s_set_pin: %s\n", esp_err_to_name(err));
+
+    /* Now Audio.setPinout is safe — driver is installed */
+    audio.setPinout(BOARD_I2S_BCLK, BOARD_I2S_LRC, BOARD_I2S_DOUT);
+    audio.setVolume(21);
     Serial.println("[VoiceAI] Audio re-initialized");
 }
 
