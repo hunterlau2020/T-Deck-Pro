@@ -24,11 +24,15 @@
 
 extern void shared_spi_lock(void);
 extern void shared_spi_unlock(void);
+extern void shared_spi_prepare_device(int cs_pin);
 #include "utilities.h"
+#include "peripheral.h"
+/* Check if SD was mounted at boot. Caller must hold shared_spi_lock.
+ * Uses the factory pattern: just prepare CS pin, never call SD.begin() again. */
+extern bool peri_init_st[];
 static bool sd_care_init(void) {
-    /* SD is already mounted at boot — just check if it's available.
-     * Do NOT call SD.begin() again as it disrupts the existing mount. */
-    return SD.cardType() != CARD_NONE;
+    shared_spi_prepare_device(BOARD_SD_CS);
+    return peri_init_st[E_PERI_SD];
 }
 
 
