@@ -303,7 +303,7 @@ static void lvgl_init(void)
     // disp_drv.render_start_cb = dips_render_start_cb;
     disp_drv.draw_buf = &draw_buf_dsc_1;
     // disp_drv.rounder_cb = display_driver_rounder_cb;
-    disp_drv.full_refresh = 0;
+    disp_drv.full_refresh = 0;  // partial refresh for responsive E-Paper UI
 
     lv_disp_drv_register(&disp_drv);
 
@@ -647,18 +647,26 @@ void setup()
     listDir(SPIFFS, "/", 0);
     Serial.println(" ------------- PERI ------------- ");
 
-    // SPI
+    // SPI — set all CS pins HIGH before any SPI communication
+    pinMode(BOARD_SD_CS, OUTPUT);   digitalWrite(BOARD_SD_CS, HIGH);
+    pinMode(BOARD_EPD_CS, OUTPUT);  digitalWrite(BOARD_EPD_CS, HIGH);
+    pinMode(BOARD_LORA_CS, OUTPUT); digitalWrite(BOARD_LORA_CS, HIGH);
     SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
 
-    // init peripheral
-    // touch.setPins(BOARD_TOUCH_RST, BOARD_TOUCH_INT);
+    // SD card MUST be initialized FIRST, before any other SPI device.
+    // Per Espressif docs: "This step will put the SD card into SPI mode,
+    // which should be done before all other SPI communications on the same
+    // bus. Otherwise the card will stay in SD mode, in which mode it may
+    // randomly respond to any SPI communications on the bus."
+    // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/sdspi_share.html
+    peri_init_st[E_PERI_SD]         = sd_care_init();
+
+    // Now init other SPI peripherals
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
     peri_init_st[E_PERI_LORA]       = lora_init();
-    // peri_init_st[E_PERI_TOUCH]      = touch.begin(Wire, BOARD_I2C_ADDR_TOUCH, BOARD_TOUCH_SDA, BOARD_TOUCH_SCL);
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
     peri_init_st[E_PERI_BQ25896]    = bq25896_init();
     peri_init_st[E_PERI_BQ27220]    = bq27220_init();
-    peri_init_st[E_PERI_SD]         = sd_care_init();
     peri_init_st[E_PERI_GPS]        = gps_init();
     peri_init_st[E_PERI_BHI260AP]   = BHI260AP_init();
     peri_init_st[E_PERI_A7682E]     = A7682E_init();
