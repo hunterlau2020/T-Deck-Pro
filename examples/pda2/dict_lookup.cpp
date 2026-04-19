@@ -29,24 +29,10 @@ extern void shared_spi_prepare_device(int cs_pin);
 #include "peripheral.h"
 extern bool peri_init_st[];
 
-/* Re-mount SD after other SPI devices have used the bus.
- * Caller must hold shared_spi_lock. */
+/* Check if SD is available. NEVER call SD.end() or SD.begin() —
+ * that permanently corrupts the card until physical reseat. */
 static bool sd_care_init(void) {
-    if (!peri_init_st[E_PERI_SD]) return false;
-
-    /* Deselect all, send clock pulses to reset SD card SPI state */
-    digitalWrite(BOARD_SD_CS, HIGH);
-    digitalWrite(BOARD_EPD_CS, HIGH);
-    digitalWrite(BOARD_LORA_CS, HIGH);
-    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
-    for (int i = 0; i < 10; i++) SPI.transfer(0xFF);
-    SPI.endTransaction();
-
-    /* Re-init SD connection */
-    SD.end();
-    bool ok = SD.begin(BOARD_SD_CS, SPI, 4000000);
-    Serial.printf("[Dictionary] SD re-init: %s\n", ok ? "OK" : "FAILED");
-    return ok;
+    return peri_init_st[E_PERI_SD];
 }
 
 

@@ -669,6 +669,10 @@ void setup()
     // SPI
     SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
 
+    // Init SD FIRST — before EPD/LoRa touch the SPI bus
+    peri_init_st[E_PERI_SD]         = sd_care_init();
+    Serial.printf("[BOOT] SD init: %d\n", peri_init_st[E_PERI_SD]);
+
     // init peripheral
     // touch.setPins(BOARD_TOUCH_RST, BOARD_TOUCH_INT);
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
@@ -677,18 +681,6 @@ void setup()
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
     peri_init_st[E_PERI_BQ25896]    = bq25896_init();
     peri_init_st[E_PERI_BQ27220]    = bq27220_init();
-
-    // Init SD LAST — after all other SPI devices, with bus reset
-    shared_spi_lock();
-    digitalWrite(BOARD_SD_CS, HIGH);
-    digitalWrite(BOARD_EPD_CS, HIGH);
-    digitalWrite(BOARD_LORA_CS, HIGH);
-    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
-    for (int i = 0; i < 10; i++) SPI.transfer(0xFF);
-    SPI.endTransaction();
-    shared_spi_unlock();
-    peri_init_st[E_PERI_SD]         = sd_care_init();
-    Serial.printf("[BOOT] SD init: %d\n", peri_init_st[E_PERI_SD]);
     peri_init_st[E_PERI_GPS]        = gps_init();
     peri_init_st[E_PERI_BHI260AP]   = BHI260AP_init();
     peri_init_st[E_PERI_A7682E]     = A7682E_init();
