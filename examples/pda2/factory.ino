@@ -408,13 +408,32 @@ static void bq25896_runtime_maintain(void)
 
 static bool sd_care_init(void)
 {
+    Serial.printf("[SD] CS=%d SCK=%d MOSI=%d MISO=%d\n",
+                  BOARD_SD_CS, BOARD_SPI_SCK, BOARD_SPI_MOSI, BOARD_SPI_MISO);
+
+    /* Ensure CS pin is output and HIGH before init */
+    pinMode(BOARD_SD_CS, OUTPUT);
+    digitalWrite(BOARD_SD_CS, HIGH);
+    delay(10);
+
     shared_spi_lock();
     shared_spi_prepare_device(BOARD_SD_CS);
 
-    if(!SD.begin(BOARD_SD_CS, SPI)){
-        shared_spi_unlock();
-        Serial.println("[SD CARD] Card Mount Failed");
-        return false;
+    /* Try slow SPI first (some cards need 400kHz for init) */
+    Serial.println("[SD] Trying SD.begin at default speed...");
+    if(!SD.begin(BOARD_SD_CS, SPI, 400000)){
+        Serial.println("[SD] 400kHz failed, trying 1MHz...");
+        if(!SD.begin(BOARD_SD_CS, SPI, 1000000)){
+            Serial.println("[SD] 1MHz failed, trying 4MHz...");
+            if(!SD.begin(BOARD_SD_CS, SPI, 4000000)){
+                shared_spi_unlock();
+                Serial.println("[SD CARD] Card Mount Failed (all speeds)");
+
+                /* Debug: try toggling CS to see if card responds */
+                Serial.printf("[SD] MISO pin %d state: %d\n", BOARD_SPI_MISO, digitalRead(BOARD_SPI_MISO));
+                return false;
+            }
+        }
     }
 
     uint64_t cardSize = SD.cardSize() / (1024 * 1024);
