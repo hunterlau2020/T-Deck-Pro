@@ -8,6 +8,7 @@
 #include "Arduino.h"
 #include "ui_deckpro.h"
 #include "ui_deckpro_port.h"
+extern bool peri_init_st[];
 #include <vector>
 #include <math.h>
 
@@ -377,6 +378,15 @@ static lv_obj_t *make_page(lv_obj_t *parent)
 
 static void gps_create(lv_obj_t *parent)
 {
+    /* Enable GPS hardware on entry */
+    digitalWrite(BOARD_GPS_EN, HIGH);
+    delay(100);
+    if (!peri_init_st[E_PERI_GPS]) {
+        extern bool gps_init(void);
+        peri_init_st[E_PERI_GPS] = gps_init();
+        Serial.printf("[GPS] init on demand: %d\n", peri_init_st[E_PERI_GPS]);
+    }
+
     scr_back_btn_create(parent, "GPS", gps_back_cb);
 
     page_ind = lv_label_create(parent);
@@ -430,6 +440,11 @@ static void gps_exit(void)
 {
     ui_gps_task_suspend();
     if (gps_timer) { lv_timer_del(gps_timer); gps_timer = NULL; }
+
+    /* Disable GPS hardware on exit */
+    digitalWrite(BOARD_GPS_EN, LOW);
+    Serial.println("[GPS] disabled on exit");
+
     ui_disp_full_refr();
 }
 static void gps_destroy(void)
@@ -437,6 +452,7 @@ static void gps_destroy(void)
     gps_kbd_active = false;
     tracking = false;
     if (gps_timer) { lv_timer_del(gps_timer); gps_timer = NULL; }
+    digitalWrite(BOARD_GPS_EN, LOW);
     lbl_overview = lbl_track_info = map_canvas = track_canvas = page_ind = NULL;
     for (int i = 0; i < GPS_PAGE_COUNT; i++) pages[i] = NULL;
     if (map_buf) { free(map_buf); map_buf = NULL; }
