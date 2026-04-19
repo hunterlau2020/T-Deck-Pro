@@ -110,6 +110,15 @@ void shared_spi_prepare_device(int cs_pin)
     }
 }
 
+void shared_spi_prepare_sd(void)
+{
+    shared_spi_release_all_cs();
+    /* Send clock pulses with all CS HIGH to reset SD card state */
+    SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
+    for (int i = 0; i < 10; i++) SPI.transfer(0xFF);
+    SPI.endTransaction();
+}
+
 /*********************************************************************************
  *                              STATIC PROTOTYPES
  * *******************************************************************************/
