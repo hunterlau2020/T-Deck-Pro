@@ -27,12 +27,13 @@ extern void shared_spi_unlock(void);
 extern void shared_spi_prepare_device(int cs_pin);
 #include "utilities.h"
 #include "peripheral.h"
-/* Check if SD was mounted at boot. Caller must hold shared_spi_lock.
- * Uses the factory pattern: just prepare CS pin, never call SD.begin() again. */
-extern bool peri_init_st[];
+/* Re-init SD on shared SPI bus. Caller must hold shared_spi_lock.
+ * We must call SD.begin() each time because other SPI devices
+ * (E-Paper, LoRa) change the bus settings between accesses. */
 static bool sd_care_init(void) {
     shared_spi_prepare_device(BOARD_SD_CS);
-    return peri_init_st[E_PERI_SD];
+    SD.end();
+    return SD.begin(BOARD_SD_CS, SPI, 400000);
 }
 
 
