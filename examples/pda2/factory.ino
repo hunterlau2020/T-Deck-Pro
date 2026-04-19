@@ -113,9 +113,18 @@ void shared_spi_prepare_device(int cs_pin)
 void shared_spi_prepare_sd(void)
 {
     shared_spi_release_all_cs();
-    /* Send clock pulses with all CS HIGH to reset SD card state */
-    SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
-    for (int i = 0; i < 10; i++) SPI.transfer(0xFF);
+
+    /* Put LoRa radio to sleep — SX1262 holds MISO low when active,
+     * preventing SD card from communicating on the shared bus */
+    extern void lora_sleep(void);
+    lora_sleep();
+
+    delay(1);
+
+    /* Send 128+ clock pulses with all CS HIGH to reset SD card
+     * SPI state machine (SD spec requires minimum 74 clocks) */
+    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
+    for (int i = 0; i < 16; i++) SPI.transfer(0xFF);
     SPI.endTransaction();
 }
 
