@@ -557,7 +557,7 @@ void setup()
     pinMode(BOARD_6609_EN, OUTPUT);         // enable 7682 module
     pinMode(BOARD_LORA_EN, OUTPUT);         // enable LORA module
     pinMode(BOARD_GPS_EN, OUTPUT);          // enable GPS module
-    pinMode(BOARD_A7682E_PWRKEY, OUTPUT); 
+    pinMode(BOARD_A7682E_PWRKEY, OUTPUT);
     digitalWrite(BOARD_KEYBOARD_LED, LOW);
     digitalWrite(BOARD_MOTOR_PIN, HIGH);
     digitalWrite(BOARD_6609_EN, HIGH);
@@ -565,8 +565,24 @@ void setup()
     digitalWrite(BOARD_GPS_EN, HIGH);
     digitalWrite(BOARD_A7682E_PWRKEY, HIGH);
 
-    pinMode(BOARD_EPD_BL, OUTPUT); 
+    pinMode(BOARD_EPD_BL, OUTPUT);
     digitalWrite(BOARD_EPD_BL, HIGH);
+
+    /* Reset SD card SPI state on boot — the card may be stuck from
+     * a previous session. Set all SPI CS pins HIGH, then send 80+
+     * clock pulses to reset the SD card's internal state machine. */
+    pinMode(BOARD_SD_CS, OUTPUT);
+    pinMode(BOARD_EPD_CS, OUTPUT);
+    pinMode(BOARD_LORA_CS, OUTPUT);
+    digitalWrite(BOARD_SD_CS, HIGH);
+    digitalWrite(BOARD_EPD_CS, HIGH);
+    digitalWrite(BOARD_LORA_CS, HIGH);
+    SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
+    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
+    for (int i = 0; i < 16; i++) SPI.transfer(0xFF);
+    SPI.endTransaction();
+    SPI.end();
+    Serial.println("[BOOT] SD card SPI state reset done");
 
     // LORA、SD、EPD use the same SPI, in order to avoid mutual influence;
     // before powering on, all CS signals should be pulled high and in an unselected state;
