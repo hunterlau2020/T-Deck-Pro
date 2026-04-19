@@ -663,6 +663,16 @@ void setup()
     peri_init_st[E_PERI_BQ27220]    = bq27220_init();
     peri_init_st[E_PERI_SD]         = sd_care_init();
     Serial.printf("[BOOT] SD init: %d\n", peri_init_st[E_PERI_SD]);
+
+    // SD test: read after boot
+    if (peri_init_st[E_PERI_SD]) {
+        shared_spi_lock();
+        shared_spi_prepare_device(BOARD_SD_CS);
+        Serial.printf("[SD TEST] after boot: totalBytes=%llu usedBytes=%llu\n",
+                      SD.totalBytes(), SD.usedBytes());
+        shared_spi_unlock();
+    }
+
     peri_init_st[E_PERI_GPS]        = gps_init();
     peri_init_st[E_PERI_BHI260AP]   = BHI260AP_init();
     peri_init_st[E_PERI_A7682E]     = A7682E_init();
@@ -674,11 +684,29 @@ void setup()
 
     peri_init_st[E_PERI_TOUCH] = hyn_touch_init();
 
+    // SD test: after all peripheral init (before LVGL)
+    if (peri_init_st[E_PERI_SD]) {
+        shared_spi_lock();
+        shared_spi_prepare_device(BOARD_SD_CS);
+        Serial.printf("[SD TEST] after all peri init: totalBytes=%llu usedBytes=%llu\n",
+                      SD.totalBytes(), SD.usedBytes());
+        shared_spi_unlock();
+    }
+
     lvgl_init();
 
     ui_deckpro_entry();
 
     disp_full_refr();
+
+    // SD test: after first EPD full refresh
+    if (peri_init_st[E_PERI_SD]) {
+        shared_spi_lock();
+        shared_spi_prepare_device(BOARD_SD_CS);
+        Serial.printf("[SD TEST] after disp_full_refr: totalBytes=%llu usedBytes=%llu\n",
+                      SD.totalBytes(), SD.usedBytes());
+        shared_spi_unlock();
+    }
 
     digitalWrite(BOARD_KEYBOARD_LED, LOW);
     digitalWrite(BOARD_MOTOR_PIN, HIGH);
