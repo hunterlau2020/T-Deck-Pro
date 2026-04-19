@@ -714,10 +714,7 @@ void loop()
     voiceai_keyboard_poll();
     bq25896_runtime_maintain();
 
-    if(peri_init_st[E_PERI_PCM5102A] == true) 
-    {
-        audio.loop();
-    }
+    audio.loop();
     
     delay(1);
 

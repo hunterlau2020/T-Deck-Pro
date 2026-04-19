@@ -14,6 +14,7 @@
 #include <esp_heap_caps.h>
 #include <freertos/queue.h>
 #include "Audio.h"
+#include "utilities.h"
 
 static lv_obj_t *response_label = NULL;
 static lv_obj_t *input_ta = NULL;
@@ -202,6 +203,17 @@ static void start_voice_record()
     xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 16384, NULL, 5, &ai_task, 0);
 }
 
+static bool audio_ready = false;
+
+static void ensure_audio_init()
+{
+    if (audio_ready) return;
+    Serial.println("[VoiceAI] Initializing audio...");
+    audio.setPinout(BOARD_I2S_BCLK, BOARD_I2S_LRC, BOARD_I2S_DOUT);
+    audio.setVolume(15);
+    audio_ready = true;
+}
+
 static void start_tts()
 {
     if (!last_response || last_response[0] == '\0') {
@@ -212,6 +224,8 @@ static void start_tts()
         if (status_label) lv_label_set_text(status_label, "WiFi needed for TTS");
         return;
     }
+
+    ensure_audio_init();
 
     /* Truncate to ~500 chars for TTS (Google TTS has length limits) */
     char tts_buf[501];
