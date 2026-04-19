@@ -215,10 +215,23 @@ static void start_voice_record()
 static void ensure_audio_init()
 {
     Serial.println("[VoiceAI] Re-initializing audio I2S...");
-    /* Re-install I2S driver for audio output (PDM recorder uninstalls it) */
-    i2s_driver_uninstall(I2S_NUM_0);
+
+    /* Install I2S driver first (setPinout needs it) */
+    i2s_config_t i2s_config = {};
+    i2s_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+    i2s_config.sample_rate = 44100;
+    i2s_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
+    i2s_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
+    i2s_config.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    i2s_config.intr_alloc_flags = 0;
+    i2s_config.dma_buf_count = 8;
+    i2s_config.dma_buf_len = 1024;
+    i2s_config.use_apll = false;
+    i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
+
     audio.setPinout(BOARD_I2S_BCLK, BOARD_I2S_LRC, BOARD_I2S_DOUT);
     audio.setVolume(15);
+    Serial.println("[VoiceAI] Audio re-initialized");
 }
 
 static void start_tts()
