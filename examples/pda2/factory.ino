@@ -114,10 +114,11 @@ void shared_spi_prepare_sd(void)
 {
     shared_spi_release_all_cs();
 
-    /* Put LoRa radio to sleep — SX1262 holds MISO low when active,
-     * preventing SD card from communicating on the shared bus */
-    extern void lora_sleep(void);
-    lora_sleep();
+    /* Put LoRa radio to sleep if initialized — SX1262 holds MISO low */
+    if (peri_init_st[E_PERI_LORA]) {
+        extern void lora_sleep(void);
+        lora_sleep();
+    }
 
     delay(1);
 
@@ -126,6 +127,12 @@ void shared_spi_prepare_sd(void)
     SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
     for (int i = 0; i < 16; i++) SPI.transfer(0xFF);
     SPI.endTransaction();
+
+    /* Force SD re-init — the only reliable way after EPD has used SPI.
+     * SD.begin() re-establishes the card connection from scratch. */
+    SD.end();
+    delay(10);
+    SD.begin(BOARD_SD_CS, SPI, 4000000);
 }
 
 /*********************************************************************************
