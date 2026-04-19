@@ -29,11 +29,29 @@ extern void shared_spi_prepare_device(int cs_pin);
 #include "peripheral.h"
 extern bool peri_init_st[];
 
-/* Just check if SD mounted at boot. Do NOT touch SPI or SD at all —
- * any SPI manipulation here corrupts the SD card state permanently
- * (requires physical card reseat to recover). */
+/* Reset SD card SPI state after other devices used the bus.
+ * Send 80 clock cycles with CS HIGH to reset the card's state machine,
+ * then re-mount. Caller must hold shared_spi_lock. */
 static bool sd_care_init(void) {
-    return peri_init_st[E_PERI_SD];
+    if (!peri_init_st[E_PERI_SD]) return false;
+
+    /* Deselect all devices */
+    digitalWrite(BOARD_SD_CS, HIGH);
+    digitalWrite(BOARD_EPD_CS, HIGH);
+    digitalWrite(BOARD_LORA_CS, HIGH);
+
+    /* Send 80+ clock pulses with SD CS HIGH to reset card state */
+    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
+    for (int i = 0; i < 10; i++) SPI.transfer(0xFF);
+    SPI.endTransaction();
+
+    /* Re-mount SD */
+    SD.end();
+    bool ok = SD.begin(BOARD_SD_CS, SPI, 4000000);
+    if (!ok) {
+        Serial.println("[Dictionary] SD re-mount failed");
+    }
+    return ok;
 }
 
 
