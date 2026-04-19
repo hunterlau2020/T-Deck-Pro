@@ -216,27 +216,42 @@ static void ensure_audio_init()
 
 static void start_tts()
 {
+    Serial.println("[VoiceAI] TTS: start_tts called");
+
     if (!last_response || last_response[0] == '\0') {
+        Serial.println("[VoiceAI] TTS: no response to read");
         if (status_label) lv_label_set_text(status_label, "No response to read");
         return;
     }
     if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[VoiceAI] TTS: no WiFi");
         if (status_label) lv_label_set_text(status_label, "WiFi needed for TTS");
         return;
     }
 
+    Serial.println("[VoiceAI] TTS: ensuring audio init...");
     ensure_audio_init();
+    Serial.println("[VoiceAI] TTS: audio init done");
 
-    /* Truncate to ~500 chars for TTS (Google TTS has length limits) */
-    char tts_buf[501];
-    strncpy(tts_buf, last_response, 500);
-    tts_buf[500] = '\0';
+    /* Truncate to ~200 chars for TTS to reduce memory pressure */
+    char tts_buf[201];
+    strncpy(tts_buf, last_response, 200);
+    tts_buf[200] = '\0';
 
-    Serial.printf("[VoiceAI] TTS: %d chars\n", (int)strlen(tts_buf));
+    /* Strip any special chars that might cause issues */
+    for (int i = 0; tts_buf[i]; i++) {
+        if (tts_buf[i] == '\n' || tts_buf[i] == '\r') tts_buf[i] = ' ';
+    }
+
+    Serial.printf("[VoiceAI] TTS: speaking %d chars: \"%.50s...\"\n", (int)strlen(tts_buf), tts_buf);
     if (status_label) lv_label_set_text(status_label, "Reading aloud...");
 
-    audio.connecttospeech(tts_buf, "en");
-    tts_playing = true;
+    Serial.printf("[VoiceAI] TTS: free heap=%d, PSRAM=%d\n",
+                  ESP.getFreeHeap(), ESP.getFreePsram());
+
+    bool ok = audio.connecttospeech(tts_buf, "en");
+    Serial.printf("[VoiceAI] TTS: connecttospeech returned %d\n", ok);
+    tts_playing = ok;
 }
 
 static void do_send()
