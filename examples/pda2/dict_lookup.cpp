@@ -24,16 +24,12 @@
 
 extern void shared_spi_lock(void);
 extern void shared_spi_unlock(void);
-extern void shared_spi_prepare_device(int cs_pin);
-extern void shared_spi_prepare_sd(void);
 #include "utilities.h"
-#include "peripheral.h"
-extern bool peri_init_st[];
-
-/* Check if SD is available. NEVER call SD.end() or SD.begin() —
- * that permanently corrupts the card until physical reseat. */
 static bool sd_care_init(void) {
-    return peri_init_st[E_PERI_SD];
+    shared_spi_lock();
+    bool ok = SD.begin(BOARD_SD_CS, SPI, 1000000);
+    shared_spi_unlock();
+    return ok;
 }
 
 
@@ -87,7 +83,7 @@ int dict_scan_stardict()
     stardict_scanned = true;
     stardict_count = 0;
 
-    shared_spi_lock(); shared_spi_prepare_sd();
+    shared_spi_lock();
     bool sd_ok = sd_care_init();
     Serial.printf("[Dictionary] installSD() returned: %d\n", sd_ok);
     if (!sd_ok) {
@@ -556,7 +552,7 @@ bool dict_lookup_stardict_single(int dict_index, const char *word, dict_result_t
     dict_scan_stardict();
     if (dict_index < 0 || dict_index >= stardict_count) return false;
 
-    shared_spi_lock(); shared_spi_prepare_sd();
+    shared_spi_lock();
     sd_care_init();
 
     // Lazy-load PSRAM index on first lookup
@@ -590,7 +586,7 @@ bool dict_lookup_stardict_all(const char *word, dict_result_t &result)
 
     if (stardict_count == 0) return false;
 
-    shared_spi_lock(); shared_spi_prepare_sd();
+    shared_spi_lock();
     sd_care_init();
     for (int i = 0; i < stardict_count; i++) {
         // Lazy-load PSRAM index on first lookup
@@ -675,7 +671,7 @@ int dict_prefix_search(const char *prefix, const char **results, int max_results
     }
 
     if (need_spi) {
-        shared_spi_lock(); shared_spi_prepare_sd();
+        shared_spi_lock();
         sd_care_init();
         if (dict_index >= 0) {
             load_stardict_index(dict_index);
@@ -768,7 +764,7 @@ bool dict_lookup_online(const char *word, dict_result_t &result)
 
 bool dict_offline_en_available()
 {
-    shared_spi_lock(); shared_spi_prepare_sd();
+    shared_spi_lock();
     bool sd_ok = sd_care_init();
     Serial.printf("[Dictionary] offline_en_available: installSD()=%d\n", sd_ok);
     if (!sd_ok) {
@@ -785,7 +781,7 @@ bool dict_lookup_offline_en(const char *word, dict_result_t &result)
 {
     result.found = false;
 
-    shared_spi_lock(); shared_spi_prepare_sd();
+    shared_spi_lock();
     sd_care_init();
 
     if (!SD.exists("/dict_en.idx") || !SD.exists("/dict_en.dat")) {
