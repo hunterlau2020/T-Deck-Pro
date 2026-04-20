@@ -213,6 +213,16 @@ static void flush_epd_bitmap(const lv_area_t *area)
     while (display->nextPage());
 
     display->powerOff();
+
+    /* After EPD operations, reset SPI bus state for SD card.
+     * Send dummy bytes with all CS HIGH at SD-compatible speed
+     * to force correct SCK polarity before any SD access. */
+    shared_spi_release_all_cs();
+    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
+    SPI.transfer(0xFF);
+    SPI.transfer(0xFF);
+    SPI.endTransaction();
+
     shared_spi_unlock();
 }
 
