@@ -56,7 +56,12 @@ InkDisplay *display = &display_v1_1;
 
 uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
-int disp_refr_mode = DISP_REFR_MODE_FULL;
+int disp_refr_mode = DISP_REFR_MODE_PART;
+
+/* Separate SPI bus for SD card to avoid EPD partial refresh corruption.
+ * Both use the same physical pins (36/33/47) via GPIO matrix, but
+ * different hardware peripherals so their internal state is independent. */
+SPIClass sdSPI(HSPI);
 
 uint8_t isT_Deck_Pro_v1_1 = 0;
 const char Version_str1[] = "T-Deck-Pro V1.0";
@@ -213,16 +218,6 @@ static void flush_epd_bitmap(const lv_area_t *area)
     while (display->nextPage());
 
     display->powerOff();
-
-    /* After EPD operations, reset SPI bus state for SD card.
-     * Send dummy bytes with all CS HIGH at SD-compatible speed
-     * to force correct SCK polarity before any SD access. */
-    shared_spi_release_all_cs();
-    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
-    SPI.transfer(0xFF);
-    SPI.transfer(0xFF);
-    SPI.endTransaction();
-
     shared_spi_unlock();
 }
 
@@ -241,7 +236,7 @@ static void flush_timer_cb(lv_timer_t *t)
         
         Serial.printf("flush_timer_cb:%d, %s\n", idx++, (disp_refr_mode == DISP_REFR_MODE_FULL ? "full" : "part"));
 
-        disp_refr_mode = DISP_REFR_MODE_FULL; // keep full window mode to avoid SD card SPI conflict
+        disp_refr_mode = DISP_REFR_MODE_PART;
         lv_timer_pause(flush_timer);
     }
 }
@@ -266,7 +261,7 @@ static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_colo
                   (disp_refr_mode == DISP_REFR_MODE_FULL ? "full" : "part"),
                   area->x1, area->y1, area->x2, area->y2);
 
-    disp_refr_mode = DISP_REFR_MODE_FULL; // keep full window mode to avoid SD card SPI conflict
+    disp_refr_mode = DISP_REFR_MODE_PART;
 
     // Serial.printf("x1=%d, y1=%d, x2=%d, y2=%d\n", area->x1, area->y1, area->x2, area->y2);
 
@@ -418,11 +413,13 @@ static void bq25896_runtime_maintain(void)
 
 static bool sd_care_init(void)
 {
-    shared_spi_lock();
-    shared_spi_prepare_device(BOARD_SD_CS);
+    /* Initialize SD on separate SPI peripheral (HSPI/SPI3).
+     * Uses same physical pins as EPD (SCK=36, MOSI=33, MISO=47)
+     * but different hardware peripheral, so EPD partial refresh
+     * operations on SPI2 don't corrupt SPI3's internal state. */
+    sdSPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI, BOARD_SD_CS);
 
-    if(!SD.begin(BOARD_SD_CS, SPI)){
-        shared_spi_unlock();
+    if(!SD.begin(BOARD_SD_CS, sdSPI)){
         Serial.println("[SD CARD] Card Mount Failed");
         return false;
     }
@@ -435,7 +432,6 @@ static bool sd_care_init(void)
 
     uint64_t usedSize = SD.usedBytes() / (1024 * 1024);
     Serial.printf("SD Card Used: %lluMB\n", usedSize);
-    shared_spi_unlock();
     return true;
 }
 
