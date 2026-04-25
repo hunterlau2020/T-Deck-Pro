@@ -132,8 +132,9 @@ static bool ink_screen_init()
     shared_spi_lock();
     shared_spi_prepare_device(BOARD_EPD_CS);
 
-    /* EPD uses HSPI (SPI3) — separate from SD card's default SPI (SPI2) */
-    displaySpi.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI, BOARD_EPD_CS);
+    /* All SPI devices share HSPI — don't pass any CS as SS pin,
+     * each device manages its own CS via digitalWrite */
+    displaySpi.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
     display->epd2.selectSPI(displaySpi, SPISettings(FACTORY_EPD_SPI_HZ, MSBFIRST, SPI_MODE0));
     display->init(115200, true, 2, false);
     //Serial.println("helloWorld");
