@@ -6,7 +6,9 @@
 #include "peripheral.h"
 #include "ui_deckpro_port.h"
 
-static SX1262 radio = new Module(BOARD_LORA_CS, BOARD_LORA_INT, BOARD_LORA_RST, BOARD_LORA_BUSY);
+/* LoRa uses HSPI (same as EPD) — separate from SD card's default SPI */
+extern SPIClass displaySpi;
+static SX1262 radio = new Module(BOARD_LORA_CS, BOARD_LORA_INT, BOARD_LORA_RST, BOARD_LORA_BUSY, displaySpi);
 static int lora_mode = LORA_MODE_SEND;
 static String lora_recv_data;
 static bool lora_recv_success = false;
