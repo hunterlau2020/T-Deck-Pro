@@ -658,19 +658,17 @@ void setup()
     pinMode(BOARD_SD_CS, OUTPUT);   digitalWrite(BOARD_SD_CS, HIGH);
     pinMode(BOARD_EPD_CS, OUTPUT);  digitalWrite(BOARD_EPD_CS, HIGH);
     pinMode(BOARD_LORA_CS, OUTPUT); digitalWrite(BOARD_LORA_CS, HIGH);
-    SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
 
-    // SD card MUST be initialized FIRST, before any other SPI device.
-    // Per Espressif docs: "This step will put the SD card into SPI mode,
-    // which should be done before all other SPI communications on the same
-    // bus. Otherwise the card will stay in SD mode, in which mode it may
-    // randomly respond to any SPI communications on the bus."
-    // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/sdspi_share.html
-    peri_init_st[E_PERI_SD]         = sd_care_init();
-
-    // Now init other SPI peripherals
+    // Init EPD+LoRa on HSPI first, then SD on default SPI.
+    // EPD/LoRa use displaySpi (HSPI/SPI3).
+    // SD uses default SPI (FSPI/SPI2) — initialized last so it
+    // owns the GPIO matrix pin routing for MISO (input pin).
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
     peri_init_st[E_PERI_LORA]       = lora_init();
+
+    // Now init SD on default SPI (FSPI/SPI2) — last to claim GPIO pins
+    SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
+    peri_init_st[E_PERI_SD]         = sd_care_init();
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
     peri_init_st[E_PERI_BQ25896]    = bq25896_init();
     peri_init_st[E_PERI_BQ27220]    = bq27220_init();
