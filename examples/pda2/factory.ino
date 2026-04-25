@@ -205,22 +205,19 @@ static void flush_epd_bitmap(const lv_area_t *area)
     shared_spi_lock();
     shared_spi_prepare_device(BOARD_EPD_CS);
 
-    if (disp_refr_mode == DISP_REFR_MODE_PART) {
-        display->setPartialWindow(area->x1, area->y1, width, height);
-    } else {
-        display->setFullWindow();
-    }
+    /* Always use full-screen partial window (matching Meck's approach).
+     * Small-area partial windows use 0x91/0x92 commands that corrupt
+     * the SD card's SPI state on the shared bus. */
+    display->setPartialWindow(0, 0, LCD_HOR_SIZE, LCD_VER_SIZE);
 
     display->firstPage();
     do {
-        if (disp_refr_mode == DISP_REFR_MODE_FULL) {
-            display->fillScreen(GxEPD_WHITE);
-        }
         display->drawInvertedBitmap(area->x1, area->y1, decodebuffer, width, height, GxEPD_BLACK);
     }
     while (display->nextPage());
 
     display->powerOff();
+    digitalWrite(BOARD_SD_CS, HIGH);  // Explicit CS release after EPD SPI
     shared_spi_unlock();
 }
 
