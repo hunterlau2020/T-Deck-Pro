@@ -58,10 +58,10 @@ uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
 int disp_refr_mode = DISP_REFR_MODE_PART;
 
-/* EPD and LoRa use HSPI (SPI3) to avoid corrupting SD card on default SPI (SPI2).
- * Same physical pins (SCK=36, MOSI=33, MISO=47) but different hardware peripheral.
- * SD card uses default SPI (FSPI/SPI2) via SD.begin().
- * This approach is proven by the Meck project for T-Deck Pro. */
+/* All SPI devices (EPD, LoRa, SD) use HSPI (SPI3).
+ * This is the approach used by the Meck project for T-Deck Pro.
+ * Each device calls beginTransaction with its own settings.
+ * SD CS must be explicitly driven HIGH after every file operation. */
 SPIClass displaySpi(HSPI);
 
 uint8_t isT_Deck_Pro_v1_1 = 0;
@@ -415,11 +415,11 @@ static void bq25896_runtime_maintain(void)
 
 static bool sd_care_init(void)
 {
-    shared_spi_lock();
-    shared_spi_prepare_device(BOARD_SD_CS);
+    pinMode(BOARD_SD_CS, OUTPUT);
+    digitalWrite(BOARD_SD_CS, HIGH);
 
-    if(!SD.begin(BOARD_SD_CS, SPI)){
-        shared_spi_unlock();
+    if(!SD.begin(BOARD_SD_CS, displaySpi, 4000000)){
+        digitalWrite(BOARD_SD_CS, HIGH);
         Serial.println("[SD CARD] Card Mount Failed");
         return false;
     }
@@ -432,7 +432,7 @@ static bool sd_care_init(void)
 
     uint64_t usedSize = SD.usedBytes() / (1024 * 1024);
     Serial.printf("SD Card Used: %lluMB\n", usedSize);
-    shared_spi_unlock();
+    digitalWrite(BOARD_SD_CS, HIGH);
     return true;
 }
 
@@ -666,8 +666,7 @@ void setup()
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
     peri_init_st[E_PERI_LORA]       = lora_init();
 
-    // Now init SD on default SPI (FSPI/SPI2) — last to claim GPIO pins
-    SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
+    // SD card also uses HSPI (same as EPD/LoRa) with explicit CS management
     peri_init_st[E_PERI_SD]         = sd_care_init();
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
     peri_init_st[E_PERI_BQ25896]    = bq25896_init();
