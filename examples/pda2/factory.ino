@@ -58,6 +58,12 @@ uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
 int disp_refr_mode = DISP_REFR_MODE_PART;
 
+/* EPD and LoRa use HSPI (SPI3) to avoid corrupting SD card on default SPI (SPI2).
+ * Same physical pins (SCK=36, MOSI=33, MISO=47) but different hardware peripheral.
+ * SD card uses default SPI (FSPI/SPI2) via SD.begin().
+ * This approach is proven by the Meck project for T-Deck Pro. */
+SPIClass displaySpi(HSPI);
+
 uint8_t isT_Deck_Pro_v1_1 = 0;
 const char Version_str1[] = "T-Deck-Pro V1.0";
 const char Version_str2[] = "T-Deck-Pro V1.1";
@@ -126,8 +132,9 @@ static bool ink_screen_init()
     shared_spi_lock();
     shared_spi_prepare_device(BOARD_EPD_CS);
 
-    // SPI.begin(BOARD_SPI_SCK, -1, BOARD_SPI_MOSI, BOARD_EPD_CS);
-    display->epd2.selectSPI(SPI, SPISettings(FACTORY_EPD_SPI_HZ, MSBFIRST, SPI_MODE0));
+    /* EPD uses HSPI (SPI3) — separate from SD card's default SPI (SPI2) */
+    displaySpi.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI, BOARD_EPD_CS);
+    display->epd2.selectSPI(displaySpi, SPISettings(FACTORY_EPD_SPI_HZ, MSBFIRST, SPI_MODE0));
     display->init(115200, true, 2, false);
     //Serial.println("helloWorld");
     display->setRotation(0);
