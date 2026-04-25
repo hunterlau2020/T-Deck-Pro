@@ -729,7 +729,24 @@ void loop()
     bq25896_runtime_maintain();
 
     audio.loop();
-    
+
+    /* Hold BOOT button (GPIO 0) for 2 seconds to shutdown.
+     * This power-cycles the SD card via BATFET, resetting its SPI state.
+     * Only works on battery power — USB keeps system alive. */
+    {
+        static uint32_t boot_press_start = 0;
+        if (digitalRead(BOARD_BOOT_PIN) == LOW) {
+            if (boot_press_start == 0) boot_press_start = millis();
+            else if (millis() - boot_press_start > 2000) {
+                Serial.println("[SHUTDOWN] BOOT button held 2s — shutting down");
+                PPM.shutdown();
+                boot_press_start = 0;
+            }
+        } else {
+            boot_press_start = 0;
+        }
+    }
+
     delay(1);
 
 
