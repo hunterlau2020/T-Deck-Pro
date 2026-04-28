@@ -34,7 +34,7 @@ Different versions can be distinguished by using the I2C function of the detecti
 | :-----------------: | :------------: | :-----------: |
 |   T-Deck-Pro V1.0   |       ❌        |       ❌       |
 |   T-Deck-Pro V1.1   |       ✅        |       ❌       |
-| T-Deck-Pro MAX V0.1 |       ✅        |       ✅       |
+|   T-Deck-Pro MAX    |       ✅        |       ✅       |
 
 Download the [WireScan](./firmware/examples/WireScan.bin) firmware and then open the serial port to confirm.
 
