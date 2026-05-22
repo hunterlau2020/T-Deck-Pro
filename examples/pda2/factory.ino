@@ -58,12 +58,6 @@ uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
 int disp_refr_mode = DISP_REFR_MODE_PART;
 
-/* EPD + LoRa use HSPI (SPI3). SD card uses default SPI (FSPI/SPI2).
- * Two separate hardware SPI peripherals on the same physical pins.
- * SD must be initialized first to enter SPI mode before EPD/LoRa
- * communicate on the bus. */
-SPIClass displaySpi(HSPI);
-
 uint8_t isT_Deck_Pro_v1_1 = 0;
 const char Version_str1[] = "T-Deck-Pro V1.0";
 const char Version_str2[] = "T-Deck-Pro V1.1";
@@ -74,7 +68,6 @@ static SemaphoreHandle_t shared_spi_mutex = nullptr;
 static void shared_spi_release_all_cs()
 {
     digitalWrite(BOARD_LORA_CS, HIGH);
-    digitalWrite(BOARD_LORA_RST, HIGH);
     digitalWrite(BOARD_SD_CS, HIGH);
     digitalWrite(BOARD_EPD_CS, HIGH);
 }
@@ -134,7 +127,7 @@ static bool ink_screen_init()
     shared_spi_prepare_device(BOARD_EPD_CS);
 
     /* displaySpi already initialized before SD init */
-    display->epd2.selectSPI(displaySpi, SPISettings(FACTORY_EPD_SPI_HZ, MSBFIRST, SPI_MODE0));
+    display->epd2.selectSPI(SPI, SPISettings(FACTORY_EPD_SPI_HZ, MSBFIRST, SPI_MODE0));
     display->init(115200, true, 2, false);
     //Serial.println("helloWorld");
     display->setRotation(0);
@@ -415,11 +408,11 @@ static void bq25896_runtime_maintain(void)
 
 static bool sd_care_init(void)
 {
-    pinMode(BOARD_SD_CS, OUTPUT);
-    digitalWrite(BOARD_SD_CS, HIGH);
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_SD_CS);
 
-    /* SD uses default SPI (FSPI/SPI2) — separate from EPD/LoRa on HSPI */
     if(!SD.begin(BOARD_SD_CS, SPI)){
+        shared_spi_unlock();
         Serial.println("[SD CARD] Card Mount Failed");
         return false;
     }
@@ -432,6 +425,7 @@ static bool sd_care_init(void)
 
     uint64_t usedSize = SD.usedBytes() / (1024 * 1024);
     Serial.printf("SD Card Used: %lluMB\n", usedSize);
+    shared_spi_unlock();
     return true;
 }
 
@@ -658,18 +652,16 @@ void setup()
     pinMode(BOARD_EPD_CS, OUTPUT);  digitalWrite(BOARD_EPD_CS, HIGH);
     pinMode(BOARD_LORA_CS, OUTPUT); digitalWrite(BOARD_LORA_CS, HIGH);
 
-    // SD card on default SPI (FSPI/SPI2) — init FIRST before any other SPI device.
-    // SD must enter SPI mode before EPD/LoRa communicate on the bus.
+    // SPI
     SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
-    peri_init_st[E_PERI_SD]         = sd_care_init();
 
-    // EPD + LoRa on HSPI (SPI3) — separate bus from SD card.
-    displaySpi.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
+    // Init peripherals — original factory order
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
     peri_init_st[E_PERI_LORA]       = lora_init();
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
     peri_init_st[E_PERI_BQ25896]    = bq25896_init();
     peri_init_st[E_PERI_BQ27220]    = bq27220_init();
+    peri_init_st[E_PERI_SD]         = sd_care_init();
     peri_init_st[E_PERI_GPS]        = gps_init();
     peri_init_st[E_PERI_BHI260AP]   = BHI260AP_init();
     peri_init_st[E_PERI_A7682E]     = A7682E_init();
