@@ -162,7 +162,10 @@ void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
 {
     if(ui_test_sd_card())
     {
-        // Pull ALL CS high before SD access to avoid SPI bus conflicts
+        // Do one full refresh to reset SPI state before SD access
+        extern void sd_prepare_access(void);
+        sd_prepare_access();
+
         shared_spi_lock();
         digitalWrite(BOARD_EPD_CS, HIGH);
         digitalWrite(BOARD_LORA_CS, HIGH);

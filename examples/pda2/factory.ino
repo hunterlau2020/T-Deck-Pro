@@ -758,4 +758,15 @@ void disp_full_refr(void)
     disp_refr_mode = DISP_REFR_MODE_FULL;
 }
 
+/* Prepare SPI bus for SD card access by doing one full refresh.
+ * Partial refresh leaves the SPI peripheral in a state that prevents
+ * SD card communication. A full refresh resets it. */
+void sd_prepare_access(void)
+{
+    disp_refr_mode = DISP_REFR_MODE_FULL;
+    lv_refr_now(NULL);
+    lv_task_handler();
+    disp_refr_mode = DISP_REFR_MODE_PART;
+}
+
 
