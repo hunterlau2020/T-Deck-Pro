@@ -58,6 +58,32 @@ uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
 int disp_refr_mode = DISP_REFR_MODE_PART;
 
+/* Send CMD13 (SEND_STATUS) to SD card to keep it in SPI mode.
+ * Called during EPD _waitWhileBusy via setBusyCallback.
+ * The SD card may exit SPI mode if it sees too many unrecognized
+ * SPI transactions on the shared bus — this periodic ping prevents that. */
+static void sd_keepalive_callback(const void* param)
+{
+    static uint32_t last_ping = 0;
+    uint32_t now = millis();
+    if (now - last_ping < 50) return;  // Max every 50ms
+    last_ping = now;
+
+    /* Briefly talk to SD card: assert CS, send CMD13, deassert CS */
+    digitalWrite(BOARD_SD_CS, LOW);
+    SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
+    SPI.transfer(0x40 | 13);  // CMD13 = 0x4D
+    SPI.transfer(0x00);
+    SPI.transfer(0x00);
+    SPI.transfer(0x00);
+    SPI.transfer(0x00);
+    SPI.transfer(0xFF);       // dummy CRC
+    SPI.transfer(0xFF);       // read response
+    SPI.transfer(0xFF);       // extra clocks
+    SPI.endTransaction();
+    digitalWrite(BOARD_SD_CS, HIGH);
+}
+
 uint8_t isT_Deck_Pro_v1_1 = 0;
 const char Version_str1[] = "T-Deck-Pro V1.0";
 const char Version_str2[] = "T-Deck-Pro V1.1";
@@ -129,6 +155,7 @@ static bool ink_screen_init()
     /* displaySpi already initialized before SD init */
     display->epd2.selectSPI(SPI, SPISettings(FACTORY_EPD_SPI_HZ, MSBFIRST, SPI_MODE0));
     display->init(115200, true, 2, false);
+    display->epd2.setBusyCallback(sd_keepalive_callback);
     //Serial.println("helloWorld");
     display->setRotation(0);
     display->setFont(&FreeMonoBold9pt7b);
