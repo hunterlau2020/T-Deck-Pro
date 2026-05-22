@@ -162,6 +162,12 @@ void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
 {
     if(ui_test_sd_card())
     {
+        // Pull ALL CS high before SD access to avoid SPI bus conflicts
+        shared_spi_lock();
+        digitalWrite(BOARD_EPD_CS, HIGH);
+        digitalWrite(BOARD_LORA_CS, HIGH);
+        digitalWrite(BOARD_SD_CS, HIGH);
+
         if(total)
             *total = SD.totalBytes() / (1024 * 1024);
         if(used)
@@ -178,6 +184,7 @@ void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
         uint64_t usedSize = SD.usedBytes() / (1024 * 1024);
         Serial.printf("SD Card Used: %lluMB\n", usedSize);
         digitalWrite(BOARD_SD_CS, HIGH);
+        shared_spi_unlock();
     }
 }
 
