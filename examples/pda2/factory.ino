@@ -57,6 +57,7 @@ InkDisplay *display = &display_v1_1;
 uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
 int disp_refr_mode = DISP_REFR_MODE_PART;
+static bool sd_access_pending = false;
 
 /* All SPI devices (EPD, LoRa, SD) use HSPI (SPI3).
  * This is the approach used by the Meck project for T-Deck Pro.
@@ -246,7 +247,7 @@ static void flush_timer_cb(lv_timer_t *t)
         
         Serial.printf("flush_timer_cb:%d, %s\n", idx++, (disp_refr_mode == DISP_REFR_MODE_FULL ? "full" : "part"));
 
-        disp_refr_mode = DISP_REFR_MODE_PART;
+        if (!sd_access_pending) disp_refr_mode = DISP_REFR_MODE_PART;
         lv_timer_pause(flush_timer);
     }
 }
@@ -271,7 +272,7 @@ static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_colo
                   (disp_refr_mode == DISP_REFR_MODE_FULL ? "full" : "part"),
                   area->x1, area->y1, area->x2, area->y2);
 
-    disp_refr_mode = DISP_REFR_MODE_PART;
+    if (!sd_access_pending) disp_refr_mode = DISP_REFR_MODE_PART;
 
     // Serial.printf("x1=%d, y1=%d, x2=%d, y2=%d\n", area->x1, area->y1, area->x2, area->y2);
 
@@ -758,14 +759,20 @@ void disp_full_refr(void)
     disp_refr_mode = DISP_REFR_MODE_FULL;
 }
 
-/* Prepare SPI bus for SD card access by doing one full refresh.
- * Partial refresh leaves the SPI peripheral in a state that prevents
- * SD card communication. A full refresh resets it. */
+/* Prepare SPI bus for SD card access.
+ * Forces full refresh mode, prevents switching back to partial
+ * until SD access is complete. */
 void sd_prepare_access(void)
 {
+    sd_access_pending = true;
     disp_refr_mode = DISP_REFR_MODE_FULL;
     lv_refr_now(NULL);
-    lv_task_handler();
+    /* SPI is now in full-refresh state — safe for SD */
+}
+
+void sd_finish_access(void)
+{
+    sd_access_pending = false;
     disp_refr_mode = DISP_REFR_MODE_PART;
 }
 
