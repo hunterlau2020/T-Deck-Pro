@@ -134,9 +134,7 @@ static bool ink_screen_init()
     shared_spi_lock();
     shared_spi_prepare_device(BOARD_EPD_CS);
 
-    /* All SPI devices share HSPI — don't pass any CS as SS pin,
-     * each device manages its own CS via digitalWrite */
-    displaySpi.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
+    /* displaySpi already initialized before SD init */
     display->epd2.selectSPI(displaySpi, SPISettings(FACTORY_EPD_SPI_HZ, MSBFIRST, SPI_MODE0));
     display->init(115200, true, 2, false);
     //Serial.println("helloWorld");
@@ -668,15 +666,19 @@ void setup()
     pinMode(BOARD_EPD_CS, OUTPUT);  digitalWrite(BOARD_EPD_CS, HIGH);
     pinMode(BOARD_LORA_CS, OUTPUT); digitalWrite(BOARD_LORA_CS, HIGH);
 
-    // Init EPD+LoRa on HSPI first, then SD on default SPI.
-    // EPD/LoRa use displaySpi (HSPI/SPI3).
-    // SD uses default SPI (FSPI/SPI2) — initialized last so it
-    // owns the GPIO matrix pin routing for MISO (input pin).
+    // Initialize HSPI bus first (shared by all SPI devices)
+    displaySpi.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
+
+    // SD card MUST be initialized FIRST, before any other SPI device.
+    // "The SD card must be put into SPI mode before any other SPI
+    // communication occurs on the bus. If you init the e-ink display
+    // first, the SD card may remain in SD mode and interfere with
+    // all subsequent bus traffic."
+    peri_init_st[E_PERI_SD]         = sd_care_init();
+
+    // Now init EPD and LoRa (after SD is in SPI mode)
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
     peri_init_st[E_PERI_LORA]       = lora_init();
-
-    // SD card also uses HSPI (same as EPD/LoRa) with explicit CS management
-    peri_init_st[E_PERI_SD]         = sd_care_init();
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
     peri_init_st[E_PERI_BQ25896]    = bq25896_init();
     peri_init_st[E_PERI_BQ27220]    = bq27220_init();
