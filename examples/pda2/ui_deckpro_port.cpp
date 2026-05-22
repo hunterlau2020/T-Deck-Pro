@@ -162,8 +162,8 @@ void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
 {
     if(ui_test_sd_card())
     {
-        // Do one full refresh to reset SPI state before SD access
         extern void sd_prepare_access(void);
+        extern void sd_finish_access(void);
         sd_prepare_access();
 
         shared_spi_lock();
@@ -188,6 +188,7 @@ void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
         Serial.printf("SD Card Used: %lluMB\n", usedSize);
         digitalWrite(BOARD_SD_CS, HIGH);
         shared_spi_unlock();
+        sd_finish_access();
     }
 }
 
