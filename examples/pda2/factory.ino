@@ -74,6 +74,7 @@ static SemaphoreHandle_t shared_spi_mutex = nullptr;
 static void shared_spi_release_all_cs()
 {
     digitalWrite(BOARD_LORA_CS, HIGH);
+    digitalWrite(BOARD_LORA_RST, HIGH);
     digitalWrite(BOARD_SD_CS, HIGH);
     digitalWrite(BOARD_EPD_CS, HIGH);
 }
