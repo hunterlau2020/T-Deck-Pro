@@ -57,12 +57,11 @@ InkDisplay *display = &display_v1_1;
 uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
 int disp_refr_mode = DISP_REFR_MODE_PART;
-static bool sd_access_pending = false;
 
-/* All SPI devices (EPD, LoRa, SD) use HSPI (SPI3).
- * This is the approach used by the Meck project for T-Deck Pro.
- * Each device calls beginTransaction with its own settings.
- * SD CS must be explicitly driven HIGH after every file operation. */
+/* EPD + LoRa use HSPI (SPI3). SD card uses default SPI (FSPI/SPI2).
+ * Two separate hardware SPI peripherals on the same physical pins.
+ * SD must be initialized first to enter SPI mode before EPD/LoRa
+ * communicate on the bus. */
 SPIClass displaySpi(HSPI);
 
 uint8_t isT_Deck_Pro_v1_1 = 0;
@@ -220,13 +219,7 @@ static void flush_epd_bitmap(const lv_area_t *area)
     }
     while (display->nextPage());
 
-    /* Meck does NOT call powerOff() after partial refresh —
-     * only after full refresh. display.display(true) skips powerOff.
-     * powerOff sends cmd 0x02 + waitBusy which may corrupt SD state. */
-    if (disp_refr_mode == DISP_REFR_MODE_FULL) {
-        display->powerOff();
-    }
-    digitalWrite(BOARD_SD_CS, HIGH);
+    display->powerOff();
     shared_spi_unlock();
 }
 
@@ -245,7 +238,7 @@ static void flush_timer_cb(lv_timer_t *t)
         
         Serial.printf("flush_timer_cb:%d, %s\n", idx++, (disp_refr_mode == DISP_REFR_MODE_FULL ? "full" : "part"));
 
-        if (!sd_access_pending) disp_refr_mode = DISP_REFR_MODE_PART;
+        disp_refr_mode = DISP_REFR_MODE_PART;
         lv_timer_pause(flush_timer);
     }
 }
@@ -270,7 +263,7 @@ static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_colo
                   (disp_refr_mode == DISP_REFR_MODE_FULL ? "full" : "part"),
                   area->x1, area->y1, area->x2, area->y2);
 
-    if (!sd_access_pending) disp_refr_mode = DISP_REFR_MODE_PART;
+    disp_refr_mode = DISP_REFR_MODE_PART;
 
     // Serial.printf("x1=%d, y1=%d, x2=%d, y2=%d\n", area->x1, area->y1, area->x2, area->y2);
 
@@ -425,8 +418,8 @@ static bool sd_care_init(void)
     pinMode(BOARD_SD_CS, OUTPUT);
     digitalWrite(BOARD_SD_CS, HIGH);
 
-    if(!SD.begin(BOARD_SD_CS, displaySpi, 4000000)){
-        digitalWrite(BOARD_SD_CS, HIGH);
+    /* SD uses default SPI (FSPI/SPI2) — separate from EPD/LoRa on HSPI */
+    if(!SD.begin(BOARD_SD_CS, SPI)){
         Serial.println("[SD CARD] Card Mount Failed");
         return false;
     }
@@ -439,7 +432,6 @@ static bool sd_care_init(void)
 
     uint64_t usedSize = SD.usedBytes() / (1024 * 1024);
     Serial.printf("SD Card Used: %lluMB\n", usedSize);
-    digitalWrite(BOARD_SD_CS, HIGH);
     return true;
 }
 
@@ -666,17 +658,13 @@ void setup()
     pinMode(BOARD_EPD_CS, OUTPUT);  digitalWrite(BOARD_EPD_CS, HIGH);
     pinMode(BOARD_LORA_CS, OUTPUT); digitalWrite(BOARD_LORA_CS, HIGH);
 
-    // Initialize HSPI bus first (shared by all SPI devices)
-    displaySpi.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
-
-    // SD card MUST be initialized FIRST, before any other SPI device.
-    // "The SD card must be put into SPI mode before any other SPI
-    // communication occurs on the bus. If you init the e-ink display
-    // first, the SD card may remain in SD mode and interfere with
-    // all subsequent bus traffic."
+    // SD card on default SPI (FSPI/SPI2) — init FIRST before any other SPI device.
+    // SD must enter SPI mode before EPD/LoRa communicate on the bus.
+    SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
     peri_init_st[E_PERI_SD]         = sd_care_init();
 
-    // Now init EPD and LoRa (after SD is in SPI mode)
+    // EPD + LoRa on HSPI (SPI3) — separate bus from SD card.
+    displaySpi.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
     peri_init_st[E_PERI_LORA]       = lora_init();
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
@@ -759,23 +747,6 @@ void loop()
 void disp_full_refr(void)
 {
     disp_refr_mode = DISP_REFR_MODE_FULL;
-}
-
-/* Prepare SPI bus for SD card access.
- * Forces full refresh mode, prevents switching back to partial
- * until SD access is complete. */
-void sd_prepare_access(void)
-{
-    sd_access_pending = true;
-    disp_refr_mode = DISP_REFR_MODE_FULL;
-    lv_refr_now(NULL);
-    /* SPI is now in full-refresh state — safe for SD */
-}
-
-void sd_finish_access(void)
-{
-    sd_access_pending = false;
-    disp_refr_mode = DISP_REFR_MODE_PART;
 }
 
 
