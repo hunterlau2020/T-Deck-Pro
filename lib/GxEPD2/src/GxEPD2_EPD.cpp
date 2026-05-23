@@ -32,7 +32,6 @@ GxEPD2_EPD::GxEPD2_EPD(int16_t cs, int16_t dc, int16_t rst, int16_t busy, int16_
   _reset_duration = 10;
   _busy_callback = 0;
   _busy_callback_parameter = 0;
-  _sd_keepalive_cs = -1;
 }
 
 void GxEPD2_EPD::init(uint32_t serial_diag_bitrate)
@@ -286,20 +285,4 @@ void GxEPD2_EPD::_endTransfer()
 {
   if (_cs >= 0) digitalWrite(_cs, HIGH);
   _pSPIx->endTransaction();
-  /* Send CMD13 (SEND_STATUS) to SD card to keep it in SPI mode.
-   * On shared SPI bus, EPD traffic can cause SD to exit SPI mode. */
-  if (_sd_keepalive_cs >= 0)
-  {
-    digitalWrite(_sd_keepalive_cs, LOW);
-    _pSPIx->beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
-    _pSPIx->transfer(0x40 | 13);  // CMD13 = 0x4D
-    _pSPIx->transfer(0x00);       // arg byte 3
-    _pSPIx->transfer(0x00);       // arg byte 2
-    _pSPIx->transfer(0x00);       // arg byte 1
-    _pSPIx->transfer(0x00);       // arg byte 0
-    _pSPIx->transfer(0xFF);       // CRC (dummy)
-    _pSPIx->transfer(0xFF);       // read response
-    _pSPIx->endTransaction();
-    digitalWrite(_sd_keepalive_cs, HIGH);
-  }
 }
