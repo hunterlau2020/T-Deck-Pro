@@ -89,6 +89,7 @@ class GxEPD2_EPD
     virtual void setPaged() {}; // for GxEPD2_154c paged workaround
     // register a callback function to be called during _waitWhileBusy continuously.
     void setBusyCallback(void (*busyCallback)(const void*), const void* busy_callback_parameter = 0);
+    void setSdKeepAliveCS(int8_t cs_pin) { _sd_keepalive_cs = cs_pin; }
     static inline uint16_t gx_uint16_min(uint16_t a, uint16_t b)
     {
       return (a < b ? a : b);
@@ -121,8 +122,9 @@ class GxEPD2_EPD
     bool _power_is_on, _using_partial_mode, _hibernating;
     bool _init_display_done;
     uint16_t _reset_duration;
-    void (*_busy_callback)(const void*); 
+    void (*_busy_callback)(const void*);
     const void* _busy_callback_parameter;
+    int8_t _sd_keepalive_cs;
 };
 
 #endif

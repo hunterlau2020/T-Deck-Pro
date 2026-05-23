@@ -156,6 +156,7 @@ static bool ink_screen_init()
     display->epd2.selectSPI(SPI, SPISettings(FACTORY_EPD_SPI_HZ, MSBFIRST, SPI_MODE0));
     display->init(115200, true, 2, false);
     display->epd2.setBusyCallback(sd_keepalive_callback);
+    display->epd2.setSdKeepAliveCS(BOARD_SD_CS);
     //Serial.println("helloWorld");
     display->setRotation(0);
     display->setFont(&FreeMonoBold9pt7b);
