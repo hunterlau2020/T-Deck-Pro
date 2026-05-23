@@ -286,14 +286,19 @@ void GxEPD2_EPD::_endTransfer()
 {
   if (_cs >= 0) digitalWrite(_cs, HIGH);
   _pSPIx->endTransaction();
-  /* Pulse SD CS to keep SD card in SPI mode on shared bus.
-   * Without this, partial refresh traffic causes the SD card
-   * to exit SPI mode (T-Deck Pro hardware limitation). */
+  /* Send CMD13 (SEND_STATUS) to SD card to keep it in SPI mode.
+   * On shared SPI bus, EPD traffic can cause SD to exit SPI mode. */
   if (_sd_keepalive_cs >= 0)
   {
     digitalWrite(_sd_keepalive_cs, LOW);
     _pSPIx->beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
-    _pSPIx->transfer(0xFF);
+    _pSPIx->transfer(0x40 | 13);  // CMD13 = 0x4D
+    _pSPIx->transfer(0x00);       // arg byte 3
+    _pSPIx->transfer(0x00);       // arg byte 2
+    _pSPIx->transfer(0x00);       // arg byte 1
+    _pSPIx->transfer(0x00);       // arg byte 0
+    _pSPIx->transfer(0xFF);       // CRC (dummy)
+    _pSPIx->transfer(0xFF);       // read response
     _pSPIx->endTransaction();
     digitalWrite(_sd_keepalive_cs, HIGH);
   }
