@@ -126,7 +126,7 @@ static bool ink_screen_init()
     shared_spi_lock();
     shared_spi_prepare_device(BOARD_EPD_CS);
 
-    /* displaySpi already initialized before SD init */
+    // SPI.begin(BOARD_SPI_SCK, -1, BOARD_SPI_MOSI, BOARD_EPD_CS);
     display->epd2.selectSPI(SPI, SPISettings(FACTORY_EPD_SPI_HZ, MSBFIRST, SPI_MODE0));
     display->init(115200, true, 2, false);
     //Serial.println("helloWorld");
@@ -303,7 +303,7 @@ static void lvgl_init(void)
     // disp_drv.render_start_cb = dips_render_start_cb;
     disp_drv.draw_buf = &draw_buf_dsc_1;
     // disp_drv.rounder_cb = display_driver_rounder_cb;
-    disp_drv.full_refresh = 0;  // partial refresh for responsive E-Paper UI
+    disp_drv.full_refresh = 1;
 
     lv_disp_drv_register(&disp_drv);
 
@@ -647,15 +647,10 @@ void setup()
     listDir(SPIFFS, "/", 0);
     Serial.println(" ------------- PERI ------------- ");
 
-    // SPI — set all CS pins HIGH before any SPI communication
-    pinMode(BOARD_SD_CS, OUTPUT);   digitalWrite(BOARD_SD_CS, HIGH);
-    pinMode(BOARD_EPD_CS, OUTPUT);  digitalWrite(BOARD_EPD_CS, HIGH);
-    pinMode(BOARD_LORA_CS, OUTPUT); digitalWrite(BOARD_LORA_CS, HIGH);
-
     // SPI
     SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
 
-    // Init peripherals — original factory order
+    // init peripheral
     peri_init_st[E_PERI_INK_SCREEN] = ink_screen_init();
     peri_init_st[E_PERI_LORA]       = lora_init();
     peri_init_st[E_PERI_KYEPAD]     = keypad_init(BOARD_I2C_ADDR_KEYBOARD);
