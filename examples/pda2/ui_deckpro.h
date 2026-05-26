@@ -57,6 +57,7 @@ enum {
     SCREEN4_1_ID,
     SCREEN4_2_ID,
     SCREEN5_ID,
+    SCREEN5_1_ID,
     SCREEN6_ID,
     SCREEN6_1_ID,
     SCREEN6_2_ID,
@@ -113,6 +114,7 @@ typedef struct _ui_setting
 typedef struct _ui_test {
     const char *name;
     int peri_id;
+    int sub_id;
     lv_obj_t *obj;
     lv_obj_t *st;
     bool (*cb)(int);
@@ -137,6 +139,8 @@ typedef struct {
     char name[16];
     int rssi;
 }ui_wifi_scan_info_t;
+
+extern scr_lifecycle_t screen_sd_test;
 /*********************************************************************************
  *                              GLOBAL PROTOTYPES
  * *******************************************************************************/

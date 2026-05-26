@@ -1608,21 +1608,55 @@ static int test_num = 0;
 static int test_page_num = 0;
 static int test_curr_page = 0;
 
+#define TEST_ITEM(_name, _peri) \
+    { .name = _name, .peri_id = _peri, .sub_id = -1, .cb = ui_test_get }
+
+#define TEST_SUB_ITEM(_name, _peri, _sub) \
+    { .name = _name, .peri_id = _peri, .sub_id = _sub, .cb = ui_test_get }
+
 static ui_test_handle test_handle_list[] = {
-    { .name="Lora",       .peri_id=E_PERI_LORA       , .cb=ui_test_get },
-    { .name="Touch",      .peri_id=E_PERI_TOUCH      , .cb=ui_test_get },
-    { .name="BQ25896",    .peri_id=E_PERI_BQ25896    , .cb=ui_test_get },
-    { .name="BQ27220",    .peri_id=E_PERI_BQ27220    , .cb=ui_test_get },
-    { .name="SD Card",    .peri_id=E_PERI_SD         , .cb=ui_test_get },
-    { .name="A7682E",     .peri_id=E_PERI_A7682E     , .cb=ui_test_get },
-    { .name="PCM5102A",   .peri_id=E_PERI_PCM5102A   , .cb=ui_test_get },
-    { .name="Keypad",     .peri_id=E_PERI_KYEPAD     , .cb=ui_test_get },
-    { .name="GPS",        .peri_id=E_PERI_GPS        , .cb=ui_test_get },
-    { .name="BHI260AP",   .peri_id=E_PERI_BHI260AP   , .cb=ui_test_get },
-    { .name="INK_SCREEN", .peri_id=E_PERI_INK_SCREEN , .cb=ui_test_get },
+    TEST_ITEM("Lora", E_PERI_LORA),
+    TEST_ITEM("Touch", E_PERI_TOUCH),
+    TEST_ITEM("BQ25896", E_PERI_BQ25896),
+    TEST_ITEM("BQ27220", E_PERI_BQ27220),
+    TEST_SUB_ITEM("SD Card", E_PERI_SD, SCREEN5_1_ID),
+    TEST_ITEM("A7682E", E_PERI_A7682E),
+    TEST_ITEM("PCM5102A", E_PERI_PCM5102A),
+    TEST_ITEM("Keypad", E_PERI_KYEPAD),
+    TEST_ITEM("GPS", E_PERI_GPS),
+    TEST_ITEM("BHI260AP", E_PERI_BHI260AP),
+    TEST_ITEM("INK_SCREEN", E_PERI_INK_SCREEN),
 };
 
 static void test_item_create(int curr_apge);
+
+static void test_scr_event(lv_event_t *e)
+{
+    ui_test_handle *h = (ui_test_handle *)e->user_data;
+
+    if ((e->code == LV_EVENT_CLICKED) && h && (h->sub_id >= 0)) {
+        scr_mgr_push(h->sub_id, false);
+    }
+}
+
+static void test_refresh_page(void)
+{
+    if (test_list == NULL) {
+        return;
+    }
+
+    while (lv_obj_get_child_cnt(test_list) > 0) {
+        lv_obj_t *child = lv_obj_get_child(test_list, 0);
+        if (child) {
+            lv_obj_del(child);
+        }
+    }
+
+    test_item_create(test_curr_page);
+    if (test_page) {
+        lv_label_set_text_fmt(test_page, "%d / %d", test_curr_page, test_page_num);
+    }
+}
 
 static void scr5_btn_event_cb(lv_event_t * e)
 {
@@ -1655,8 +1689,7 @@ static void test_page_switch_cb(lv_event_t *e)
         test_curr_page = (test_curr_page > 0) ? test_curr_page - 1 : test_page_num;
     }
 
-    test_item_create(test_curr_page);
-    lv_label_set_text_fmt(test_page, "%d / %d", test_curr_page, test_page_num);
+    test_refresh_page();
 }
 
 static void test_item_create(int curr_apge)
@@ -1683,7 +1716,7 @@ static void test_item_create(int curr_apge)
         lv_obj_set_style_border_width(h->obj, 1, LV_PART_MAIN | LV_STATE_PRESSED);
         lv_obj_set_style_outline_width(h->obj, 3, LV_PART_MAIN | LV_STATE_PRESSED);
         lv_obj_set_style_radius(h->obj, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
-        // lv_obj_add_event_cb(h->obj, test_scr_event, LV_EVENT_CLICKED, (void *)h);
+        lv_obj_add_event_cb(h->obj, test_scr_event, LV_EVENT_CLICKED, (void *)h);
     }
 }
 
@@ -1703,7 +1736,7 @@ static void create5(lv_obj_t *parent)
 
     test_num = sizeof(test_handle_list) / sizeof(test_handle_list[0]);
     test_page_num = test_num / SETTING_PAGE_MAX_ITEM;
-    test_item_create(test_curr_page);
+    test_refresh_page();
 
     lv_obj_t * ui_Button2 = lv_btn_create(parent);
     lv_obj_set_width(ui_Button2, 71);
@@ -1772,12 +1805,16 @@ static void create5(lv_obj_t *parent)
 }
 static void entry5(void) 
 {
+    test_refresh_page();
     ui_disp_full_refr();
 }
 static void exit5(void) {
     ui_disp_full_refr();
 }
-static void destroy5(void) { }
+static void destroy5(void) {
+    test_list = NULL;
+    test_page = NULL;
+}
 
 static scr_lifecycle_t screen5 = {
     .create = create5,
@@ -3118,6 +3155,7 @@ void ui_deckpro_entry(void)
     scr_mgr_register(SCREEN4_1_ID,  &screen4_1);    //  - WIFI Config
     scr_mgr_register(SCREEN4_2_ID,  &screen4_2);    //  - WIFI Scan
     scr_mgr_register(SCREEN5_ID,    &screen5);      // 
+    scr_mgr_register(SCREEN5_1_ID,  &screen_sd_test);
     scr_mgr_register(SCREEN6_ID,    &screen6);      // Battery
     scr_mgr_register(SCREEN6_1_ID,  &screen6_1);    //  - BQ25896
     scr_mgr_register(SCREEN6_2_ID,  &screen6_2);    //  - BQ27220

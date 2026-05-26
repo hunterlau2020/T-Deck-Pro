@@ -11,6 +11,7 @@
 #include "peripheral.h"
 #include "WiFi.h"
 #include <ctype.h>
+#include <string.h>
 #include <TouchDrvCSTXXX.hpp>
 
 
@@ -158,29 +159,188 @@ const char *ui_setting_get_hd_ver(void)
     return BOARD_T_DECK_PRO_VERSION;
 }
 
+static void sd_test_reset_result(ui_sd_test_result_t *result)
+{
+    if (result == NULL) {
+        return;
+    }
+
+    memset(result, 0, sizeof(*result));
+    snprintf(result->card_type, sizeof(result->card_type), "N/A");
+}
+
+static void sd_test_set_error(ui_sd_test_result_t *result, const char *message)
+{
+    if ((result == NULL) || (message == NULL)) {
+        return;
+    }
+
+    snprintf(result->error, sizeof(result->error), "%s", message);
+}
+
+static const char *sd_card_type_to_string(uint8_t card_type)
+{
+    switch (card_type) {
+    case CARD_MMC:
+        return "MMC";
+    case CARD_SD:
+        return "SDSC";
+    case CARD_SDHC:
+        return "SDHC";
+    case CARD_NONE:
+        return "NONE";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static bool sd_cleanup_temp_file_locked(const char *path)
+{
+    if ((path == NULL) || !SD.exists(path)) {
+        return true;
+    }
+    return SD.remove(path);
+}
+
+static bool sd_mount_and_query_locked(ui_sd_test_result_t *result)
+{
+    SD.end();
+
+    if (!SD.begin(BOARD_SD_CS, SPI)) {
+        sd_test_set_error(result, "Card mount failed");
+        return false;
+    }
+
+    uint8_t card_type = SD.cardType();
+    snprintf(result->card_type, sizeof(result->card_type), "%s", sd_card_type_to_string(card_type));
+
+    if (card_type == CARD_NONE) {
+        sd_test_set_error(result, "No SD card attached");
+        SD.end();
+        return false;
+    }
+
+    result->mounted = true;
+    result->card_size_mb = SD.cardSize() / (1024 * 1024);
+    result->total_mb = SD.totalBytes() / (1024 * 1024);
+    result->used_mb = SD.usedBytes() / (1024 * 1024);
+    return true;
+}
+
+static bool sd_run_file_io_locked(ui_sd_test_result_t *result)
+{
+    static const char *kTempPath = "/sd_test.tmp";
+    static const char kPayload[] = "T-Deck-Pro SD self-test";
+    const size_t payload_len = sizeof(kPayload) - 1;
+
+    result->cleanup_ok = sd_cleanup_temp_file_locked(kTempPath);
+    if (!result->cleanup_ok) {
+        sd_test_set_error(result, "Failed to reset /sd_test.tmp");
+        return false;
+    }
+
+    File file = SD.open(kTempPath, FILE_WRITE);
+    if (!file) {
+        sd_test_set_error(result, "Open write failed");
+        return false;
+    }
+
+    result->write_ok = (file.write((const uint8_t *)kPayload, payload_len) == payload_len);
+    file.close();
+    if (!result->write_ok) {
+        result->cleanup_ok = sd_cleanup_temp_file_locked(kTempPath);
+        sd_test_set_error(result, "Write failed");
+        return false;
+    }
+
+    File readback = SD.open(kTempPath, FILE_READ);
+    if (!readback) {
+        result->cleanup_ok = sd_cleanup_temp_file_locked(kTempPath);
+        sd_test_set_error(result, "Open read failed");
+        return false;
+    }
+
+    if ((size_t)readback.size() != payload_len) {
+        readback.close();
+        result->cleanup_ok = sd_cleanup_temp_file_locked(kTempPath);
+        sd_test_set_error(result, "Read size mismatch");
+        return false;
+    }
+
+    char buffer[sizeof(kPayload)] = {0};
+    size_t read_len = readback.readBytes(buffer, payload_len);
+    readback.close();
+
+    result->read_ok = (read_len == payload_len);
+    if (!result->read_ok) {
+        result->cleanup_ok = sd_cleanup_temp_file_locked(kTempPath);
+        sd_test_set_error(result, "Read failed");
+        return false;
+    }
+
+    result->verify_ok = (memcmp(buffer, kPayload, payload_len) == 0);
+    if (!result->verify_ok) {
+        sd_test_set_error(result, "Readback mismatch");
+    }
+
+    result->cleanup_ok = sd_cleanup_temp_file_locked(kTempPath);
+    if (!result->cleanup_ok && (result->error[0] == '\0')) {
+        sd_test_set_error(result, "Cleanup failed");
+    }
+
+    return result->write_ok && result->read_ok && result->verify_ok && result->cleanup_ok;
+}
+
+bool ui_sd_test_run(ui_sd_test_result_t *out)
+{
+    ui_sd_test_result_t local_result;
+    ui_sd_test_result_t *result = out ? out : &local_result;
+
+    sd_test_reset_result(result);
+
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_SD_CS);
+
+    bool mounted = sd_mount_and_query_locked(result);
+    bool io_ok = false;
+    if (mounted) {
+        io_ok = sd_run_file_io_locked(result);
+    }
+
+    shared_spi_unlock();
+
+    result->pass = mounted && io_ok;
+    peri_init_st[E_PERI_SD] = result->pass;
+
+    return result->pass;
+}
+
 void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
 {
-    if(ui_test_sd_card())
-    {
-        shared_spi_lock();
-        shared_spi_prepare_device(BOARD_SD_CS);
+    if (total) {
+        *total = 0;
+    }
+    if (used) {
+        *used = 0;
+    }
 
-        if(total)
-            *total = SD.totalBytes() / (1024 * 1024);
-        if(used)
-            *used = SD.usedBytes() / (1024 * 1024);
+    ui_sd_test_result_t result;
+    sd_test_reset_result(&result);
 
-        printf("total=%lluMB, used=%lluMB\n", *total, *used);
+    shared_spi_lock();
+    shared_spi_prepare_device(BOARD_SD_CS);
+    bool mounted = sd_mount_and_query_locked(&result);
+    shared_spi_unlock();
 
-        uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-        Serial.printf("SD Card Size: %lluMB\n", cardSize);
+    if (!mounted) {
+        return;
+    }
 
-        uint64_t totalSize = SD.totalBytes() / (1024 * 1024);
-        Serial.printf("SD Card Total: %lluMB\n", totalSize);
-
-        uint64_t usedSize = SD.usedBytes() / (1024 * 1024);
-        Serial.printf("SD Card Used: %lluMB\n", usedSize);
-        shared_spi_unlock();
+    if (total) {
+        *total = result.total_mb;
+    }
+    if (used) {
+        *used = result.used_mb;
     }
 }
 
