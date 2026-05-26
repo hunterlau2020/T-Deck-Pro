@@ -77,6 +77,22 @@ const char *ui_setting_get_sf_ver(void);
 const char *ui_setting_get_hd_ver(void);
 void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used);
 
+typedef struct {
+    bool pass;
+    bool mounted;
+    bool write_ok;
+    bool read_ok;
+    bool verify_ok;
+    bool cleanup_ok;
+    uint64_t card_size_mb;
+    uint64_t total_mb;
+    uint64_t used_mb;
+    char card_type[12];
+    char error[64];
+} ui_sd_test_result_t;
+
+bool ui_sd_test_run(ui_sd_test_result_t *out);
+
 // [ screen 3 ] --- GPS
 void ui_gps_task_suspend(void);
 void ui_gps_task_resume(void);
