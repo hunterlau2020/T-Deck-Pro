@@ -8,6 +8,8 @@
 
 ![Build Status](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/actions/workflows/platformio.yml/badge.svg?event=push)
 
+**English | [中文](./readme_CN.md)**
+
 ![alt text](./docs/README_img/image.png)
 
 ## :zero: Version 🎁
@@ -23,6 +25,18 @@ The differences in hardware can be viewed in the corresponding `readme` and `sch
 |   T-Deck-Pro V1.0   |     [HD-V1-250326](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/tree/HD-V1-250326?tab=readme-ov-file#t-deck-pro)     | [readme](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/tree/HD-V1-250326?tab=readme-ov-file#zero-version-) |     [SCH](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/tree/HD-V1-250326/hardware/T-Deckpro%20v1.0%2024-05-16)       | [V1](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/tree/HD-V1-250326/firmware) |   Available   |
 |   T-Deck-Pro V1.1   |   [HD-V2-250915](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/tree/HD-V2-250915?tab=readme-ov-file#t-deck-pro-v11)   | [readme](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/tree/HD-V2-250915?tab=readme-ov-file#zero-version-) |     [SCH](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/tree/HD-V2-250915/hardware/T-Deckpro%20v1.1%2025-09-15)       | [V2](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/tree/HD-V2-250915/firmware) |   Available   |
 |   T-Deck-Pro MAX    |                               [MAX](https://github.com/Xinyuan-LilyGO/T-Deck-Pro-MAX)                                |                 [readme](https://github.com/Xinyuan-LilyGO/T-Deck-Pro-MAX#zero-version-)                  |                     [SCH](https://github.com/Xinyuan-LilyGO/T-Deck-Pro-MAX/tree/master/hardware)                     |  [V3](https://github.com/Xinyuan-LilyGO/T-Deck-Pro-MAX/tree/master/firmware)  |   -   |
+
+Note:
+
+The original touch chip supplier `CST328` for `T-Deck Pro v1.1` has discontinued production, so I have replaced it with the `CST3530` touch chip.  
+The touch panel has been upgraded from `CST328` to `CST3530`. Since both chips use the same device address, the touch chip model must be identified during initialization.
+
+Since the CST3530 has an automatic sleep mode, it is recommended to use interrupts instead of polling; otherwise, I2C access errors may occur. We provide a driver compatible with both new and old touch technologies, which can detect whether the device is a new-type touch sensor. [touch_hyn_core](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/tree/HD-V2-250915/examples/touch_hyn_core)
+Note:  
+- New: `CST3530` uses the `cst66xx_fuc` initialization process  
+- Old: `CST328` uses the `cst3xx_fuc` initialization program
+
+For details, please refer to [#37](https://github.com/Xinyuan-LilyGO/T-Deck-Pro/issues/37)
 
 🟢🟢🟢
 
