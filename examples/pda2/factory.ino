@@ -552,9 +552,9 @@ void setup()
     pinMode(BOARD_6609_EN, OUTPUT);         // enable 7682 module
     pinMode(BOARD_LORA_EN, OUTPUT);         // enable LORA module
     pinMode(BOARD_GPS_EN, OUTPUT);          // enable GPS module
-    pinMode(BOARD_A7682E_PWRKEY, OUTPUT); 
+    pinMode(BOARD_A7682E_PWRKEY, OUTPUT);
     digitalWrite(BOARD_KEYBOARD_LED, LOW);
-    digitalWrite(BOARD_MOTOR_PIN, HIGH);
+    digitalWrite(BOARD_MOTOR_PIN, LOW);
     digitalWrite(BOARD_6609_EN, HIGH);
     digitalWrite(BOARD_LORA_EN, HIGH);
     digitalWrite(BOARD_GPS_EN, HIGH);
@@ -675,7 +675,7 @@ void setup()
     disp_full_refr();
 
     digitalWrite(BOARD_KEYBOARD_LED, LOW);
-    digitalWrite(BOARD_MOTOR_PIN, HIGH);
+    digitalWrite(BOARD_MOTOR_PIN, isT_Deck_Pro_v1_1);
     digitalWrite(BOARD_6609_EN, HIGH);
     digitalWrite(BOARD_LORA_EN, HIGH);
     digitalWrite(BOARD_GPS_EN, HIGH);
