@@ -15,7 +15,7 @@
 | 3 | 键盘输入 | `test_keypad` | Adafruit TCA8418，I2C 0x34，4×10 矩阵，轮询 |
 | 4 | 网络查询 | `test_wifi` | 在线词典 `https://dictionaryapi.dev/` |
 | 5 | WiFi 配置 | `test_wifi` | 运行时 keypad 输入 SSID/密码 → NVS 存储 → 开机自动连接 |
-| 6 | AI 文本对话 | 新写 | OpenAI 兼容接口（DeepSeek/Qwen/GLM/Kimi 等），端点/模型/Key 可配置 |
+| 6 | AI 文本对话 | 新写 | OpenAI 兼容接口（**OpenRouter** 等），端点/模型/Key 可配置，模型手动输入 |
 
 ### 已确认的需求决策
 
@@ -24,6 +24,8 @@
 - **组织方式**：新建独立示例 `examples/allinone`（不动现有 `pda2`/`factory`）。
 - **AI 形态**：仅**文本对话**，不做语音（国内大模型聊天接口不收音频，ASR 成本高）。
 - **配置方式**：WiFi 与 AI 端点（URL/模型/Key）全部**运行时 NVS 可配置**（`Preferences`），不再依赖编译期 `config_keys.h`。
+- **AI 平台**：对接 **OpenRouter**（`https://openrouter.ai/api/v1/chat/completions`，OpenAI 兼容），**模型手动输入**（如 `deepseek/deepseek-chat`、`openai/gpt-4o`），不做厂商预置快捷项；端点保留可改（兼容国内厂商自建端点）。
+- **keypad 大写**：v1 **接受小写输入**（含大写 SSID 的 WiFi 连不上；后续如需再加 Shift/Caps 层）。
 
 ## 2. 现有架构调研结论（复用基础）
 
@@ -75,7 +77,7 @@
 | `SCREEN_KEYPAD_ID` | 键盘回显测试：按键字符 + 0xHEX + 累计次数 | 新写 `ui_keypad.cpp` |
 | `SCREEN_WIFI_ID` | WiFi 配置：输入 SSID/密码 → 存 NVS → 连接 → 显示 IP/状态 | 新写 `ui_wifi_config.cpp` |
 | `SCREEN_AI_ID` | AI 文本对话：输入问题 → 调 OpenAI 兼容接口 → 显示回答 | 新写 `ui_ai_chat.cpp` |
-| `SCREEN_AI_CFG_ID` | AI 配置：端点 URL / 模型 / API Key（预置 DeepSeek/Qwen/GLM/Kimi 快捷项）→ 存 NVS | 新写 `ui_ai_cfg.cpp` |
+| `SCREEN_AI_CFG_ID` | AI 配置：端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key → 存 NVS | 新写 `ui_ai_cfg.cpp` |
 
 ### MP3 屏交互
 - 浏览态：`1`-`6` 选文件；`\n` 下一页（回卷）；`\b` 上一页，首页再按 `\b` 退出回菜单（`audio.stopSong()` + `scr_mgr_pop`）。
@@ -98,8 +100,8 @@
 
 ### AI 配置屏交互
 - 三字段：端点 URL / 模型 / API Key（`1` 切换当前编辑字段）。
-- 快捷项：数字键 `1` DeepSeek / `2` Qwen / `3` GLM / `4` Kimi（预填端点 + 模型，Key 仍需输入）；`9` 清空字段；`\n` 保存 NVS（namespace `ai`）；`\b` 返回 AI 对话屏。
-- 预置端点（均 OpenAI 兼容）：DeepSeek `https://api.deepseek.com/chat/completions`、Qwen `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`、GLM `https://open.bigmodel.cn/api/paas/v4/chat/completions`、Kimi `https://api.moonshot.cn/v1/chat/completions`。
+- 端点**默认预填 OpenRouter** `https://openrouter.ai/api/v1/chat/completions`（可改）；**模型手动输入**（如 `deepseek/deepseek-chat`、`qwen/qwen-2.5-72b-instruct`、`openai/gpt-4o`）；`9` 清空字段；`\n` 保存 NVS（namespace `ai`）；`\b` 返回 AI 对话屏。
+- 字段均为小写 + `0-9 . : / - _`（keypad 符号层），OpenRouter Key `sk-or-v1-...` 可直接输入。
 
 ## 5. 文件清单
 
@@ -149,8 +151,8 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 | `ui_keypad.cpp` | 返回按钮 + 提示 + 回显标签、`keypadtest_keyboard_poll`（`\b` 返回菜单）、`scr_lifecycle_t screen_keypad` |
 | `ui_wifi_config.cpp` | SSID/密码两字段 keypad 输入（`w` 切换字段）→ `Preferences`（namespace `wifi`）存 NVS → `WiFi.begin` 连接 → 显示状态/IP/失败原因、`wifi_cfg_keyboard_poll`、`scr_lifecycle_t screen_wifi` |
 | `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（`c` 进 AI 配置）、`scr_lifecycle_t screen_ai` |
-| `ui_ai_cfg.cpp` | 端点 URL / 模型 / API Key 三字段（`1` 切字段）、数字键 `1`-`4` 预置 DeepSeek/Qwen/GLM/Kimi、`9` 清空自定义、`\n` 存 NVS（namespace `ai`）、`scr_lifecycle_t screen_ai_cfg` |
-| `openai_api.h/.cpp` | **新写 OpenAI 兼容客户端** `openai_chat(prompt, base_url, model, api_key)`：cJSON 组 `{"model":..., "messages":[{"role":"user","content":...}]}`，**直接复用 `http_post`**（`http_utils.h:46` 已支持 `auth_header` → `Authorization: Bearer <key>`，`content_type=application/json`），解析 `choices[0].message.content`；`setInsecure` 风险见 §2.3 注 |
+| `ui_ai_cfg.cpp` | 端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key 三字段（`1` 切字段）、`9` 清空、`\n` 存 NVS（namespace `ai`）、`scr_lifecycle_t screen_ai_cfg` |
+| `openai_api.h/.cpp` | **新写 OpenAI 兼容客户端** `openai_chat(prompt, base_url, model, api_key)`：POST `{"model":..., "messages":[{"role":"user","content":...}]}`，**直接复用 `http_post`**（`http_utils.h:46` 已支持 `auth_header` → `Authorization: Bearer <key>`，`content_type=application/json`），解析 `choices[0].message.content`；默认端点 OpenRouter；`setInsecure` 风险见 §2.3 注 |
 | `src/assets.h` | 仅 `LV_IMG_DECLARE` 4 个图标（`extern "C"` 包裹） |
 | ~~`config_keys.h`~~ | **不再需要**：WiFi/AI 全部运行时 NVS 配置，`allinone.ino` 删除对它的 include |
 
@@ -174,6 +176,7 @@ build_flags =
 
 ## 7. 实现步骤
 
+0. **预研（先于本设计实现）**：在 `pda2` 上先实现并真机验证 WiFi 配置屏 + AI 对话/配置屏（OpenRouter），成熟后再移植到 allinone（详见 `TODO.md` 阶段 0）。
 1. 建目录 `examples/allinone/` + `src/`（WiFi/AI 用 NVS 运行时配置，**不需要** `config_keys.h`）。
 2. 复制 §5.1 清单与 4 个图标。
 3. 写 `src/assets.h`。
@@ -203,13 +206,14 @@ build_flags =
 6. **SD 未插卡**：`sd_care_init` false → MP3 屏显示 "No SD"，词典本地扫描快速失败，不崩溃。
 7. **GPS UBX 握手启动时阻塞 ~2.4s**（LVGL 初始化之前），仅延迟首屏。
 8. **`.ino` 发现规则**：`allinone/` 顶层只能有一个 `allinone.ino`；已改用 NVS 运行时配置，`config_keys.h` 不再必需。
-9. **keypad 输入限制**：字母层仅**小写 a-z**（`peri_keypad.cpp:18-22`），符号层（`$` 切换，`:26-30`）含 `0-9 . : / - _ @ +` 等，URL/Key 可输入；**不含大写**。SSID/密码若含大写字母，需先给 keymap 加 Shift/Caps 层（复用 `sym_lock` 的切换机制，见 §10 第 4 项），否则连接会失败。
-10. **WiFi/AI 配置屏**：所有联网功能依赖已配好的 WiFi（未配 → 提示先配 WiFi）；AI 请求与词典一样**同步阻塞**（`http_post` 默认 15s 超时），AI 屏与音乐屏互斥；Key/端点存 NVS 明文（`Preferences`，namespace `wifi`/`ai`），不打印到日志；各厂商 OpenAI 兼容接口字段基本一致，个别差异以 DeepSeek 为基准调通。
+9. **keypad 输入限制**：字母层仅**小写 a-z**（`peri_keypad.cpp:18-22`），符号层（`$` 切换，`:26-30`）含 `0-9 . : / - _ @ +` 等，URL/Key 可输入；**不含大写**。**v1 已接受小写输入**（§1 决策）：含大写 SSID 的 WiFi 连不上；OpenRouter Key `sk-or-v1-...`、模型 ID 均为小写，可正常输入。后续如需大写可加 Shift/Caps 层（复用 `sym_lock` 切换机制）。
+10. **WiFi/AI 配置屏**：所有联网功能依赖已配好的 WiFi（未配 → 提示先配 WiFi）；AI 请求与词典一样**同步阻塞**（`http_post` 默认 15s 超时，OpenRouter 模型响应可能更慢，可放宽到 30s），AI 屏与音乐屏互斥；Key/端点存 NVS 明文（`Preferences`，namespace `wifi`/`ai`），不打印到日志；OpenRouter 为 OpenAI 兼容接口，个别字段差异以实际响应调通。
 
 ## 10. 待评审要点
 
+- [x] AI 平台 → 已确认：**OpenRouter**（OpenAI 兼容），模型手动输入。
+- [x] keypad 无大写 → 已确认：v1 **接受小写**。
+- [x] 实现顺序 → 已确认：先在 **pda2 预研** WiFi/AI 配置并真机验证，成熟后移植 allinone（见 `TODO.md` 阶段 0）。
 - [ ] MP3 扫描目录 `/music`（回退根目录）是否符合预期？
-- [ ] 是否接受"联网查询同步阻塞"的 v1 取舍（词典 8s / AI 15s）？
-- [ ] AI 默认对接厂商：**DeepSeek** 还是 **GLM-4-Flash 免费档**？（决定预置快捷项顺序）
-- [ ] keypad 无大写：WiFi/AI 输入加 Shift/Caps 层，还是先接受小写？（含大写 SSID 无法连接）
+- [ ] 是否接受"联网查询同步阻塞"的 v1 取舍（词典 8s / AI 15-30s）？
 - [ ] 是否保留 SPIFFS 挂载（audio 已不需要，但部分库依赖）？
