@@ -102,15 +102,23 @@ The T-Deck Pro keyboard is a 4×10 matrix read by TCA8418. The driver (`peri_key
 ```
 q  w  e  r  t  y  u  i  o  p
 a  s  d  f  g  h  j  k  l  ⌫
-⎇  z  x  c  v  b  n  m  $  ⏎
+⇧  z  x  c  v  b  n  m  $  ⏎
        [  space ×3  ]  Sym
 ```
 
-**Sym layer** (press Sym to toggle, or hold Alt for one keypress):
+**Shift layer** (hold `⇧` for uppercase, releases back to lowercase):
+```
+Q  W  E  R  T  Y  U  I  O  P
+A  S  D  F  G  H  J  K  L  ⌫
+⇧  Z  X  C  V  B  N  M  $  ⏎
+       [  space ×3  ]  Sym
+```
+
+**Sym layer** (press Sym to toggle/lock):
 ```
 #  1  2  3  (  )  _  -  +  @
 *  4  5  6  /  :  ;  '  "  ⌫
-⎇  7  8  9  ?  !  ,  .  0  ⏎
+⇧  7  8  9  ?  !  ,  .  0  ⏎
        [  space ×3  ]  Sym
 ```
 
@@ -118,7 +126,7 @@ Special keys:
 - `'\b'` (0x08) — Backspace/Delete
 - `'\n'` (0x0A) — Enter
 - `'$'` — Speaker key (app-specific)
-- Sym key toggles sym lock; Alt activates sym for next keypress only
+- Shift (`⇧`) hold → uppercase; Sym toggles sym lock (digits/symbols)
 - Mic key is NOT on the TCA8418 matrix (separate GPIO)
 
 ### 3. Image/icon format

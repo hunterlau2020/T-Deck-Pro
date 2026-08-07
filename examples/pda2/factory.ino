@@ -681,13 +681,20 @@ void setup()
     digitalWrite(BOARD_GPS_EN, HIGH);
     digitalWrite(BOARD_A7682E_PWRKEY, HIGH);
 
-    /* Auto-connect WiFi if credentials defined */
-#if defined(WIFI_SSID) && defined(WIFI_PASSWORD)
-    WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.printf("[WiFi] Connecting to %s...\n", WIFI_SSID);
-#endif
+    /* Auto-connect WiFi from NVS runtime config (screen 4.1) */
+    {
+        Preferences wifi_pref;
+        wifi_pref.begin("wifi", true);
+        String wifi_ssid_nvs = wifi_pref.getString("ssid", "");
+        String wifi_pass_nvs = wifi_pref.getString("pass", "");
+        wifi_pref.end();
+        if (wifi_ssid_nvs.length() > 0) {
+            WiFi.mode(WIFI_STA);
+            WiFi.setAutoReconnect(true);
+            WiFi.begin(wifi_ssid_nvs.c_str(), wifi_pass_nvs.c_str());
+            Serial.printf("[WiFi] Connecting to %s...\n", wifi_ssid_nvs.c_str());
+        }
+    }
     configTzTime("PST8PDT,M3.2.0,M11.1.0", "pool.ntp.org");
 }
 
@@ -710,6 +717,12 @@ void loop()
     gps_keyboard_poll();
     extern void voiceai_keyboard_poll();
     voiceai_keyboard_poll();
+    extern void wifi_cfg_keyboard_poll();
+    wifi_cfg_keyboard_poll();
+    extern void ai_chat_keyboard_poll();
+    ai_chat_keyboard_poll();
+    extern void ai_cfg_keyboard_poll();
+    ai_cfg_keyboard_poll();
     bq25896_runtime_maintain();
 
     audio.loop();
