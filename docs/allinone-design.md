@@ -39,6 +39,8 @@
 - JSON 用 cJSON（ESP32 SDK 自带，`#include <cJSON.h>`），仓库无 ArduinoJson。
 - **词典接口已现成实现**：`examples/pda2/dict_lookup.cpp:701` `dict_lookup_online(word, result)` —— WiFi 检查 → `snprintf` 拼 URL → `http_get(url, 8000)` → cJSON 解析，UI 为 `ui_dictionary.cpp`。
 
+> ⚠️ **HTTPS 安全注意**：`http_get` 内部用 `WiFiClientSecure::setInsecure()`，会**关闭 TLS 证书校验**，HTTPS 流量可被中间人（MITM）读取/篡改。本固件是开发/验证用途、词典为公开 HTTPS 端点，v1 沿用 pda2 行为可接受；但**不应**在不可信网络或正式产品中使用。如需加固，后续可用 `setCACert()` 加载 `dictionaryapi.dev` 的 CA 根证书做校验。
+
 ### 2.4 外设 / 启动
 - `peri_gps.cpp`：FreeRTOS 任务解析 NMEA + UBX 恢复握手，`gps_get_coord/time/satellites/speed` 等 getter，`gps_task_suspend/resume` 控制任务启停。
 - `peri_keypad.cpp`：TCA8418 初始化 + 轮询 + keymap。
@@ -95,12 +97,28 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 ### 5.2 复制后裁剪
 | 文件 | 裁剪要点 |
 |---|---|
-| `factory.ino` → **`allinone.ino`** | setup()：去掉 BQ/DRV/BHI260AP/A7682E/触摸/`configTzTime`；保留 GPIO 上电、SPI CS、`shared_spi_bus_init`、I2C 扫描、SPIFFS、`SPI.begin`；peri 初始化精简为 ink_screen / keypad / sd_care_init / gps_init / pcm5102a_init（无条件）；保留 WiFi 自动连接块。loop()：`lv_task_handler` + `keypad_loop` + 5 个 `*_keyboard_poll` + `audio.loop` |
+| `factory.ino` → **`allinone.ino`** | setup()：去掉 BQ/DRV/BHI260AP/A7682E/`configTzTime`，并删除全部触摸初始化/注册/轮询代码（见下方"触摸相关代码清理清单"）；保留 GPIO 上电、SPI CS、`shared_spi_bus_init`、I2C 扫描、SPIFFS、`SPI.begin`；peri 初始化精简为 ink_screen / keypad / sd_care_init / gps_init / pcm5102a_init（无条件）；保留 WiFi 自动连接块。loop()：`lv_task_handler` + `keypad_loop` + 5 个 `*_keyboard_poll` + `audio.loop` |
 | `factory.h` | 去掉 TinyGSM/BQ/DRV/TouchDrv；保留 `Audio audio`、`peri_init_st[]`、`shared_spi_*`、`disp_full_refr` |
 | `peripheral.h` | `E_PERI_*` 裁为 `{KYEPAD, SD, GPS, PCM5102A, INK_SCREEN, NUM_MAX}`；保留 keypad/gps 原型 |
 | `ui_deckpro.h` | `SCREEN_XXX_ID` 裁为 5 个；保留 `struct menu_btn`、`scr_back_btn_create`、`ui_deckpro_entry` |
 | `ui_deckpro.cpp` | 删除 low-voltage 块、screen1-12、taskbar/gesture/touch 定时器；保留 `scr_back_btn_create` + 菜单（`menu_btn_list` 裁为 4 项，`menu_btn_event_cb` 已存在）；`FONT_*` 宏改指 `&lv_font_montserrat_14`；`ui_deckpro_entry()` 只注册 5 屏；新增 `menu_keyboard_poll()`（`'1'`-`'4'` → `scr_mgr_push`） |
 | `ui_deckpro_port.h / .cpp` | 只保留 `ui_disp_full_refr`、`ui_gps_task_suspend/resume`、`ui_gps_get_coord/data/time/satellites/speed`、`ui_input_get_keypay_val/set_flag` |
+
+#### 触摸相关代码清理清单（防未定义引用 / 残留无效输入设备）
+
+触摸初始化、注册与轮询代码分散在 4 处，按下列位置**全部删除**：
+
+| 位置 | 需删除内容 |
+|---|---|
+| `factory.ino:268-274` | `touchpad_read()` 静态函数（LVGL pointer 读回调，内部调 `hyn_touch_get_point`） |
+| `factory.ino:310-318` | LVGL pointer 输入设备注册块（`lv_indev_drv_init` + `LV_INDEV_TYPE_POINTER` + `read_cb = touchpad_read` + `lv_indev_drv_register`） |
+| `factory.ino:669` | `peri_init_st[E_PERI_TOUCH] = hyn_touch_init();`（触摸不进 peri 初始化表） |
+| `factory.h:73-74` | `hyn_touch_init()` / `hyn_touch_get_point()` 原型声明及触摸头文件 include |
+| `ui_deckpro_port.cpp:537-546` | `ui_input_get_touch_coord()`（内部调 `hyn_touch_get_point`），以及手势/触摸相关端口函数 |
+| `ui_deckpro.cpp` | taskbar/gesture/touch 定时器与触摸回调（见 §5.2 主表 `ui_deckpro.cpp` 行） |
+| 文件 | `hyn_*`（`hyn_touch.cpp`、`hyn_cst66xx.c`、`hyn_core.*` 等）一律不复制 |
+
+`peripheral.h` 的 `E_PERI_*` 已不含 `E_PERI_TOUCH`（见 §5.2 主表）；删除后 `loop()` 不再调用任何触摸轮询，LVGL 无 pointer indev，按钮点击事件不触发，导航全靠 keypad poll（见 §9 风险 4）。
 
 ### 5.3 新写
 | 文件 | 内容 |
@@ -133,7 +151,7 @@ build_flags =
 1. 建目录 `examples/allinone/` + `src/`；复制 `config_keys.h.example` → `config_keys.h`。
 2. 复制 §5.1 清单与 4 个图标。
 3. 写 `src/assets.h`。
-4. 裁剪 `peripheral.h`、`factory.h`、`ui_deckpro.h`、`ui_deckpro_port.h/.cpp`。
+4. 裁剪 `peripheral.h`、`factory.h`、`ui_deckpro.h`、`ui_deckpro_port.h/.cpp`（触摸原型/端口函数删除按 §5.2"触摸相关代码清理清单"）。
 5. 裁剪 `ui_deckpro.cpp`（大文件，按 `#if 1 … #endif` 区块整块删除 screen1-12 与 low-voltage；改写 `ui_deckpro_entry`；新增 `menu_keyboard_poll`）。
 6. `factory.ino` → `allinone.ino`，裁剪 setup/loop。
 7. 新写 `ui_mp3.cpp`、`ui_keypad.cpp`。
@@ -151,10 +169,10 @@ build_flags =
 
 ## 9. 风险与注意事项
 
-1. **SD 与 EPD 共享 SPI**：所有显式 SD 操作套 `shared_spi_lock()/unlock()`；`audio.loop()` 流式读不加锁；EPD 只在按键/进屏时刷新，不做逐帧刷新，缩小冲突窗口。
+1. **SD 与 EPD 共享 SPI**：所有显式 SD 操作套 `shared_spi_lock()/unlock()`；`audio.loop()` 流式读不加锁；EPD 只在按键/进屏/GPS 3s 定时器到期时刷新，不做逐帧刷新，缩小冲突窗口。
 2. **`audio.loop()` 必须每轮调用**：不能阻塞。词典 8s `http_get` 为同步阻塞（pda2 原样行为），词典屏与音乐屏互斥，可接受；v1 不做 weather 式后台任务。
-3. **墨水屏刷新慢**：GPS 屏沿用 3s 定时刷新，MP3/键盘屏用 LVGL 局部刷新；分页不用滚动（仓库惯例）。
-4. **触摸移除** → 无 pointer indev，按钮 `LV_EVENT_CLICKED` 不触发，所有导航必须靠 keypad poll。
+3. **墨水屏全刷慢（`full_refresh=1`）**：pda2 显示驱动设置 `disp_drv.full_refresh = 1`（`factory.ino:306`），LVGL 每次 flush 都整屏 Paged 输出到墨水屏，**没有真正的局部刷新**。GPS 屏每 3s 定时（`ui_gps_enhanced.cpp:424`）更新一次，即每 3s 一次全刷（GDEQ031T10 全刷约 1-2s，是 SPI 冲突窗口最长的一段）；MP3/键盘屏仅在按键时触发刷新。分页不用滚动（仓库惯例）。若 v2 想减少全刷，可拉长 GPS 刷新间隔或改为事件驱动。
+4. **触摸移除**（删除清单见 §5.2）→ 无 pointer indev，按钮 `LV_EVENT_CLICKED` 不触发，所有导航必须靠 keypad poll。
 5. **dictionaryapi.dev 仅英文**：UI 文案用英文（与 pda2 一致）；词不在库返回 404 → 显示 "Word not found"。
 6. **SD 未插卡**：`sd_care_init` false → MP3 屏显示 "No SD"，词典本地扫描快速失败，不崩溃。
 7. **GPS UBX 握手启动时阻塞 ~2.4s**（LVGL 初始化之前），仅延迟首屏。
