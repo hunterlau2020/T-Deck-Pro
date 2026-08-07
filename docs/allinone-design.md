@@ -59,7 +59,8 @@
 复制并**裁剪** pda2 得到自包含的 `examples/allinone`：
 
 - **保留**：scr_mgr、peri_keypad、peri_gps、http_utils、dict_lookup、ui_gps_enhanced、ui_dictionary、EPD+LVGL 刷新链。
-- **丢弃**：LoRa、BHI260AP IMU、触摸（CST）、BQ25896/BQ27220 电池管理、DRV2605 电机、A7682E 4G、语音 AI、计算器/天气/日历 App。
+- **丢弃**：LoRa、BHI260AP IMU、触摸（CST）、BQ25896/BQ27220 电池管理、DRV2605 **电机驱动**（仅丢弃 `drv.begin()`/`selectLibrary` 等 haptic 初始化，`factory.ino:617-629`）、A7682E 4G、语音 AI、计算器/天气/日历 App。
+- **硬件版本探测必须保留**：`factory.ino:605-613` 用 I2C 探测 0x5A（DRV2605 存在与否）得到 `isT_Deck_Pro_v1_1`，该标志**直接决定 EPD 显示配置**（`factory.ino:118-121` 选 `display_v1_1`/`display_v1_0`、RST 引脚 `BOARD_EPD_RST`/`BOARD_EPD_RST_UNUSED`；`:138/:153` 版本字串；`:678` 马达引脚电平）。若连探测一起删，V1.1 会误用 V1.0 配置导致屏幕初始化/刷新失败。
 - **新写**：`ui_mp3.cpp`（SD 文件浏览 + 播放）、`ui_keypad.cpp`（键盘回显）、`ui_wifi_config.cpp`（WiFi 配置）、`ui_ai_chat.cpp` / `ui_ai_cfg.cpp`（AI 文本对话 + AI 配置）、`openai_api.h/.cpp`（OpenAI 兼容客户端，替代 `gemini_api`）。
 - **字体**：不复用 `Font_Mono_Bold_*.c`（约 73KB），把 `ui_deckpro.cpp` 里的 `FONT_*` 宏改指内置 `&lv_font_montserrat_14`。
 - **图标**：复用 pda2 `src/` 里现成的 4 个 50×50 图标 `img_GPS.c / img_dictionary.c / img_touch.c / img_SD.c`。
@@ -68,9 +69,11 @@
 
 共 8 屏（菜单 + 7 个功能屏），全部由 keypad 驱动（触摸已移除 → 无 LVGL pointer indev，按钮点击事件不触发，导航走 `*_keyboard_poll`）：
 
+**按键层说明**：keypad 普通层只有字母 + 空格 + `\n`/`\b`（`peri_keypad.cpp:18-23`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（`peri_keypad.cpp:26-30`，按 `$` 键（2,8）锁定/解锁，按住 Alt（2,0）临时切换）。本文中所有"数字键 `1`-`6`"、"`+`/`-`"均指 **Sym 层对应键**——先按 `$` 进入符号层再按对应键，结束再按 `$` 退出。
+
 | SCREEN ID | 内容 | 来源 |
 |---|---|---|
-| `SCREEN0_ID` | 菜单：6 个按钮（"1 GPS / 2 Music / 3 Dict / 4 Keys / 5 WiFi / 6 AI"），数字键 `1`-`6` 进入对应屏 | 裁剪 pda2 菜单 |
+| `SCREEN0_ID` | 菜单：6 个按钮（"1 GPS / 2 Music / 3 Dict / 4 Keys / 5 WiFi / 6 AI"），Sym 层 `1`-`6`（先按 `$`）进入对应屏 | 裁剪 pda2 菜单 |
 | `SCREEN_GPS_ID` | GPS 状态（坐标/速度/卫星/UTC 时间），沿用 3s 定时刷新；已有 `gps_keyboard_poll`（`\b` 返回） | 复制 `ui_gps_enhanced.cpp` |
 | `SCREEN_MP3_ID` | SD `.mp3` 文件浏览器（分页）+ 播放控制 | 新写 `ui_mp3.cpp` |
 | `SCREEN_DICT_ID` | keypad 输入英文单词 → 在线查询 → 显示音标 + 释义（前 3 条） | 复制 `ui_dictionary.cpp` + `dict_lookup.cpp` |
@@ -80,8 +83,8 @@
 | `SCREEN_AI_CFG_ID` | AI 配置：端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key → 存 NVS | 新写 `ui_ai_cfg.cpp` |
 
 ### MP3 屏交互
-- 浏览态：`1`-`6` 选文件；`\n` 下一页（回卷）；`\b` 上一页，首页再按 `\b` 退出回菜单（`audio.stopSong()` + `scr_mgr_pop`）。
-- 播放态：`' '` 暂停/继续；`n`/`\n` 下一首；`p` 上一首；`+`/`-` 音量（0-21）；`\b` 回浏览态。
+- 浏览态：Sym 层 `1`-`6` 选文件（先按 `$`）；`\n` 下一页（回卷）；`\b` 上一页，首页再按 `\b` 退出回菜单（`audio.stopSong()` + `scr_mgr_pop`）。
+- 播放态：`' '` 暂停/继续；`n`/`\n` 下一首；`p` 上一首；Sym 层 `+`/`-` 音量（0-21）；`\b` 回浏览态。
 - 扫描 `/music`（不存在则回退根目录），过滤 `.mp3`（上限 ~40 条）；`audio.connecttoFS(SD, path)`。
 - 强定义弱回调 `audio_eof_mp3()`：自动切下一首（回卷）。
 
@@ -89,12 +92,12 @@
 - 完全复用 pda2 实现。可选增强：`create` 时若 `audio.isRunning()` 则 `audio.stopSong()`，避免 8s HTTP 阻塞期间音乐卡顿。
 
 ### WiFi 配置屏交互
-- 两字段编辑：`w` 切换 SSID / 密码（高亮当前字段）；字符键输入、`\b` 删除、`\n` 保存 + 连接；SSID 字段为空时按 `\b` 退回菜单。
+- 两字段编辑：`w` 切换 SSID / 密码（高亮当前字段）；字符键输入（数字/符号需先按 `$`）、`\b` 删除、`\n` 保存 + 连接；SSID 字段为空时按 `\b` 退回菜单。
 - 保存：`Preferences` namespace `wifi`，`putString("ssid"/"pass")`；随后 `WiFi.begin`，显示 `Connecting…` → 成功（IP）或失败原因（Auth fail / not found / timeout）。
 - 开机：读 NVS，有凭据则自动 `WiFi.begin` + `setAutoReconnect(true)`；无凭据则菜单 WiFi 按钮旁显示 `!`，词典/AI 请求时 `http_require_wifi` 失败提示"先配置 WiFi"。
 
 ### AI 对话屏交互
-- 输入态：字符键输入问题、`\b` 删除、`\n` 发送；`c` 键进入 AI 配置屏。
+- 输入态：字符键输入问题（数字/符号需先按 `$`）、`\b` 删除、`\n` 发送；`c` 键进入 AI 配置屏。
 - 发送：`openai_chat(prompt, cfg)`（`Authorization: Bearer <key>`），等待期间显示 `…`，返回后分页显示回答；`\b` 返回菜单。
 - 无 WiFi / 未配置 Key：提示 `Set WiFi / Set AI Key`，引导到对应配置屏。
 
@@ -110,10 +113,8 @@
 utilities.h                  # 引脚定义
 ui_scr_mrg.h / ui_scr_mrg.c  # 屏幕管理器
 peri_keypad.cpp              # TCA8418 键盘
-peri_gps.cpp                 # GPS 任务 + UBX 恢复
 http_utils.h / http_utils.cpp# http_get / http_require_wifi
 dict_lookup.h / dict_lookup.cpp  # dict_lookup_online（dictionaryapi.dev）
-ui_gps_enhanced.cpp          # GPS 屏
 ui_dictionary.cpp            # 词典屏
 src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜单图标
 ```
@@ -121,12 +122,16 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 ### 5.2 复制后裁剪
 | 文件 | 裁剪要点 |
 |---|---|
-| `factory.ino` → **`allinone.ino`** | setup()：去掉 BQ/DRV/BHI260AP/A7682E/`configTzTime`，并删除全部触摸初始化/注册/轮询代码（见下方"触摸相关代码清理清单"）；保留 GPIO 上电、SPI CS、`shared_spi_bus_init`、I2C 扫描、SPIFFS、`SPI.begin`；peri 初始化精简为 ink_screen / keypad / sd_care_init / gps_init / pcm5102a_init（无条件）；启动时从 NVS 读 WiFi 凭据（有则 `WiFi.begin`）。loop()：`lv_task_handler` + `keypad_loop` + 8 个 `*_keyboard_poll`（menu/gps/mp3/dict/keypadtest/wifi_cfg/ai_chat/ai_cfg）+ `audio.loop` |
+| `factory.ino` → **`allinone.ino`** | setup()：去掉 BQ/DRV2605 驱动（**保留 I2C 0x5A 版本探测** → `isT_Deck_Pro_v1_1`，见 §3）/BHI260AP/A7682E/`configTzTime`，并删除全部触摸初始化/注册/轮询代码（见下方"触摸相关代码清理清单"）；保留 GPIO 上电、SPI CS、`shared_spi_bus_init`、I2C 扫描、SPIFFS、`SPI.begin`；peri 初始化精简为 ink_screen / keypad / sd_care_init / gps_init / pcm5102a_init（无条件）；启动时从 NVS 读 WiFi 凭据（有则 `WiFi.begin`）。loop()：`lv_task_handler` + `keypad_loop` + 8 个 `*_keyboard_poll`（menu/gps/mp3/dict/keypadtest/wifi_cfg/ai_chat/ai_cfg）+ `audio.loop` |
 | `factory.h` | 去掉 TinyGSM/BQ/DRV/TouchDrv；保留 `Audio audio`、`peri_init_st[]`、`shared_spi_*`、`disp_full_refr` |
 | `peripheral.h` | `E_PERI_*` 裁为 `{KYEPAD, SD, GPS, PCM5102A, INK_SCREEN, NUM_MAX}`；保留 keypad/gps 原型 |
 | `ui_deckpro.h` | `SCREEN_XXX_ID` 裁为 8 个；保留 `struct menu_btn`、`scr_back_btn_create`、`ui_deckpro_entry` |
 | `ui_deckpro.cpp` | 删除 low-voltage 块、screen1-12、taskbar/gesture/touch 定时器；保留 `scr_back_btn_create` + 菜单（`menu_btn_list` 裁为 6 项，`menu_btn_event_cb` 已存在）；`FONT_*` 宏改指 `&lv_font_montserrat_14`；`ui_deckpro_entry()` 只注册 8 屏；新增 `menu_keyboard_poll()`（`'1'`-`'6'` → `scr_mgr_push`） |
 | `ui_deckpro_port.h / .cpp` | 只保留 `ui_disp_full_refr`、`ui_gps_task_suspend/resume`、`ui_gps_get_coord/data/time/satellites/speed`、`ui_input_get_keypay_val/set_flag` |
+| `peri_gps.cpp` | `gps_task_suspend/resume`（`:79-87`）加 **NULL 守卫**；`gps_init` 握手失败时不创建任务（`:41-44`），`gps_handle` 保持 NULL |
+| `ui_gps_enhanced.cpp` | GPS 屏 entry（`:422-426`）先查 GPS 可用性，失败显示 "No GPS" 且不 `ui_gps_task_resume()` |
+
+**GPS 空句柄防护**（评审 High）：`gps_init()` 握手失败（`peri_gps.cpp:31-39`）时不创建任务，`gps_handle=NULL`；进 GPS 屏仍 `ui_gps_task_resume()` → `vTaskResume(NULL)` 崩溃（`peri_gps.cpp:84-87` → `ui_deckpro_port.cpp:349-356` → `ui_gps_enhanced.cpp:423`）。复制时按上表两行修复。
 
 #### 触摸相关代码清理清单（防未定义引用 / 残留无效输入设备）
 
@@ -180,7 +185,7 @@ build_flags =
 1. 建目录 `examples/allinone/` + `src/`（WiFi/AI 用 NVS 运行时配置，**不需要** `config_keys.h`）。
 2. 复制 §5.1 清单与 4 个图标。
 3. 写 `src/assets.h`。
-4. 裁剪 `peripheral.h`、`factory.h`、`ui_deckpro.h`、`ui_deckpro_port.h/.cpp`（触摸原型/端口函数删除按 §5.2"触摸相关代码清理清单"）。
+4. 裁剪 `peripheral.h`、`factory.h`、`ui_deckpro.h`、`ui_deckpro_port.h/.cpp`（触摸原型/端口函数删除按 §5.2"触摸相关代码清理清单"；GPS 空句柄守卫按 §5.2）。
 5. 裁剪 `ui_deckpro.cpp`（大文件，按 `#if 1 … #endif` 区块整块删除 screen1-12 与 low-voltage；改写 `ui_deckpro_entry`；新增 `menu_keyboard_poll`）。
 6. `factory.ino` → `allinone.ino`，裁剪 setup/loop。
 7. 新写 `ui_mp3.cpp`、`ui_keypad.cpp`、`ui_wifi_config.cpp`、`ui_ai_chat.cpp`、`ui_ai_cfg.cpp`、`openai_api.h/.cpp`。
@@ -206,7 +211,7 @@ build_flags =
 6. **SD 未插卡**：`sd_care_init` false → MP3 屏显示 "No SD"，词典本地扫描快速失败，不崩溃。
 7. **GPS UBX 握手启动时阻塞 ~2.4s**（LVGL 初始化之前），仅延迟首屏。
 8. **`.ino` 发现规则**：`allinone/` 顶层只能有一个 `allinone.ino`；已改用 NVS 运行时配置，`config_keys.h` 不再必需。
-9. **keypad 输入限制**：字母层仅**小写 a-z**（`peri_keypad.cpp:18-22`），符号层（`$` 切换，`:26-30`）含 `0-9 . : / - _ @ +` 等，URL/Key 可输入；**不含大写**。**v1 已接受小写输入**（§1 决策）：含大写 SSID 的 WiFi 连不上；OpenRouter Key `sk-or-v1-...`、模型 ID 均为小写，可正常输入。后续如需大写可加 Shift/Caps 层（复用 `sym_lock` 切换机制）。
+9. **keypad 输入限制**：普通层仅**小写 a-z** + 空格 + `\n`/`\b`（`peri_keypad.cpp:18-23`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（按 `$` 锁定，`:26-30`），文档中数字/符号按键均需先按 `$`（见 §4 键层说明）；**无大写**。**v1 已接受小写输入**（§1 决策）：含大写 SSID 的 WiFi 连不上；OpenRouter Key `sk-or-v1-...`、模型 ID 均为小写可正常输入。后续如需大写可加 Shift/Caps 层。
 10. **WiFi/AI 配置屏**：所有联网功能依赖已配好的 WiFi（未配 → 提示先配 WiFi）；AI 请求与词典一样**同步阻塞**（`http_post` 默认 15s 超时，OpenRouter 模型响应可能更慢，可放宽到 30s），AI 屏与音乐屏互斥；Key/端点存 NVS 明文（`Preferences`，namespace `wifi`/`ai`），不打印到日志；OpenRouter 为 OpenAI 兼容接口，个别字段差异以实际响应调通。
 
 ## 10. 待评审要点
