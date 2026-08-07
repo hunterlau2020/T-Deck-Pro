@@ -7,7 +7,8 @@ dist/
 .vscode/
 hardware/T-Deckpro 24-01-08
 hardware/T-Deckpro 23-09-28/
-script/
+script/*
+!script/set_srcdir.py
 build
 firmware/\[H693\] T-Deck-Pro test/
 docs/image_source/img_start - 副本.xcf
