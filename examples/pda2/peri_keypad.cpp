@@ -22,7 +22,7 @@ const char keymap[KEYPAD_ROWS][KEYPAD_COLS] = {
     {  0,   0,   0,   0,   0,   0,   0, ' ',   0,   0},
 };
 
-// Secondary layer (sym / shift)
+// Secondary layer (sym)
 const char keymap_sym[KEYPAD_ROWS][KEYPAD_COLS] = {
     {'#', '1', '2', '3', '(', ')', '_', '-', '+', '@'},
     {'*', '4', '5', '6', '/', ':', ';', '\'','"', '\b'},
@@ -30,18 +30,26 @@ const char keymap_sym[KEYPAD_ROWS][KEYPAD_COLS] = {
     {  0,   0,   0,   0,   0,   0,   0, ' ',   0,   0},
 };
 
+// Tertiary layer (shift = uppercase; held while typing)
+const char keymap_shift[KEYPAD_ROWS][KEYPAD_COLS] = {
+    {'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'},
+    {'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', '\b'},
+    {  0, 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '$', '\n'},
+    {  0,   0,   0,   0,   0,   0,   0, ' ',   0,   0},
+};
+
 // Modifier positions
-#define KEY_ALT_ROW   2
-#define KEY_ALT_COL   0
-#define KEY_SYM_ROW   3
-#define KEY_SYM_COL   8
+#define KEY_SHIFT_ROW  2
+#define KEY_SHIFT_COL  0
+#define KEY_SYM_ROW    3
+#define KEY_SYM_COL    8
 
 Adafruit_TCA8418 keypad;
 keypad_cb keypad_listener = NULL;
 char keypad_curr_val = ' ';
 int keypad_state = KEYPAD_RELEASE;
 bool keypad_update = false;
-static bool sym_active = false;
+static bool shift_active = false;
 static bool sym_lock = false;
 
 bool keypad_init(int address)
@@ -108,21 +116,25 @@ void keypad_loop(void)
     if (row == KEY_SYM_ROW && col == KEY_SYM_COL) {
         if (state == KEYPAD_PRESS) {
             sym_lock = !sym_lock;
-            sym_active = sym_lock;
             Serial.printf("[KBD] sym_lock=%d\n", sym_lock);
         }
         return;
     }
 
-    if (row == KEY_ALT_ROW && col == KEY_ALT_COL) {
-        sym_active = (state == KEYPAD_PRESS);
-        Serial.printf("[KBD] alt=%d\n", sym_active);
+    if (row == KEY_SHIFT_ROW && col == KEY_SHIFT_COL) {
+        shift_active = (state == KEYPAD_PRESS);
+        Serial.printf("[KBD] shift=%d\n", shift_active);
         return;
     }
 
     if (state == KEYPAD_PRESS) {
-        c = (sym_active || sym_lock) ? keymap_sym[row][col] : keymap[row][col];
-        if (sym_active && !sym_lock) sym_active = false;
+        if (sym_lock) {
+            c = keymap_sym[row][col];
+        } else if (shift_active) {
+            c = keymap_shift[row][col];
+        } else {
+            c = keymap[row][col];
+        }
 
         if (c == 0) return;
 

@@ -25,7 +25,7 @@
 - **AI 形态**：仅**文本对话**，不做语音（国内大模型聊天接口不收音频，ASR 成本高）。
 - **配置方式**：WiFi 与 AI 端点（URL/模型/Key）全部**运行时 NVS 可配置**（`Preferences`），不再依赖编译期 `config_keys.h`。
 - **AI 平台**：对接 **OpenRouter**（`https://openrouter.ai/api/v1/chat/completions`，OpenAI 兼容），**模型手动输入**（如 `deepseek/deepseek-chat`、`openai/gpt-4o`），不做厂商预置快捷项；端点保留可改（兼容国内厂商自建端点）。
-- **keypad 大写**：v1 **接受小写输入**（含大写 SSID 的 WiFi 连不上；后续如需再加 Shift/Caps 层）。
+- **keypad 大写**：pda2 预研阶段已实现 **Shift→大写层**（`peri_keypad.cpp` 第三层 `keymap_shift`，按住 Shift(2,0) 出 A-Z、松开回小写），大写 SSID 可正常输入；**Sym 键仍管符号/数字层**。
 
 ## 2. 现有架构调研结论（复用基础）
 
@@ -69,11 +69,11 @@
 
 共 8 屏（菜单 + 7 个功能屏），全部由 keypad 驱动（触摸已移除 → 无 LVGL pointer indev，按钮点击事件不触发，导航走 `*_keyboard_poll`）：
 
-**按键层说明**：keypad 普通层只有字母 + 空格 + `\n`/`\b`（`peri_keypad.cpp:18-23`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（`peri_keypad.cpp:26-30`，按 `$` 键（2,8）锁定/解锁，按住 Alt（2,0）临时切换）。本文中所有"数字键 `1`-`6`"、"`+`/`-`"均指 **Sym 层对应键**——先按 `$` 进入符号层再按对应键，结束再按 `$` 退出。
+**按键层说明**：keypad 有三层——普通层小写 a-z + 空格 + `\n`/`\b`（`peri_keypad.cpp:18-23`）；**Shift 层大写 A-Z**（按住 Shift(2,0) 临时切换，`:32-39`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（`peri_keypad.cpp:26-31`，按 Sym(3,8) 锁定/解锁）。本文中所有"数字键 `1`-`6`"、"`+`/`-`"均指 **Sym 层对应键**——先按 Sym 进入符号层再按对应键，结束再按 Sym 退出。
 
 | SCREEN ID | 内容 | 来源 |
 |---|---|---|
-| `SCREEN0_ID` | 菜单：6 个按钮（"1 GPS / 2 Music / 3 Dict / 4 Keys / 5 WiFi / 6 AI"），Sym 层 `1`-`6`（先按 `$`）进入对应屏 | 裁剪 pda2 菜单 |
+| `SCREEN0_ID` | 菜单：6 个按钮（"1 GPS / 2 Music / 3 Dict / 4 Keys / 5 WiFi / 6 AI"），Sym 层 `1`-`6`（先按 Sym）进入对应屏 | 裁剪 pda2 菜单 |
 | `SCREEN_GPS_ID` | GPS 状态（坐标/速度/卫星/UTC 时间），沿用 3s 定时刷新；已有 `gps_keyboard_poll`（`\b` 返回） | 复制 `ui_gps_enhanced.cpp` |
 | `SCREEN_MP3_ID` | SD `.mp3` 文件浏览器（分页）+ 播放控制 | 新写 `ui_mp3.cpp` |
 | `SCREEN_DICT_ID` | keypad 输入英文单词 → 在线查询 → 显示音标 + 释义（前 3 条） | 复制 `ui_dictionary.cpp` + `dict_lookup.cpp` |
@@ -83,7 +83,7 @@
 | `SCREEN_AI_CFG_ID` | AI 配置：端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key → 存 NVS | 新写 `ui_ai_cfg.cpp` |
 
 ### MP3 屏交互
-- 浏览态：Sym 层 `1`-`6` 选文件（先按 `$`）；`\n` 下一页（回卷）；`\b` 上一页，首页再按 `\b` 退出回菜单（`audio.stopSong()` + `scr_mgr_pop`）。
+- 浏览态：Sym 层 `1`-`6` 选文件（先按 Sym）；`\n` 下一页（回卷）；`\b` 上一页，首页再按 `\b` 退出回菜单（`audio.stopSong()` + `scr_mgr_pop`）。
 - 播放态：`' '` 暂停/继续；`n`/`\n` 下一首；`p` 上一首；Sym 层 `+`/`-` 音量（0-21）；`\b` 回浏览态。
 - 扫描 `/music`（不存在则回退根目录），过滤 `.mp3`（上限 ~40 条）；`audio.connecttoFS(SD, path)`。
 - 强定义弱回调 `audio_eof_mp3()`：自动切下一首（回卷）。
@@ -92,18 +92,19 @@
 - 完全复用 pda2 实现。可选增强：`create` 时若 `audio.isRunning()` 则 `audio.stopSong()`，避免 8s HTTP 阻塞期间音乐卡顿。
 
 ### WiFi 配置屏交互
-- 两字段编辑：`w` 切换 SSID / 密码（高亮当前字段）；字符键输入（数字/符号需先按 `$`）、`\b` 删除、`\n` 保存 + 连接；SSID 字段为空时按 `\b` 退回菜单。
+- **SSID 下拉选择**（`lv_dropdown`）：`\n` 触发 `WiFi.scanNetworks()` 扫描并展开列表；列表打开时 `+`/`-`（Sym 层）移动选中、`\n` 选中并跳到密码框、`\b` 取消；触摸点选亦可。扫描无结果显示 "(none found - Enter:rescan)"。
+- **密码独立输入框**：字符键输入（Shift 大写 / Sym 数字符号）、`\n` 保存 + 连接、`\b` 退格（为空时返回 SSID 字段）。无 `w`/`1` 保留键（SSID 常见字母 'w'）。
 - 保存：`Preferences` namespace `wifi`，`putString("ssid"/"pass")`；随后 `WiFi.begin`，显示 `Connecting…` → 成功（IP）或失败原因（Auth fail / not found / timeout）。
 - 开机：读 NVS，有凭据则自动 `WiFi.begin` + `setAutoReconnect(true)`；无凭据则菜单 WiFi 按钮旁显示 `!`，词典/AI 请求时 `http_require_wifi` 失败提示"先配置 WiFi"。
 
 ### AI 对话屏交互
-- 输入态：字符键输入问题（数字/符号需先按 `$`）、`\b` 删除、`\n` 发送；`c` 键进入 AI 配置屏。
+- 输入态：字符键输入问题（数字/符号需先按 Sym）、`\b` 删除、`\n` 发送。**不用 `c` 作快捷键**（英文提问里 'c' 极常见，会误触配置），AI 配置从**菜单页 2 的 "AI Cfg" 按钮**进入。
 - 发送：`openai_chat(prompt, cfg)`（`Authorization: Bearer <key>`），等待期间显示 `…`，返回后分页显示回答；`\b` 返回菜单。
 - 无 WiFi / 未配置 Key：提示 `Set WiFi / Set AI Key`，引导到对应配置屏。
 
 ### AI 配置屏交互
-- 三字段：端点 URL / 模型 / API Key（`1` 切换当前编辑字段）。
-- 端点**默认预填 OpenRouter** `https://openrouter.ai/api/v1/chat/completions`（可改）；**模型手动输入**（如 `deepseek/deepseek-chat`、`qwen/qwen-2.5-72b-instruct`、`openai/gpt-4o`）；`9` 清空字段；`\n` 保存 NVS（namespace `ai`）；`\b` 返回 AI 对话屏。
+- 三字段：端点 URL / 模型 / API Key，`\n` 确认当前字段并跳下一字段（末字段 `\n` 存 NVS 并退出回 AI 对话屏）；`\b` 退格（字段为空时返回上一字段）。
+- 端点**默认预填 OpenRouter** `https://openrouter.ai/api/v1/chat/completions`（可改）；**模型手动输入**（如 `deepseek/deepseek-chat`、`qwen/qwen-2.5-72b-instruct`、`openai/gpt-4o`）；Key 标签掩码显示（`sk-or-v1-***`），编辑时文本框显示明文。
 - 字段均为小写 + `0-9 . : / - _`（keypad 符号层），OpenRouter Key `sk-or-v1-...` 可直接输入。
 
 ## 5. 文件清单
@@ -154,9 +155,9 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 |---|---|
 | `ui_mp3.cpp` | `ensure_sd()`（`shared_spi_lock` + `SD.begin(48)`）、`scan_files()`、分页列表渲染、播放/暂停/切歌/音量、强定义 `audio_eof_mp3`、`mp3_keyboard_poll`、`scr_lifecycle_t screen_mp3` |
 | `ui_keypad.cpp` | 返回按钮 + 提示 + 回显标签、`keypadtest_keyboard_poll`（`\b` 返回菜单）、`scr_lifecycle_t screen_keypad` |
-| `ui_wifi_config.cpp` | SSID/密码两字段 keypad 输入（`w` 切换字段）→ `Preferences`（namespace `wifi`）存 NVS → `WiFi.begin` 连接 → 显示状态/IP/失败原因、`wifi_cfg_keyboard_poll`、`scr_lifecycle_t screen_wifi` |
-| `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（`c` 进 AI 配置）、`scr_lifecycle_t screen_ai` |
-| `ui_ai_cfg.cpp` | 端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key 三字段（`1` 切字段）、`9` 清空、`\n` 存 NVS（namespace `ai`）、`scr_lifecycle_t screen_ai_cfg` |
+| `ui_wifi_config.cpp` | **SSID 为 `lv_dropdown`（`WiFi.scanNetworks()` 结果）**：`\n` 扫描+展开，`+`/`-`（Sym 层）移动、`\n` 选中跳密码、`\b` 取消，触摸点选亦可；**密码独立 `lv_textarea`**：`\n` 保存+连接、`\b` 退格/回 SSID → `Preferences`（namespace `wifi`）存 NVS → `WiFi.begin` 连接 → 显示状态/IP/失败原因、`wifi_cfg_keyboard_poll`、`scr_lifecycle_t screen_wifi`。无 `w`/`1` 保留键 |
+| `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（浏览回答时 `\n` 下一页/`\b` 回上一页或退出；**无 `c` 快捷键**，AI 配置走菜单）、`scr_lifecycle_t screen_ai_chat` |
+| `ui_ai_cfg.cpp` | 端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key 三字段，`\n` 确认当前字段并跳下一字段（末字段 `\n` 存 NVS namespace `ai` + 退出）、`\b` 退格/回上一字段；Key 标签掩码显示（`sk-or-v1-***`）、`ai_cfg_keyboard_poll`、`scr_lifecycle_t screen_ai_cfg` |
 | `openai_api.h/.cpp` | **新写 OpenAI 兼容客户端** `openai_chat(prompt, base_url, model, api_key)`：POST `{"model":..., "messages":[{"role":"user","content":...}]}`，**直接复用 `http_post`**（`http_utils.h:46` 已支持 `auth_header` → `Authorization: Bearer <key>`，`content_type=application/json`），解析 `choices[0].message.content`；默认端点 OpenRouter；`setInsecure` 风险见 §2.3 注 |
 | `src/assets.h` | 仅 `LV_IMG_DECLARE` 4 个图标（`extern "C"` 包裹） |
 | ~~`config_keys.h`~~ | **不再需要**：WiFi/AI 全部运行时 NVS 配置，`allinone.ino` 删除对它的 include |
@@ -211,13 +212,13 @@ build_flags =
 6. **SD 未插卡**：`sd_care_init` false → MP3 屏显示 "No SD"，词典本地扫描快速失败，不崩溃。
 7. **GPS UBX 握手启动时阻塞 ~2.4s**（LVGL 初始化之前），仅延迟首屏。
 8. **`.ino` 发现规则**：`allinone/` 顶层只能有一个 `allinone.ino`；已改用 NVS 运行时配置，`config_keys.h` 不再必需。
-9. **keypad 输入限制**：普通层仅**小写 a-z** + 空格 + `\n`/`\b`（`peri_keypad.cpp:18-23`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（按 `$` 锁定，`:26-30`），文档中数字/符号按键均需先按 `$`（见 §4 键层说明）；**无大写**。**v1 已接受小写输入**（§1 决策）：含大写 SSID 的 WiFi 连不上；OpenRouter Key `sk-or-v1-...`、模型 ID 均为小写可正常输入。后续如需大写可加 Shift/Caps 层。
+9. **keypad 输入限制**：普通层小写 a-z + 空格 + `\n`/`\b`；**Shift 层大写 A-Z**（按住 Shift(2,0)，`peri_keypad.cpp:32-39`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（按 Sym(3,8) 锁定，`:26-31`），文档中数字/符号按键均需先按 Sym（见 §4 键层说明）。**大写已在 pda2 预研实现**（§1 决策）：大小写 SSID 均可输入；OpenRouter Key `sk-or-v1-...`、模型 ID 多为小写，无需 Shift。
 10. **WiFi/AI 配置屏**：所有联网功能依赖已配好的 WiFi（未配 → 提示先配 WiFi）；AI 请求与词典一样**同步阻塞**（`http_post` 默认 15s 超时，OpenRouter 模型响应可能更慢，可放宽到 30s），AI 屏与音乐屏互斥；Key/端点存 NVS 明文（`Preferences`，namespace `wifi`/`ai`），不打印到日志；OpenRouter 为 OpenAI 兼容接口，个别字段差异以实际响应调通。
 
 ## 10. 待评审要点
 
 - [x] AI 平台 → 已确认：**OpenRouter**（OpenAI 兼容），模型手动输入。
-- [x] keypad 无大写 → 已确认：v1 **接受小写**。
+- [x] keypad 无大写 → 已改：pda2 预研实现 **Shift→大写层**（按住 Shift(2,0)，Sym 键仍管符号层）。
 - [x] 实现顺序 → 已确认：先在 **pda2 预研** WiFi/AI 配置并真机验证，成熟后移植 allinone（见 `TODO.md` 阶段 0）。
 - [x] MP3 扫描目录 → 已确认：优先 `/music`，不存在回退根目录。
 - [x] 联网查询阻塞 → 已确认：接受 v1 同步阻塞（词典 8s / AI 15-30s）。

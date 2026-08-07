@@ -266,6 +266,8 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN_CALENDAR_ID,   &img_calendar,   "Calendar",95,   101},
     {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    167,  101},
     {SCREEN_VOICE_AI_ID,   &img_voice_ai,   "AI Chat", 23,   189},
+    {SCREEN_AI_CHAT_ID,    &img_voice_ai,   "AI Text", 95,   189},
+    {SCREEN_AI_CFG_ID,     &img_setting,    "AI Cfg",  167,  189},
 };
 
 static void menu_btn_event_cb(lv_event_t *e)
@@ -1471,31 +1473,279 @@ static scr_lifecycle_t screen4 = {
     .destroy = destroy4,
 };
 #endif
-// --------------------- screen 4.2 --------------------- Wifi Config
+// --------------------- screen 4.1 --------------------- Wifi Config
 #if 1
+#include <WiFi.h>
+#include <Preferences.h>
+
+static lv_obj_t *wifi_ssid_lab = NULL;
+static lv_obj_t *wifi_ssid_dd = NULL;
+static lv_obj_t *wifi_pass_lab = NULL;
+static lv_obj_t *wifi_pass_ta = NULL;
+static lv_obj_t *wifi_status_lab = NULL;
+static bool wifi_cfg_kbd_active = false;
+static int  wifi_cfg_field = 0;                 // 0 = SSID (dropdown), 1 = password
+static bool wifi_scan_empty = true;             // last scan found no visible SSID
+static char wifi_ssid[65] = {0};
+static char wifi_pass[65] = {0};
+static char wifi_status[96] = {0};
+
+static void wifi_cfg_load(void)
+{
+    Preferences p;
+    p.begin("wifi", true);
+    String s = p.getString("ssid", "");
+    String q = p.getString("pass", "");
+    strncpy(wifi_ssid, s.c_str(), sizeof(wifi_ssid) - 1);
+    strncpy(wifi_pass, q.c_str(), sizeof(wifi_pass) - 1);
+    p.end();
+    if (WiFi.status() == WL_CONNECTED) {
+        snprintf(wifi_status, sizeof(wifi_status), "IP: %s", WiFi.localIP().toString().c_str());
+    } else {
+        snprintf(wifi_status, sizeof(wifi_status), "Not connected");
+    }
+}
+
+static void wifi_cfg_save(void)
+{
+    Preferences p;
+    p.begin("wifi", false);
+    p.putString("ssid", wifi_ssid);
+    p.putString("pass", wifi_pass);
+    p.end();
+}
+
+static void wifi_cfg_refresh(void)
+{
+    lv_label_set_text(wifi_ssid_lab, wifi_cfg_field == 0 ? "SSID >" : "SSID");
+    lv_label_set_text(wifi_pass_lab, wifi_cfg_field == 1 ? "Pass >" : "Pass");
+    lv_label_set_text(wifi_status_lab, wifi_status);
+    lv_textarea_set_text(wifi_pass_ta, wifi_pass);
+}
+
+/* Run a scan and fill the SSID dropdown. Returns number of visible SSIDs. */
+static int wifi_cfg_scan(void)
+{
+    WiFi.scanDelete();
+    int n = WiFi.scanNetworks();
+    static char opts[1024];
+
+    if (n <= 0) {
+        snprintf(opts, sizeof(opts), "(none found - Enter:rescan)");
+        lv_dropdown_set_options(wifi_ssid_dd, opts);
+        lv_dropdown_set_selected(wifi_ssid_dd, 0);
+        wifi_scan_empty = true;
+        return 0;
+    }
+
+    opts[0] = '\0';
+    int olen = 0, opt_idx = 0, sel = 0;
+    for (int i = 0; i < n; i++) {
+        String s = WiFi.SSID(i);
+        if (s.length() == 0) continue;          /* hidden network */
+        const char *name = s.c_str();
+        int need = strlen(name) + (opt_idx > 0 ? 1 : 0);
+        if (olen + need >= (int)sizeof(opts) - 1) break;
+        if (opt_idx > 0) opts[olen++] = '\n';
+        strcpy(opts + olen, name);
+        olen += strlen(name);
+        if (strcmp(wifi_ssid, name) == 0) sel = opt_idx;
+        opt_idx++;
+    }
+    if (opt_idx == 0) {
+        snprintf(opts, sizeof(opts), "(none found - Enter:rescan)");
+        wifi_scan_empty = true;
+    } else {
+        wifi_scan_empty = false;
+    }
+    lv_dropdown_set_options(wifi_ssid_dd, opts);
+    lv_dropdown_set_selected(wifi_ssid_dd, sel);
+    return opt_idx;
+}
+
+/* Touch path: an item in the open dropdown list was tapped. LVGL closes the
+ * list and fires VALUE_CHANGED; copy the picked SSID and jump to password. */
+static void wifi_dd_value_cb(lv_event_t *e)
+{
+    if (wifi_scan_empty) return;
+    lv_obj_t *dd = lv_event_get_target(e);
+    char buf[65];
+    lv_dropdown_get_selected_str(dd, buf, sizeof(buf));
+    strncpy(wifi_ssid, buf, sizeof(wifi_ssid) - 1);
+    wifi_cfg_field = 1;
+    wifi_cfg_refresh();
+}
+
+static void wifi_cfg_commit(void)
+{
+    if (wifi_ssid[0] == '\0') {
+        snprintf(wifi_status, sizeof(wifi_status), "No SSID set");
+        lv_label_set_text(wifi_status_lab, wifi_status);
+        return;
+    }
+    snprintf(wifi_status, sizeof(wifi_status), "Connecting...");
+    lv_label_set_text(wifi_status_lab, wifi_status);
+
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(wifi_ssid, wifi_pass);
+
+    unsigned long t0 = millis();
+    wl_status_t st;
+    while ((st = WiFi.status()) != WL_CONNECTED && millis() - t0 < 15000) {
+        delay(200);
+        lv_timer_handler();
+    }
+    if (st == WL_CONNECTED) {
+        snprintf(wifi_status, sizeof(wifi_status), "OK IP: %s", WiFi.localIP().toString().c_str());
+    } else {
+        const char *why = "Connect fail";
+        switch (st) {
+            case WL_NO_SSID_AVAIL:   why = "No SSID found";  break;
+            case WL_CONNECT_FAILED:  why = "Connect failed"; break;
+            case WL_CONNECTION_LOST: why = "Lost";           break;
+            case WL_DISCONNECTED:    why = "Timeout";        break;
+            default: break;
+        }
+        snprintf(wifi_status, sizeof(wifi_status), "%s (%d)", why, st);
+    }
+    lv_label_set_text(wifi_status_lab, wifi_status);
+}
+
+void wifi_cfg_keyboard_poll()
+{
+    if (!wifi_cfg_kbd_active || !wifi_ssid_dd || !wifi_pass_ta) return;
+    char c;
+    if (!keypad_get_val(&c)) return;
+    keypad_set_flag();
+
+    if (wifi_cfg_field == 0) {
+        if (lv_dropdown_is_open(wifi_ssid_dd)) {
+            /* dropdown list open: +/- (Sym layer) move, Enter pick, Backspace cancel */
+            int cnt = lv_dropdown_get_option_cnt(wifi_ssid_dd);
+            if (c == '+') {
+                if (!wifi_scan_empty && cnt > 0) {
+                    int s = lv_dropdown_get_selected(wifi_ssid_dd);
+                    lv_dropdown_set_selected(wifi_ssid_dd, (s + 1) % cnt);
+                }
+            } else if (c == '-') {
+                if (!wifi_scan_empty && cnt > 0) {
+                    int s = lv_dropdown_get_selected(wifi_ssid_dd);
+                    lv_dropdown_set_selected(wifi_ssid_dd, (s + cnt - 1) % cnt);
+                }
+            } else if (c == '\n') {
+                if (!wifi_scan_empty) {
+                    char buf[65];
+                    lv_dropdown_get_selected_str(wifi_ssid_dd, buf, sizeof(buf));
+                    strncpy(wifi_ssid, buf, sizeof(wifi_ssid) - 1);
+                }
+                lv_dropdown_close(wifi_ssid_dd);
+                wifi_cfg_field = 1;
+                wifi_cfg_refresh();
+            } else if (c == '\b') {
+                lv_dropdown_close(wifi_ssid_dd);
+                wifi_cfg_refresh();
+            }
+            return;
+        }
+        if (c == '\n') {
+            snprintf(wifi_status, sizeof(wifi_status), "Scanning...");
+            lv_label_set_text(wifi_status_lab, wifi_status);
+            lv_timer_handler();
+            wifi_cfg_scan();
+            lv_dropdown_open(wifi_ssid_dd);
+        } else if (c == '\b') {
+            wifi_cfg_kbd_active = false;
+            scr_mgr_pop(false);
+        }
+    } else {
+        /* password field */
+        if (c == '\n') {
+            strncpy(wifi_pass, lv_textarea_get_text(wifi_pass_ta), sizeof(wifi_pass) - 1);
+            wifi_cfg_save();
+            wifi_cfg_refresh();
+            wifi_cfg_commit();
+        } else if (c == '\b') {
+            const char *txt = lv_textarea_get_text(wifi_pass_ta);
+            if (txt && txt[0] != '\0') {
+                lv_textarea_del_char(wifi_pass_ta);
+            } else {
+                wifi_cfg_field = 0;
+                wifi_cfg_refresh();
+            }
+        } else {
+            lv_textarea_add_char(wifi_pass_ta, c);
+        }
+    }
+}
+
 static void scr4_1_btn_event_cb(lv_event_t * e)
 {
     if(e->code == LV_EVENT_CLICKED){
+        wifi_cfg_kbd_active = false;
         scr_mgr_pop(false);
     }
 }
 
-static void create4_1(lv_obj_t *parent) 
+static void create4_1(lv_obj_t *parent)
 {
-
-
-    // back
     scr_back_btn_create(parent, "Wifi Config", scr4_1_btn_event_cb);
+
+    lv_obj_t *cont = lv_obj_create(parent);
+    lv_obj_set_size(cont, 230, 270);
+    lv_obj_align(cont, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_set_style_border_width(cont, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(cont, 4, LV_PART_MAIN);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(cont, 4, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+
+    wifi_ssid_lab = lv_label_create(cont);
+    lv_obj_set_style_text_font(wifi_ssid_lab, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_width(wifi_ssid_lab, lv_pct(100));
+
+    wifi_ssid_dd = lv_dropdown_create(cont);
+    lv_obj_set_width(wifi_ssid_dd, lv_pct(100));
+    lv_obj_set_height(wifi_ssid_dd, 34);
+    lv_dropdown_set_options(wifi_ssid_dd, "(Enter: scan)");
+    lv_dropdown_set_selected(wifi_ssid_dd, 0);
+    lv_obj_set_style_text_font(wifi_ssid_dd, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_font(lv_dropdown_get_list(wifi_ssid_dd), &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_add_event_cb(wifi_ssid_dd, wifi_dd_value_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    wifi_pass_lab = lv_label_create(cont);
+    lv_obj_set_style_text_font(wifi_pass_lab, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_width(wifi_pass_lab, lv_pct(100));
+
+    wifi_pass_ta = lv_textarea_create(cont);
+    lv_obj_set_width(wifi_pass_ta, lv_pct(100));
+    lv_obj_set_height(wifi_pass_ta, 34);
+    lv_textarea_set_one_line(wifi_pass_ta, true);
+    lv_textarea_set_max_length(wifi_pass_ta, 64);
+    lv_textarea_set_placeholder_text(wifi_pass_ta, "password");
+    lv_obj_set_style_text_font(wifi_pass_ta, &lv_font_montserrat_14, LV_PART_MAIN);
+
+    wifi_status_lab = lv_label_create(cont);
+    lv_obj_set_style_text_font(wifi_status_lab, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(wifi_status_lab, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_label_set_long_mode(wifi_status_lab, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(wifi_status_lab, lv_pct(100));
+
+    lv_obj_t *hint = lv_label_create(cont);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(hint, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_label_set_text(hint, "SSID: Enter=scan  +=/\x2d=select\nPass: Enter=save  Backspace=del/back");
+
+    wifi_cfg_load();
+    wifi_cfg_refresh();
+    wifi_cfg_kbd_active = true;
 }
 
-static void entry4_1(void) 
-{
-    ui_disp_full_refr();
-}
-static void exit4_1(void) {
-    ui_disp_full_refr();
-}
-static void destroy4_1(void) { }
+static void entry4_1(void) { ui_disp_full_refr(); }
+static void exit4_1(void) { ui_disp_full_refr(); }
+static void destroy4_1(void) { wifi_cfg_kbd_active = false; }
 
 static scr_lifecycle_t screen4_1 = {
     .create = create4_1,
@@ -3185,6 +3435,12 @@ void ui_deckpro_entry(void)
 
     extern scr_lifecycle_t screen_voice_ai;
     scr_mgr_register(SCREEN_VOICE_AI_ID, &screen_voice_ai);
+
+    extern scr_lifecycle_t screen_ai_chat;
+    scr_mgr_register(SCREEN_AI_CHAT_ID, &screen_ai_chat);
+
+    extern scr_lifecycle_t screen_ai_cfg;
+    scr_mgr_register(SCREEN_AI_CFG_ID, &screen_ai_cfg);
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);
