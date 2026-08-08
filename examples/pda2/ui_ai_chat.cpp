@@ -14,22 +14,31 @@
 #include "openai_api.h"
 #include "ui_scr_mrg.h"
 
+/* Reviewer #3 fix:
+ *   - Wrap long replies by display width (30 chars per ~16px font = 240px width).
+ *   - Truncate gracefully past CHAT_MAX_LINES with explicit "...(more)" marker.
+ *   - Reuse chat_lines[] as a fixed-size char array so no strtok aliasing. */
 #define CHAT_LINES_PER_PAGE 8
-#define CHAT_MAX_LINES 64
+#define CHAT_MAX_LINES      64
+#define CHAT_LINE_WIDTH     30
+#define CHAT_LINE_LEN       (CHAT_LINE_WIDTH + 1)
+#define CHAT_ANSWER_MAX     4096   /* grown from 2048 to cover longer model replies */
 
 static lv_obj_t *chat_ta = NULL;
 static lv_obj_t *chat_status_lab = NULL;
 static lv_obj_t *chat_answer_lab = NULL;
 static bool chat_kbd_active = false;
 static bool chat_viewing = false;
+static bool chat_truncated = false;
 static int  chat_page = 0;
-static char chat_answer[2048] = {0};
+static char chat_answer[CHAT_ANSWER_MAX] = {0};
+static char chat_lines_storage[CHAT_MAX_LINES][CHAT_LINE_LEN];
 static char *chat_lines[CHAT_MAX_LINES];
 static int  chat_line_cnt = 0;
 
 static void chat_render(void)
 {
-    static char page_buf[512];
+    static char page_buf[CHAT_LINES_PER_PAGE * CHAT_LINE_LEN + 8];
     int pos = 0;
     page_buf[0] = '\0';
 
@@ -42,7 +51,31 @@ static void chat_render(void)
 
     lv_label_set_text(chat_answer_lab, page_buf);
     int pages = (chat_line_cnt + CHAT_LINES_PER_PAGE - 1) / CHAT_LINES_PER_PAGE;
-    lv_label_set_text_fmt(chat_status_lab, "Page %d/%d - c:cfg", chat_page + 1, pages);
+    if (pages == 0) pages = 1;
+    lv_label_set_text_fmt(chat_status_lab, "Page %d/%d%s",
+                          chat_page + 1, pages,
+                          chat_truncated ? " (truncated)" : "");
+}
+
+/* Break one source line into <=CHAT_LINE_WIDTH-char display lines, pushing
+ * into chat_lines[]. Stops if CHAT_MAX_LINES reached, marks chat_truncated. */
+static void chat_push_wrapped(const char *src)
+{
+    int slen = (int)strlen(src);
+    int i = 0;
+    while (i < slen) {
+        if (chat_line_cnt >= CHAT_MAX_LINES) {
+            chat_truncated = true;
+            return;
+        }
+        int take = slen - i;
+        if (take > CHAT_LINE_WIDTH) take = CHAT_LINE_WIDTH;
+        memcpy(chat_lines_storage[chat_line_cnt], src + i, take);
+        chat_lines_storage[chat_line_cnt][take] = '\0';
+        chat_lines[chat_line_cnt] = chat_lines_storage[chat_line_cnt];
+        chat_line_cnt++;
+        i += take;
+    }
 }
 
 static void chat_send(void)
@@ -69,14 +102,17 @@ static void chat_send(void)
         chat_answer[sizeof(chat_answer) - 1] = '\0';
 
         chat_line_cnt = 0;
+        chat_truncated = false;
         char *save = NULL;
-        char *tok = strtok_r(chat_answer, "\n", &save);
-        while (tok && chat_line_cnt < CHAT_MAX_LINES) {
-            chat_lines[chat_line_cnt++] = tok;
-            tok = strtok_r(NULL, "\n", &save);
+        char *line = strtok_r(chat_answer, "\n", &save);
+        while (line) {
+            chat_push_wrapped(line);
+            line = strtok_r(NULL, "\n", &save);
+            if (chat_truncated) break;
         }
         if (chat_line_cnt == 0) {
-            chat_lines[0] = (char *)"(no reply)";
+            strncpy(chat_lines_storage[0], "(no reply)", CHAT_LINE_LEN - 1);
+            chat_lines[0] = chat_lines_storage[0];
             chat_line_cnt = 1;
         }
         chat_page = 0;
@@ -187,6 +223,7 @@ static void chat_destroy(void)
     chat_viewing = false;
     chat_page = 0;
     chat_line_cnt = 0;
+    chat_truncated = false;
 }
 
 scr_lifecycle_t screen_ai_chat = {

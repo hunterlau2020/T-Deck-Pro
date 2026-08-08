@@ -1564,7 +1564,13 @@ static int wifi_cfg_scan(void)
 }
 
 /* Touch path: an item in the open dropdown list was tapped. LVGL closes the
- * list and fires VALUE_CHANGED; copy the picked SSID and jump to password. */
+ * list and fires VALUE_CHANGED; copy the picked SSID and jump to password.
+ *
+ * NOTE (reviewer #6): pda2 factory retains the touch driver, so this
+ * callback is reachable on this hardware. The allinone build (no touch)
+ * will NOT call lv_indev_drv_register for pointer, so this callback will
+ * never fire there — the keypad pick path in wifi_cfg_keyboard_poll() is
+ * the only path that matters. Keep the callback for pda2 hybrid UX. */
 static void wifi_dd_value_cb(lv_event_t *e)
 {
     if (wifi_scan_empty) return;

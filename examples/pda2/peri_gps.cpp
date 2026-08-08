@@ -3,12 +3,17 @@
 #include "peripheral.h"
 #include <TinyGPS++.h>
 
+#include <freertos/FreeRTOS.h>
+
 /* clang-format off */
 
 TinyGPSPlus gps;
 static bool GPS_Recovery();
 bool setupGPS();
 void displayInfo();
+
+/* gps_snapshot_t declared in peripheral.h so ui_deckpro_port.cpp can call
+ * gps_get_snapshot() across translation units. */
 
 static TaskHandle_t gps_handle;
 static double gps_lat=0, gps_lng=0, gps_altitude=0, gps_speed=0;
@@ -114,6 +119,28 @@ void gps_get_satellites(uint32_t *vsat)
 void gps_get_speed(double *speed)
 {
     *speed = gps_speed;
+}
+
+/* Fill *out atomically. Disable preemption just long enough to copy all
+ * fields (microseconds) so the caller sees a consistent snapshot. */
+static portMUX_TYPE s_gps_snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
+
+void gps_get_snapshot(gps_snapshot_t *out)
+{
+    if (!out) return;
+    taskENTER_CRITICAL(&s_gps_snapshot_mux);
+    out->lat = gps_lat;
+    out->lng = gps_lng;
+    out->altitude = gps_altitude;
+    out->speed = gps_speed;
+    out->year = gps_year;
+    out->month = gps_month;
+    out->day = gps_day;
+    out->hour = gps_hour;
+    out->minute = gps_minute;
+    out->second = gps_second;
+    out->vsat = gps_vsat;
+    taskEXIT_CRITICAL(&s_gps_snapshot_mux);
 }
 
 /* clang-format on */

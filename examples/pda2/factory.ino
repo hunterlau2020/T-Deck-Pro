@@ -44,6 +44,7 @@ static constexpr uint16_t FACTORY_BQ25896_SYS_POWER_DOWN_MV = 3300;
 static constexpr uint32_t FACTORY_BQ25896_RUNTIME_CHECK_MS = 5000;
 static constexpr uint32_t FACTORY_BQ25896_RECOVERY_COOLDOWN_MS = 30000;
 static constexpr uint32_t FACTORY_EPD_SPI_HZ = 2000000;
+static constexpr uint32_t FACTORY_EPD_FULL_REFRESH_INTERVAL = 60; /* partial flushes (~minutes) between EPD full-waveform refreshes */
 
 // TouchDrvCSTXXX touch;
 using InkPanel = GxEPD2_310_GDEQ031T10;
@@ -219,8 +220,22 @@ static void flush_epd_bitmap(const lv_area_t *area)
 static void flush_timer_cb(lv_timer_t *t)
 {
     static int idx = 0;
+    static int part_count = 0;
     lv_disp_t *disp = lv_disp_get_default();
     if(disp->rendering_in_progress == false) {
+        /* Reviewer #5 fix: every FACTORY_EPD_FULL_REFRESH_INTERVAL partial
+         * flushes (≈ minutes of activity), force a full EPD waveform refresh
+         * to clear accumulated ghosting. Without this, the partial-only path
+         * leaves ghosting on GDEQ031T10 after sustained use. */
+        if (disp_refr_mode == DISP_REFR_MODE_PART) {
+            if (++part_count >= FACTORY_EPD_FULL_REFRESH_INTERVAL) {
+                disp_refr_mode = DISP_REFR_MODE_FULL;
+                part_count = 0;
+            }
+        } else {
+            part_count = 0;
+        }
+
         lv_area_t full_area;
         full_area.x1 = 0;
         full_area.y1 = 0;
@@ -228,7 +243,7 @@ static void flush_timer_cb(lv_timer_t *t)
         full_area.y2 = LCD_VER_SIZE - 1;
 
         flush_epd_bitmap(&full_area);
-        
+
         Serial.printf("flush_timer_cb:%d, %s\n", idx++, (disp_refr_mode == DISP_REFR_MODE_FULL ? "full" : "part"));
 
         disp_refr_mode = DISP_REFR_MODE_PART;
