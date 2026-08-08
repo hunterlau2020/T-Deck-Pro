@@ -13,11 +13,32 @@
 
 using namespace std;
 
+typedef enum {
+    HTTP_TLS_CA_VERIFY = 0,   /* validate chain against built-in CA bundle */
+    HTTP_TLS_INSECURE  = 1,   /* skip verification (user opted in) */
+} http_tls_mode_t;
+
 typedef struct {
     int status_code;
     string body;
     bool success;
 } http_response_t;
+
+/**
+ * @brief Set TLS verification mode applied to all subsequent http_get/post calls.
+ *        Default is HTTP_TLS_CA_VERIFY. On CA auth failure, response success=false
+ *        is returned (no fallback to insecure).
+ *
+ *        Built-in CA bundle (reviewer #2 fix):
+ *          - ISRG Root X1 (Let's Encrypt) — covers openrouter.ai, *.openrouter.ai
+ *          - DigiCert Global Root G2       — covers many commercial CDNs
+ *          - GlobalSign Root R1            — covers some EU/AS CN endpoints
+ *        If the user's custom endpoint is signed by an unknown CA, they must
+ *        either point end-point to a known CA or set HTTP_TLS_INSECURE via
+ *        the AI Cfg screen "Trust self-signed" toggle.
+ */
+void http_set_tls_mode(http_tls_mode_t mode);
+http_tls_mode_t http_get_tls_mode(void);
 
 /**
  * @brief Check WiFi connectivity and show popup if disconnected.

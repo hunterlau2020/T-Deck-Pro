@@ -102,6 +102,11 @@ void ui_gps_get_time(uint8_t *hour, uint8_t *minute, uint8_t *second);
 void ui_gps_get_satellites(uint32_t *vsat);
 void ui_gps_get_speed(double *speed);
 
+/* Reviewer #4: atomic snapshot of all GPS fields. gps_snapshot_t is defined
+ * in peripheral.h; alias here so the UI side keeps its own type name. */
+typedef gps_snapshot_t ui_gps_snapshot_t;
+void ui_gps_get_snapshot(ui_gps_snapshot_t *out);
+
 // [ screen 4 ] --- Wifi Scan
 void ui_wifi_get_scan_info(ui_wifi_scan_info_t *list, int list_len);
 

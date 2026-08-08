@@ -64,4 +64,16 @@ void gps_get_time(uint8_t *hour, uint8_t *minute, uint8_t *second);
 void gps_get_satellites(uint32_t *vsat);
 void gps_get_speed(double *speed);
 
+/* Reviewer #4: atomic snapshot of all GPS fields (filled under a critical
+ * section by gps_get_snapshot, see peri_gps.cpp). */
+typedef struct {
+    double lat, lng, altitude, speed;
+    uint16_t year;
+    uint8_t month, day;
+    uint8_t hour, minute, second;
+    uint32_t vsat;
+} gps_snapshot_t;
+
+void gps_get_snapshot(gps_snapshot_t *out);
+
 #endif
