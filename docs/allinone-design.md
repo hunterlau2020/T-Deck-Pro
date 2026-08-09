@@ -1,8 +1,9 @@
 # 设计方案：allinone 整合固件（GPS + MP3 + 键盘 + 网络词典 + WiFi 配置 + AI 对话）
 
-> 状态：**评审通过**（2026-08-08）；开始阶段 0：pda2 预研（见 `TODO.md`）
+> 状态：**评审未通过**（2026-08-09）— 7 项新 finding 待修订（见 [评审结果](allinone-design-review-result.md)）
+> 原评审：2026-08-08 通过；2026-08-09 二次评审：5 项通过 / 4 项不通过 / 2 项缺证据；新增 2 High + 5 Medium
 > 日期：2026-08-07
-> 相关文档：[代码结构与编译方法](build-and-code-structure.md)
+> 相关文档：[代码结构与编译方法](build-and-code-structure.md)、[评审申请书](allinone-design-review-request.md)、[评审结果](allinone-design-review-result.md)
 
 ## 1. 背景与目标
 
@@ -45,9 +46,27 @@
 - JSON 用 cJSON（ESP32 SDK 自带，`#include <cJSON.h>`），仓库无 ArduinoJson。
 - **词典接口已现成实现**：`examples/pda2/dict_lookup.cpp::dict_lookup_online(word, result)` —— WiFi 检查 → `snprintf` 拼 URL → `http_get(url, 8000)` → cJSON 解析，UI 为 `ui_dictionary.cpp`。
 
-> ⚠️ **HTTPS 安全注意（评审 #2 修复）**：`http_get`/`http_post` 内部用 `WiFiClientSecure::setInsecure()`，**关闭 TLS 证书校验**，API Key 在 MITM 网络可被窃取（评审 High）。
+> ⚠️ **HTTPS 安全注意（评审 #2 修复 + 二次评审 #1.1 修订）**：`http_get`/`http_post` 内部用 `WiFiClientSecure::setInsecure()`，**关闭 TLS 证书校验**，API Key 在 MITM 网络可被窃取（评审 High）。
 >
-> **allinone 策略**：新增 `http_tls_mode_t { HTTP_TLS_CA_VERIFY, HTTP_TLS_INSECURE }` + `http_set_tls_mode(mode)`。**默认 `HTTP_TLS_CA_VERIFY`**：内置 ISRG Root X1（Let's Encrypt）+ DigiCert Global Root G2 + GlobalSign Root R1，覆盖 99% 公网 HTTPS 证书（含 `openrouter.ai`、`dictionaryapi.dev`）。用户配置自定义端点时，如果证书不在内置列表，`http_require_wifi` 通过但请求会返回 `Failed to verify`；需在 AI Cfg 屏勾选 **"Trust self-signed"（置 NVS `ai_insecure=1`）** 后该次会话切到 `HTTP_TLS_INSECURE`，**屏幕提示"⚠️ TLS bypass"**。词典请求**强制 CA 验证**（无 API Key，风险面小，沿用安全路径）。
+> **allinone 策略**：新增 `http_tls_mode_t { HTTP_TLS_CA_VERIFY, HTTP_TLS_INSECURE }` + `http_set_tls_mode(mode)`。**默认 `HTTP_TLS_CA_VERIFY`**。
+>
+> **CA bundle 选型（评审 #1.1 修订）**：内置 CA 必须能覆盖默认端点的实际签发链。
+> - 默认端点：`openrouter.ai` 与 `dictionaryapi.dev` 均使用 **GTS (Google Trust Services)** 签发（`GTS CA 1C3`），链根为 **GTS Root R1**（cross-signed）/ **GTS Root R3**（2016 起为 active root）。
+> - Let's Encrypt 端点（如自建 reverse proxy、Cloudflare 部分边缘节点）：**ISRG Root X1** + **IdenTrust Commercial Root CA 1**（ISRG X1 的 cross-sign）。
+> - 旧式 GlobalSign：保留 **GlobalSign Root R3** 兼容。
+>
+> 最终 `CA_BUNDLE` 必须包含：
+> 1. `GTS Root R1`（pem）
+> 2. `GTS Root R3`（pem）
+> 3. `ISRG Root X1`（pem）
+> 4. `IdenTrust Commercial Root CA 1`（pem，ISRG cross-sign）
+> 5. `GlobalSign Root R3`（pem）
+>
+> **bundle 维护流程**：每次更换默认端点前必须用 `openssl s_client -connect <host>:443 -showcerts </dev/null` 抓取完整链，对照 [ccadb](https://ccadb.my.salesforce.com/) 与 [chrome root store](https://chromium.googlesource.com/chromium/src/+/main/net/data/ssl/chrome_root_store/root_store.md) 确认每个 intermediate 的 root 在 bundle 内；抓取脚本与最后验证日期写入 `examples/pda2/scripts/ca_bundle_check.sh`（**实施时新建**），作为 CI smoke test。
+>
+> **首次握手 smoke test（评审 #1.1 验收）**：`allinone.ino::setup()` 末尾，若 WiFi 已配，串口打印两次握手结果：`[TLS] openrouter.ai → OK / FAILED (reason)` 与 `[TLS] dictionaryapi.dev → OK / FAILED`。两次均必须 `OK`，否则 `WiFi` 屏右上角持续 `!`（即便 `WiFi.status()==WL_CONNECTED`）。
+>
+> 用户配置自定义端点时，如果证书不在内置列表，`http_require_wifi` 通过但请求会返回 `Failed to verify`；需在 AI Cfg 屏勾选 **"Trust self-signed"（置 NVS `ai_insecure=1`）** 后该次会话切到 `HTTP_TLS_INSECURE`，**屏幕提示"⚠️ TLS bypass"**。词典请求**强制 CA 验证**（无 API Key，风险面小，沿用安全路径）。
 
 ### 2.4 外设 / 启动
 - `peri_gps.cpp`：FreeRTOS 任务解析 NMEA + UBX 恢复握手，`gps_get_coord/time/satellites/speed` 等 getter，`gps_task_suspend/resume` 控制任务启停。
@@ -69,9 +88,11 @@
 
 ## 4. 屏幕设计
 
-共 8 屏（菜单 + 7 个功能屏），全部由 keypad 驱动（触摸已移除 → 无 LVGL pointer indev，按钮点击事件不触发，导航走 `*_keyboard_poll`）：
+共 **9 屏**（菜单 + **8** 个功能屏），全部由 keypad 驱动（触摸已移除 → 无 LVGL pointer indev，按钮点击事件不触发，导航走 `*_keyboard_poll`）：
 
-**按键层说明**：keypad 有三层——普通层小写 a-z + 空格 + `\n`/`\b`（`peri_keypad.cpp::keymap`）；**Shift 层大写 A-Z**（按住 Shift(2,0) 临时切换，`peri_keypad.cpp::keymap_shift`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（`peri_keypad.cpp::keymap_sym`，按 Sym(3,8) 锁定/解锁）。本文中所有"数字键 `1`-`6`"、"`+`/`-`"均指 **Sym 层对应键**——先按 Sym 进入符号层再按对应键，结束再按 Sym 退出。
+> **评审 #1.5 修订**：之前版本写"8 屏（菜单 + 7 功能屏）"与菜单列出的 8 项入口（GPS/Music/Dict/Keys/WiFi/**WiFi Cfg**/AI/**AI Cfg**）自相矛盾——把 WiFi 与 WiFiCfg 算作 1 个、AI 与 AICfg 算作 1 个才会得到 7 功能屏，但菜单需要 8 个跳转目标。**修正**：WiFi 配置作为独立屏（与 WiFi 扫描/状态分开），AI 配置作为独立屏（与 AI 对话分开），所以是菜单 1 + 8 功能屏 = **9 个 `SCREEN_XXX_ID`**。评审 #1 修复（菜单扩到 8 项）保持不变。
+
+**按键层说明**：keypad 有三层——普通层小写 a-z + 空格 + `\n`/`\b`（`peri_keypad.cpp::keymap`）；**Shift 层大写 A-Z**（按住 Shift(2,0) 临时切换，`peri_keypad.cpp::keymap_shift`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（`peri_keypad.cpp::keymap_sym`，按 Sym(3,8) 锁定/解锁）。本文中所有"数字键 `1`-`8`"、"`+`/`-`"均指 **Sym 层对应键**——先按 Sym 进入符号层再按对应键，结束再按 Sym 退出。
 
 | SCREEN ID | 内容 | 来源 |
 |---|---|---|
@@ -80,7 +101,8 @@
 | `SCREEN_MP3_ID` | SD `.mp3` 文件浏览器（分页）+ 播放控制 | 新写 `ui_mp3.cpp` |
 | `SCREEN_DICT_ID` | keypad 输入英文单词 → 在线查询 → 显示音标 + 释义（前 3 条） | 复制 `ui_dictionary.cpp` + `dict_lookup.cpp` |
 | `SCREEN_KEYPAD_ID` | 键盘回显测试：按键字符 + 0xHEX + 累计次数 | 新写 `ui_keypad.cpp` |
-| `SCREEN_WIFI_ID` | WiFi 配置：输入 SSID/密码 → 存 NVS → 连接 → 显示 IP/状态 | 新写 `ui_wifi_config.cpp` |
+| `SCREEN_WIFI_ID` | WiFi 状态/扫描：显示当前 SSID/IP/RSSI，扫描周围 AP 列表 | 新写 `ui_wifi_status.cpp` |
+| `SCREEN_WIFI_CFG_ID` | WiFi 配置：输入 SSID/密码 → 存 NVS → 连接 → 显示 IP/状态 | 新写 `ui_wifi_config.cpp` |
 | `SCREEN_AI_ID` | AI 文本对话：输入问题 → 调 OpenAI 兼容接口 → 显示回答 | 新写 `ui_ai_chat.cpp` |
 | `SCREEN_AI_CFG_ID` | AI 配置：端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key → 存 NVS | 新写 `ui_ai_cfg.cpp` |
 
@@ -88,7 +110,7 @@
 - 浏览态：Sym 层 `1`-`6` 选文件（先按 Sym）；`\n` 下一页（回卷）；`\b` 上一页，首页再按 `\b` 退出回菜单（`audio.stopSong()` + `scr_mgr_pop`）。
 - 播放态：`' '` 暂停/继续；`n`/`\n` 下一首；`p` 上一首；Sym 层 `+`/`-` 音量（0-21）；`\b` 回浏览态。
 - 扫描 `/music`（不存在则回退根目录），过滤 `.mp3`（上限 ~40 条）；`audio.connecttoFS(SD, path)`。
-- 强定义弱回调 `audio_eof_mp3()`：自动切下一首（回卷）。
+- 强定义弱回调 `void audio_eof_mp3(const char *info)`：自动切下一首（回卷）。**评审 #1.7 修订**：统一为带参形式，与 `lib/ESP32-audioI2S/src/Audio.h` 一致；无参形式绑定不到符号、自动切歌不触发。
 
 ### 词典屏
 - 完全复用 pda2 实现。可选增强：`create` 时若 `audio.isRunning()` 则 `audio.stopSong()`，避免 8s HTTP 阻塞期间音乐卡顿。
@@ -125,13 +147,13 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 ### 5.2 复制后裁剪
 | 文件 | 裁剪要点 |
 |---|---|
-| `factory.ino` → **`allinone.ino`** | setup()：去掉 BQ/DRV2605 驱动（**保留 I2C 0x5A 版本探测** → `isT_Deck_Pro_v1_1`，见 §3）/BHI260AP/A7682E/`configTzTime`，并删除全部触摸初始化/注册/轮询代码（见下方"触摸相关代码清理清单"）；保留 GPIO 上电、SPI CS、`shared_spi_bus_init`、I2C 扫描、SPIFFS、`SPI.begin`；peri 初始化精简为 ink_screen / keypad / sd_care_init / gps_init / pcm5102a_init（无条件）；启动时从 NVS 读 WiFi 凭据（有则 `WiFi.begin`）。loop()：`lv_task_handler` + `keypad_loop` + 8 个 `*_keyboard_poll`（menu/gps/mp3/dict/keypadtest/wifi_cfg/ai_chat/ai_cfg）+ `audio.loop` |
+| `factory.ino` → **`allinone.ino`** | setup()：去掉 BQ/DRV2605 驱动（**保留 I2C 0x5A 版本探测** → `isT_Deck_Pro_v1_1`，见 §3）/BHI260AP/A7682E，并删除全部触摸初始化/注册/轮询代码（见下方"触摸相关代码清理清单"）；**保留 `configTzTime("CST-8", "pool.ntp.org", "time.nist.gov", "cn.pool.ntp.org")`**（评审 #1.2 修订：ESP32 冷启动系统时间为 0 或编译时间，证书链 `notBefore`/`notAfter` 校验直接 fail → 所有 HTTPS 不可用，NTP 同步是 TLS 校验前提）；保留 GPIO 上电、SPI CS、`shared_spi_bus_init`、I2C 扫描、SPIFFS、`SPI.begin`；peri 初始化精简为 ink_screen / keypad / sd_care_init / gps_init / pcm5102a_init（无条件）；启动时从 NVS 读 WiFi 凭据（有则 `WiFi.begin`）。loop()：`lv_task_handler` + `keypad_loop` + 8 个 `*_keyboard_poll`（menu/gps/mp3/dict/keypadtest/wifi_cfg/ai_chat/ai_cfg）+ `audio.loop` |
 | `factory.h` | 去掉 TinyGSM/BQ/DRV/TouchDrv；保留 `Audio audio`、`peri_init_st[]`、`shared_spi_*`、`disp_full_refr` |
 | `peripheral.h` | `E_PERI_*` 裁为 `{KYEPAD, SD, GPS, PCM5102A, INK_SCREEN, NUM_MAX}`；保留 keypad/gps 原型 |
-| `ui_deckpro.h` | `SCREEN_XXX_ID` 裁为 8 个；保留 `struct menu_btn`、`scr_back_btn_create`、`ui_deckpro_entry` |
-| `ui_deckpro.cpp` | 删除 low-voltage 块、screen1-12、taskbar/gesture/touch 定时器；保留 `scr_back_btn_create` + 菜单（`menu_btn_list` 裁为 8 项，`menu_btn_event_cb` 已存在）；`FONT_*` 宏改指 `&lv_font_montserrat_14`；`ui_deckpro_entry()` 只注册 8 屏；新增 `menu_keyboard_poll()`（`'1'`-`'8'` → `scr_mgr_push`） |
+| `ui_deckpro.h` | `SCREEN_XXX_ID` 裁为 **9 个**（评审 #1.5 修订：`SCREEN0_ID` + `SCREEN_GPS_ID` + `SCREEN_MP3_ID` + `SCREEN_DICT_ID` + `SCREEN_KEYPAD_ID` + `SCREEN_WIFI_ID` + `SCREEN_WIFI_CFG_ID` + `SCREEN_AI_ID` + `SCREEN_AI_CFG_ID`）；保留 `struct menu_btn`、`scr_back_btn_create`、`ui_deckpro_entry` |
+| `ui_deckpro.cpp` | 删除 low-voltage 块、screen1-12、taskbar/gesture/touch 定时器；保留 `scr_back_btn_create` + 菜单（`menu_btn_list` 裁为 8 项，`menu_btn_event_cb` 已存在）；`FONT_*` 宏改指 `&lv_font_montserrat_14`；`ui_deckpro_entry()` 只注册 **9 屏**（评审 #1.5 修订）；新增 `menu_keyboard_poll()`（`'1'`-`'8'` → `scr_mgr_push`，8 个目标对应 8 个非菜单 `SCREEN_XXX_ID`） |
 | `ui_deckpro_port.h / .cpp` | 只保留 `ui_disp_full_refr`、`ui_gps_task_suspend/resume`、`ui_gps_get_coord/data/time/satellites/speed`、`ui_input_get_keypay_val/set_flag` |
-| `peri_gps.cpp` | `gps_task_suspend/resume`（`gps_task_suspend`/`gps_task_resume` 函数定义）加 **NULL 守卫**；`gps_init` 握手失败时不创建任务（`gps_init` 函数体），`gps_handle` 保持 NULL；**评审 #4 修复**：12 个快照字段（`gps_lat/lng/alt/speed/year/month/day/hour/minute/second/vsat`）由 `displayInfo()` 在 GPS 任务中无锁写，LVGL 端 5 次 getter 组合成快照会被任务打断。修复：定义 `gps_snapshot_t` 结构 + `gps_get_snapshot(snapshot_t*)` 函数，函数内 `taskENTER_CRITICAL` 一次性拷贝所有字段（持有时间 < 1μs），退出临界区。`ui_gps_enhanced.cpp` 改用 `ui_gps_get_snapshot()` 一次读完 |
+| `peri_gps.cpp` | `gps_task_suspend/resume`（`gps_task_suspend`/`gps_task_resume` 函数定义）加 **NULL 守卫**；`gps_init` 握手失败时不创建任务（`gps_init` 函数体），`gps_handle` 保持 NULL；**评审 #4 修复 + #1.3 修订**：12 个快照字段（`gps_lat/lng/alt/speed/year/month/day/hour/minute/second/vsat`）读写两端必须都受临界段保护。修复：<br>① 定义 `gps_snapshot_t { lat, lng, altitude, speed, year, month, day, hour, minute, second, vsat }`（**共享头**：`peripheral.h`，让 `ui_deckpro_port.cpp` 也能 `typedef gps_snapshot_t ui_gps_snapshot_t`，避免跨 TU 不可见）<br>② **写端**：`displayInfo()` 在 GPS 任务中先填一个**局部 `gps_snapshot_t snap`**，**整结构赋值完毕后** `taskENTER_CRITICAL(&mux)` 一次性 `memcpy(g_shared, &snap, sizeof(snap))`，`taskEXIT_CRITICAL`；**不在临界段内调用 `gps.encode()` 或任何可能阻塞/让出的操作**。<br>③ **读端**：`gps_get_snapshot(out)` 同样 `taskENTER_CRITICAL` 后整结构 `memcpy(out, g_shared, sizeof(*out))`，退出。<br>④ UI 侧：`ui_gps_enhanced.cpp::gps_keyboard_poll` 与 3s 定时器**统一**改为 `ui_gps_get_snapshot(&s)` 一次读取，**禁止**再调 5 个旧 getter（`ui_gps_get_coord/time/satellites/speed`）。<br>⑤ `peri_gps.cpp::gps_get_coord/data/time/satellites/speed` 旧 getter 标记 `__attribute__((deprecated))`（保留兼容 pda2 其它屏，但 GPS 屏不用）。 |
 | `ui_gps_enhanced.cpp` | GPS 屏 `entry()` 先查 GPS 可用性（`gps_handle != NULL`），失败显示 "No GPS" 且不 `ui_gps_task_resume()`；3s 定时刷新直接 `ui_gps_get_snapshot()` |
 
 **GPS 空句柄防护**（评审 High）：`gps_init()` 握手失败（`peri_gps.cpp::gps_init` 内 UBX 恢复分支）时不创建任务，`gps_handle=NULL`；进 GPS 屏仍 `ui_gps_task_resume()` → `vTaskResume(NULL)` 崩溃（`peri_gps.cpp::gps_task_resume` → `ui_deckpro_port.cpp::ui_gps_task_resume` → `ui_gps_enhanced.cpp::gps_screen_entry`）。复制时按上表两行修复。
@@ -158,7 +180,7 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 | `ui_mp3.cpp` | `ensure_sd()`（`shared_spi_lock` + `SD.begin(48)`）、`scan_files()`、分页列表渲染、播放/暂停/切歌/音量、`void audio_eof_mp3(const char *info)` 强定义（评审 #7 修复：ESP32-audioI2S 的 `audio_eof_mp3` 弱回调实际签名带 `const char *info` 参数，写成无参绑定不到符号）、`mp3_keyboard_poll`、`scr_lifecycle_t screen_mp3` |
 | `ui_keypad.cpp` | 返回按钮 + 提示 + 回显标签、`keypadtest_keyboard_poll`（`\b` 返回菜单）、`scr_lifecycle_t screen_keypad` |
 | `ui_wifi_config.cpp` | **SSID 为 `lv_dropdown`（`WiFi.scanNetworks()` 结果）**：`\n` 扫描+展开，`+`/`-`（Sym 层）移动、`\n` 选中跳密码、`\b` 取消（**评审 #6 修复：不挂 `LV_EVENT_VALUE_CHANGED` 触摸回调**，因 design §5.2 删触摸；选中读取走 `lv_dropdown_get_selected_str` + `lv_dropdown_close`）；**密码独立 `lv_textarea`**：`\n` 保存+连接、`\b` 退格/回 SSID → `Preferences`（namespace `wifi`）存 NVS → `WiFi.begin` 连接 → 显示状态/IP/失败原因、`wifi_cfg_keyboard_poll`、`scr_lifecycle_t screen_wifi`。无 `w`/`1` 保留键 |
-| `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（浏览回答时 `\n` 下一页/`\b` 回上一页或退出；**无 `c` 快捷键**，AI 配置走菜单）、`scr_lifecycle_t screen_ai_chat` |
+| `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（浏览回答时 `\n` 下一页/`\b` 回上一页或退出；**无 `c` 快捷键**，AI 配置走菜单）、`scr_lifecycle_t screen_ai_chat`。**评审 #1.6 修订 — UTF-8 安全分页**：必须按 **UTF-8 码点边界**断行，禁止 `strlen()/memcpy()` 字节切。规则：<br>① 输入：`openai_chat()` 返回的字节流按 UTF-8 解码为 codepoint 序列；连续 ASCII 视为单列，连续 CJK/全角视为双列，emoji 按 `wcwidth()` 视为 2 列。<br>② 断行：从行首累计显示列数；下一个 codepoint 会让累计列数 **> 30 列**时，在该 codepoint 之前断行（即只切到 codepoint 边界，绝不在 continuation byte `0x80-0xBF` 中间断开）。<br>③ 推荐实现：直接用 `lv_txt_get_next_line()` 或 LVGL 内置 `lv_label_set_text` + `LV_LABEL_LONG_BREAK` 模式，让 LVGL 处理断行——避免重造轮子。<br>④ 显示宽度基准：EPD 240px ÷ 14pt 字体 ≈ 30 列（ASCII）/ 15 列（CJK）。<br>⑤ `(truncated)` 标记仍按字节截断位置放在末尾（4096B 缓冲满时）。 |
 | `ui_ai_cfg.cpp` | 端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key 三字段，`\n` 确认当前字段并跳下一字段（末字段 `\n` 存 NVS namespace `ai` + 退出）、`\b` 退格/回上一字段；Key 标签掩码显示（`sk-or-v1-***`）、`ai_cfg_keyboard_poll`、`scr_lifecycle_t screen_ai_cfg` |
 | `openai_api.h/.cpp` | **新写 OpenAI 兼容客户端** `openai_chat(prompt, base_url, model, api_key)`：POST `{"model":..., "messages":[{"role":"user","content":...}]}`，**直接复用 `http_post`**（`http_utils.h::http_post` 声明已支持 `auth_header` → `Authorization: Bearer <key>`，`content_type=application/json`），解析 `choices[0].message.content`；默认端点 OpenRouter；TLS 策略见 §2.3 注 |
 | `src/assets.h` | 仅 `LV_IMG_DECLARE` 4 个图标（`extern "C"` 包裹） |
@@ -208,12 +230,18 @@ pio run -e allinone --jobs 8
 
 1. **SD 与 EPD 共享 SPI**：所有显式 SD 操作套 `shared_spi_lock()/unlock()`；`audio.loop()` 流式读不加锁；EPD 只在按键/进屏/GPS 3s 定时器到期时刷新，不做逐帧刷新，缩小冲突窗口。
 2. **`audio.loop()` 必须每轮调用**：不能阻塞。词典 8s `http_get` 为同步阻塞（pda2 原样行为），词典屏与音乐屏互斥，可接受；v1 不做 weather 式后台任务。
-3. **墨水屏刷新术语分层（评审 #5 修复）**：
+3. **墨水屏刷新术语分层（评审 #5 修复 + #1.4 修订）**：
    - **LVGL 整屏提交**（`disp_drv.full_refresh=1`，`factory.ino::lvgl_init`）：LVGL 整屏 area 一次性 flush → EPD flush 走 `setFullWindow()`（GxEPD2 全屏波形）或 `setPartialWindow()`（EPD 局部波形，由 `disp_refr_mode` 决定）。
    - **EPD 局部波形**（`setPartialWindow` + `display->nextPage()` 默认）：GDEQ031T10 局刷 ≈ 250ms，适用于"按键触发的小改动"。
    - **EPD 全屏波形**（`setFullWindow` + `fillScreen(WHITE)`）：GDEQ031T10 全刷 ≈ 1-2s，对应**深色残留累积 → 必须周期性全刷才能将"鬼影"清除**。
    - **现状**：pda2 仅 `ui_disp_full_refr()` 触发 setFullWindow + fillScreen 一次；其他时间走 `setPartialWindow`。**长时间使用后局部刷新会留残影**——必须设计**周期性 EPD 全刷**才能清除。
-   - **allinone 方案**：新增 `epd_force_full_refresh()` 计数器，由 `flush_timer_cb` 每 60 次局部刷新（≈ 累计刷屏分钟级）触发一次 `setFullWindow` + 强制走 EPD 全屏波形；同时 `ui_disp_full_refr()` 进屏时仍强制一次全刷。GPS 屏 3s 定时只写局部。
+   - **allinone 方案（评审 #1.4 修订）**：
+     - **计数器位置必须选真实 flush 路径**。pda2 当前 `factory.ino:318` 把 `disp_drv.render_start_cb = dips_render_start_cb`（注：原代码有拼写 `dips` 应为 `disp`）**整行注释**，导致依赖此回调的 `flush_timer_cb` 永远不会被 LVGL 调用——**之前 commit `27ad8d5` 加的 `FACTORY_EPD_FULL_REFRESH_INTERVAL=60` 计数器因此永远不增长，周期全刷永远不会执行**。
+     - **allinone 修复（任选其一）**：
+       1. **方案 A（推荐）**：把计数器挪进 `disp_drv.flush_cb`（LVGL 真正调用的 EPD 输出回调），每次 flush 完成 `++part_count`，`part_count >= 60` 时下一次 flush 强制 `setFullWindow() + fillScreen(WHITE)` 并 `part_count=0`。此方案不依赖 render_start_cb 注册状态，最稳。
+       2. **方案 B**：保留 `flush_timer_cb` 设计，但 allinone 必须在 `lvgl_init` 里**显式重新注册** `disp_drv.render_start_cb = disp_render_start_cb`（修拼写），且 `flush_timer_cb` 作为此回调内部逻辑。该方案依赖 LVGL 8.3.11 `render_start_cb` 实际触发频率（实测在 partial 模式下每帧调用）。
+     - 同时 `ui_disp_full_refr()` 进屏时仍强制一次全刷。GPS 屏 3s 定时只写局部。
+   - **实施时**：在 `allinone.ino::lvgl_init` 末尾加 `Serial.printf("[EPD] refresh strategy: %s\\n", strategy)` 打印所选方案，便于现场确认；pda2 现有 `factory.ino:318` 注释状态作为参考，不在 allinone 中保留。
 4. **触摸移除**（删除清单见 §5.2）→ 无 pointer indev，按钮 `LV_EVENT_CLICKED` 不触发，所有导航必须靠 keypad poll。
 5. **dictionaryapi.dev 仅英文**：UI 文案用英文（与 pda2 一致）；词不在库返回 404 → 显示 "Word not found"。
 6. **SD 未插卡**：`sd_care_init` false → MP3 屏显示 "No SD"，词典本地扫描快速失败，不崩溃。
@@ -221,6 +249,7 @@ pio run -e allinone --jobs 8
 8. **`.ino` 发现规则**：`allinone/` 顶层只能有一个 `allinone.ino`；已改用 NVS 运行时配置，`config_keys.h` 不再必需。
 9. **keypad 输入限制**：普通层小写 a-z + 空格 + `\n`/`\b`；**Shift 层大写 A-Z**（按住 Shift(2,0)，`peri_keypad.cpp::keymap_shift`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（按 Sym(3,8) 锁定，`peri_keypad.cpp::keymap_sym`），文档中数字/符号按键均需先按 Sym（见 §4 键层说明）。**大写已在 pda2 预研实现**（§1 决策）：大小写 SSID 均可输入；OpenRouter Key `sk-or-v1-...`、模型 ID 多为小写，无需 Shift。
 10. **WiFi/AI 配置屏**：所有联网功能依赖已配好的 WiFi（未配 → 提示先配 WiFi）；AI 请求与词典一样**同步阻塞**（`http_post` 默认 15s 超时，OpenRouter 模型响应可能更慢，可放宽到 30s），AI 屏与音乐屏互斥；Key/端点存 NVS 明文（`Preferences`，namespace `wifi`/`ai`），不打印到日志；OpenRouter 为 OpenAI 兼容接口，个别字段差异以实际响应调通。
+11. **TLS 证书校验依赖系统时间（评审 #1.2 修订）**：ESP32 冷启动系统时间默认为 epoch（1970-01-01）或编译时间，远早于现代证书 `notBefore`（2024+），mbedtls 直接判 `certificate not yet valid` 并 reject。`allinone.ino::setup()` 必须先 `configTzTime()`，然后 `setup()` 末尾轮询 `time(nullptr) > 1700000000`（即 2023-11-14 之后），最多等 30s；超时仍未同步则在 `WiFi` 屏与 `AI Cfg` 屏均显示 `! time not synced`，**首次 HTTPS 请求返回 `Time not synced, retry after NTP sync` 而非 `Failed to verify`**。GPS 1PPS 校时作为 v2 增强（v1 仅 NTP）。
 
 ## 10. 待评审要点
 
