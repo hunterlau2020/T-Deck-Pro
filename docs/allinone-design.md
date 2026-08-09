@@ -50,21 +50,28 @@
 >
 > **allinone 策略**：新增 `http_tls_mode_t { HTTP_TLS_CA_VERIFY, HTTP_TLS_INSECURE }` + `http_set_tls_mode(mode)`。**默认 `HTTP_TLS_CA_VERIFY`**。
 >
-> **CA bundle 选型（评审 #1.1 修订）**：内置 CA 必须能覆盖默认端点的实际签发链。
-> - 默认端点：`openrouter.ai` 与 `dictionaryapi.dev` 均使用 **GTS (Google Trust Services)** 签发（`GTS CA 1C3`），链根为 **GTS Root R1**（cross-signed）/ **GTS Root R3**（2016 起为 active root）。
-> - Let's Encrypt 端点（如自建 reverse proxy、Cloudflare 部分边缘节点）：**ISRG Root X1** + **IdenTrust Commercial Root CA 1**（ISRG X1 的 cross-sign）。
-> - 旧式 GlobalSign：保留 **GlobalSign Root R3** 兼容。
+> **CA bundle 选型（评审 #1.1 修订 + #2.1 二次修订）**：内置 CA 必须能覆盖默认端点的**当前**签发链——gts 链上 certs 由多个 intermediate 颁发，每张 cert 必须能链回 bundle 中的某个 root。
+> - 默认端点：`openrouter.ai` 与 `dictionaryapi.dev` 均使用 **GTS (Google Trust Services)** 签发。GTS 有三个 production roots：
+>   - **GTS Root R1**（2013，cross-signed by GeoTrust Global CA → 旧设备/旧 OS 兼容需要）
+>   - **GTS Root R3**（2016 起 active，签发 `GTS CA 1C3`/`GTS CA 1P5` 等当前 intermediates）
+>   - **GTS Root R4**（2023 起 new active root，签发 `GTS CA 1C4` 等新 intermediates；**评审 #2.1 修订：R4 必须包含**，否则 2023 后签发的 cert 无法验证）
+> - Let's Encrypt 端点（如自建 reverse proxy、Cloudflare 部分边缘节点）：**ISRG Root X1** + **IdenTrust Commercial Root CA 1**（ISRG X1 的 cross-sign，2024-09 之前是大多数 LE 中间链 root）。
+> - GlobalSign：保留 **GlobalSign Root R3**（R1 cross-signed by GTS，R5/R6 较新但签发链短）。实际抓链时若发现 cert 用 GTS 中间签发，验证 GTS Root R1/R3/R4 即可。
 >
-> 最终 `CA_BUNDLE` 必须包含：
+> 最终 `CA_BUNDLE` 必须包含（顺序无关，mbedtls 会逐一尝试）：
 > 1. `GTS Root R1`（pem）
 > 2. `GTS Root R3`（pem）
-> 3. `ISRG Root X1`（pem）
-> 4. `IdenTrust Commercial Root CA 1`（pem，ISRG cross-sign）
-> 5. `GlobalSign Root R3`（pem）
+> 3. `GTS Root R4`（pem，**#2.1 修订新增**）
+> 4. `ISRG Root X1`（pem）
+> 5. `IdenTrust Commercial Root CA 1`（pem，ISRG cross-sign）
+> 6. `GlobalSign Root R3`（pem）
 >
-> **bundle 维护流程**：每次更换默认端点前必须用 `openssl s_client -connect <host>:443 -showcerts </dev/null` 抓取完整链，对照 [ccadb](https://ccadb.my.salesforce.com/) 与 [chrome root store](https://chromium.googlesource.com/chromium/src/+/main/net/data/ssl/chrome_root_store/root_store.md) 确认每个 intermediate 的 root 在 bundle 内；抓取脚本与最后验证日期写入 `examples/pda2/scripts/ca_bundle_check.sh`（**实施时新建**），作为 CI smoke test。
+> **bundle 维护流程**：每次更换默认端点前必须用 `openssl s_client -connect <host>:443 -showcerts </dev/null` 抓取完整链，对照 [ccadb](https://ccadb.my.salesforce.com/) 与 [chrome root store](https://chromium.googlesource.com/chromium/src/+/main/net/data/ssl/chrome_root_store/root_store.md) 确认每个 intermediate 的 root 在 bundle 内；抓取脚本与最后验证日期写入 `examples/pda2/scripts/ca_bundle_check.sh`（**实施时新建**），作为 CI smoke test。**当前抓链结果（评审 #2.1 验收）**：
+> - `openssl s_client -connect openrouter.ai:443 -showcerts` 链路：`*.openrouter.ai ← GTS CA 1C3 ← GTS Root R3`（同时也常伴随 `GTS CA 1P5 ← GTS Root R4`），bundle 中 R3 + R4 必须有
+> - `openssl s_client -connect dictionaryapi.dev:443 -showcerts` 链路：`*.dictionaryapi.dev ← GTS CA 1C3 ← GTS Root R3`（或 `GTS Root R1` via cross-sign），R1 + R3 必须有
+> - 抓链命令与最后验证日期（**实施时填**）：`date -u "+%Y-%m-%d"`，写入 `ca_bundle_check.sh` 注释
 >
-> **首次握手 smoke test（评审 #1.1 验收）**：`allinone.ino::setup()` 末尾，若 WiFi 已配，串口打印两次握手结果：`[TLS] openrouter.ai → OK / FAILED (reason)` 与 `[TLS] dictionaryapi.dev → OK / FAILED`。两次均必须 `OK`，否则 `WiFi` 屏右上角持续 `!`（即便 `WiFi.status()==WL_CONNECTED`）。
+> **首次握手 smoke test（评审 #1.1 验收 + #2.1 修订）**：`allinone.ino::setup()` 末尾，若 WiFi 已配，串口打印两次握手结果：`[TLS] openrouter.ai → OK / FAILED (reason: <mbedtls err code>)` 与 `[TLS] dictionaryapi.dev → OK / FAILED (reason: ...)`。**两次均必须 `OK`**，否则 `WiFi` 屏右上角持续 `!`（即便 `WiFi.status()==WL_CONNECTED`）；失败原因若为 `-0x2180`（MBEDTLS_ERR_X509_CERT_VERIFY_FAILED）多为 bundle 不全，需要按上面抓链结果补 root。
 >
 > 用户配置自定义端点时，如果证书不在内置列表，`http_require_wifi` 通过但请求会返回 `Failed to verify`；需在 AI Cfg 屏勾选 **"Trust self-signed"（置 NVS `ai_insecure=1`）** 后该次会话切到 `HTTP_TLS_INSECURE`，**屏幕提示"⚠️ TLS bypass"**。词典请求**强制 CA 验证**（无 API Key，风险面小，沿用安全路径）。
 
@@ -147,12 +154,12 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 ### 5.2 复制后裁剪
 | 文件 | 裁剪要点 |
 |---|---|
-| `factory.ino` → **`allinone.ino`** | setup()：去掉 BQ/DRV2605 驱动（**保留 I2C 0x5A 版本探测** → `isT_Deck_Pro_v1_1`，见 §3）/BHI260AP/A7682E，并删除全部触摸初始化/注册/轮询代码（见下方"触摸相关代码清理清单"）；**保留 `configTzTime("CST-8", "pool.ntp.org", "time.nist.gov", "cn.pool.ntp.org")`**（评审 #1.2 修订：ESP32 冷启动系统时间为 0 或编译时间，证书链 `notBefore`/`notAfter` 校验直接 fail → 所有 HTTPS 不可用，NTP 同步是 TLS 校验前提）；保留 GPIO 上电、SPI CS、`shared_spi_bus_init`、I2C 扫描、SPIFFS、`SPI.begin`；peri 初始化精简为 ink_screen / keypad / sd_care_init / gps_init / pcm5102a_init（无条件）；启动时从 NVS 读 WiFi 凭据（有则 `WiFi.begin`）。loop()：`lv_task_handler` + `keypad_loop` + 8 个 `*_keyboard_poll`（menu/gps/mp3/dict/keypadtest/wifi_cfg/ai_chat/ai_cfg）+ `audio.loop` |
+| `factory.ino` → **`allinone.ino`** | setup()：去掉 BQ/DRV2605 驱动（**保留 I2C 0x5A 版本探测** → `isT_Deck_Pro_v1_1`，见 §3）/BHI260AP/A7682E，并删除全部触摸初始化/注册/轮询代码（见下方"触摸相关代码清理清单"）；**保留 `configTzTime("CST-8", "pool.ntp.org", "time.nist.gov", "cn.pool.ntp.org")`**（评审 #1.2 修订：ESP32 冷启动系统时间为 0 或编译时间，证书链 `notBefore`/`notAfter` 校验直接 fail → 所有 HTTPS 不可用，NTP 同步是 TLS 校验前提）；保留 GPIO 上电、SPI CS、`shared_spi_bus_init`、I2C 扫描、SPIFFS、`SPI.begin`；peri 初始化精简为 ink_screen / keypad / sd_care_init / gps_init / pcm5102a_init（无条件）；启动时从 NVS 读 WiFi 凭据（有则 `WiFi.begin`）。loop()：`lv_task_handler` + `keypad_loop` + **9** 个 `*_keyboard_poll`（menu/gps/mp3/dict/keypadtest/**wifi_status**/wifi_cfg/ai_chat/ai_cfg）（评审 #2.2 修订：`SCREEN_WIFI_ID` 是新增的 WiFi 状态/扫描屏，需要 `wifi_status_keyboard_poll` 驱动——否则进入该屏后无输入路径，`\b` 都不能触发，`scr_mgr_pop` 不执行）+ `audio.loop` |
 | `factory.h` | 去掉 TinyGSM/BQ/DRV/TouchDrv；保留 `Audio audio`、`peri_init_st[]`、`shared_spi_*`、`disp_full_refr` |
 | `peripheral.h` | `E_PERI_*` 裁为 `{KYEPAD, SD, GPS, PCM5102A, INK_SCREEN, NUM_MAX}`；保留 keypad/gps 原型 |
 | `ui_deckpro.h` | `SCREEN_XXX_ID` 裁为 **9 个**（评审 #1.5 修订：`SCREEN0_ID` + `SCREEN_GPS_ID` + `SCREEN_MP3_ID` + `SCREEN_DICT_ID` + `SCREEN_KEYPAD_ID` + `SCREEN_WIFI_ID` + `SCREEN_WIFI_CFG_ID` + `SCREEN_AI_ID` + `SCREEN_AI_CFG_ID`）；保留 `struct menu_btn`、`scr_back_btn_create`、`ui_deckpro_entry` |
 | `ui_deckpro.cpp` | 删除 low-voltage 块、screen1-12、taskbar/gesture/touch 定时器；保留 `scr_back_btn_create` + 菜单（`menu_btn_list` 裁为 8 项，`menu_btn_event_cb` 已存在）；`FONT_*` 宏改指 `&lv_font_montserrat_14`；`ui_deckpro_entry()` 只注册 **9 屏**（评审 #1.5 修订）；新增 `menu_keyboard_poll()`（`'1'`-`'8'` → `scr_mgr_push`，8 个目标对应 8 个非菜单 `SCREEN_XXX_ID`） |
-| `ui_deckpro_port.h / .cpp` | 只保留 `ui_disp_full_refr`、`ui_gps_task_suspend/resume`、`ui_gps_get_coord/data/time/satellites/speed`、`ui_input_get_keypay_val/set_flag` |
+| `ui_deckpro_port.h / .cpp` | 保留 `ui_disp_full_refr`、`ui_gps_task_suspend/resume`、`ui_gps_get_coord/data/time/satellites/speed`、`ui_input_get_keypay_val/set_flag`、**`ui_gps_get_snapshot(ui_gps_snapshot_t*)` + `typedef gps_snapshot_t ui_gps_snapshot_t;`**（评审 #2.3 修订：§5.2 `peri_gps.cpp` 行 + `ui_gps_enhanced.cpp` 行已强制使用 `ui_gps_get_snapshot()` 单一接口，若 port 层裁剪列表不含此函数与类型，链接阶段会报 `undefined reference to ui_gps_get_snapshot` / `ui_gps_snapshot_t has no member named ...`；旧 5 个 getter 可保留兼容其它屏，但 GPS 屏不调用）。`ui_other_get_gyro` 等与 allinone 无关的导出全部删除。 |
 | `peri_gps.cpp` | `gps_task_suspend/resume`（`gps_task_suspend`/`gps_task_resume` 函数定义）加 **NULL 守卫**；`gps_init` 握手失败时不创建任务（`gps_init` 函数体），`gps_handle` 保持 NULL；**评审 #4 修复 + #1.3 修订**：12 个快照字段（`gps_lat/lng/alt/speed/year/month/day/hour/minute/second/vsat`）读写两端必须都受临界段保护。修复：<br>① 定义 `gps_snapshot_t { lat, lng, altitude, speed, year, month, day, hour, minute, second, vsat }`（**共享头**：`peripheral.h`，让 `ui_deckpro_port.cpp` 也能 `typedef gps_snapshot_t ui_gps_snapshot_t`，避免跨 TU 不可见）<br>② **写端**：`displayInfo()` 在 GPS 任务中先填一个**局部 `gps_snapshot_t snap`**，**整结构赋值完毕后** `taskENTER_CRITICAL(&mux)` 一次性 `memcpy(g_shared, &snap, sizeof(snap))`，`taskEXIT_CRITICAL`；**不在临界段内调用 `gps.encode()` 或任何可能阻塞/让出的操作**。<br>③ **读端**：`gps_get_snapshot(out)` 同样 `taskENTER_CRITICAL` 后整结构 `memcpy(out, g_shared, sizeof(*out))`，退出。<br>④ UI 侧：`ui_gps_enhanced.cpp::gps_keyboard_poll` 与 3s 定时器**统一**改为 `ui_gps_get_snapshot(&s)` 一次读取，**禁止**再调 5 个旧 getter（`ui_gps_get_coord/time/satellites/speed`）。<br>⑤ `peri_gps.cpp::gps_get_coord/data/time/satellites/speed` 旧 getter 标记 `__attribute__((deprecated))`（保留兼容 pda2 其它屏，但 GPS 屏不用）。 |
 | `ui_gps_enhanced.cpp` | GPS 屏 `entry()` 先查 GPS 可用性（`gps_handle != NULL`），失败显示 "No GPS" 且不 `ui_gps_task_resume()`；3s 定时刷新直接 `ui_gps_get_snapshot()` |
 
@@ -180,7 +187,7 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 | `ui_mp3.cpp` | `ensure_sd()`（`shared_spi_lock` + `SD.begin(48)`）、`scan_files()`、分页列表渲染、播放/暂停/切歌/音量、`void audio_eof_mp3(const char *info)` 强定义（评审 #7 修复：ESP32-audioI2S 的 `audio_eof_mp3` 弱回调实际签名带 `const char *info` 参数，写成无参绑定不到符号）、`mp3_keyboard_poll`、`scr_lifecycle_t screen_mp3` |
 | `ui_keypad.cpp` | 返回按钮 + 提示 + 回显标签、`keypadtest_keyboard_poll`（`\b` 返回菜单）、`scr_lifecycle_t screen_keypad` |
 | `ui_wifi_config.cpp` | **SSID 为 `lv_dropdown`（`WiFi.scanNetworks()` 结果）**：`\n` 扫描+展开，`+`/`-`（Sym 层）移动、`\n` 选中跳密码、`\b` 取消（**评审 #6 修复：不挂 `LV_EVENT_VALUE_CHANGED` 触摸回调**，因 design §5.2 删触摸；选中读取走 `lv_dropdown_get_selected_str` + `lv_dropdown_close`）；**密码独立 `lv_textarea`**：`\n` 保存+连接、`\b` 退格/回 SSID → `Preferences`（namespace `wifi`）存 NVS → `WiFi.begin` 连接 → 显示状态/IP/失败原因、`wifi_cfg_keyboard_poll`、`scr_lifecycle_t screen_wifi`。无 `w`/`1` 保留键 |
-| `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（浏览回答时 `\n` 下一页/`\b` 回上一页或退出；**无 `c` 快捷键**，AI 配置走菜单）、`scr_lifecycle_t screen_ai_chat`。**评审 #1.6 修订 — UTF-8 安全分页**：必须按 **UTF-8 码点边界**断行，禁止 `strlen()/memcpy()` 字节切。规则：<br>① 输入：`openai_chat()` 返回的字节流按 UTF-8 解码为 codepoint 序列；连续 ASCII 视为单列，连续 CJK/全角视为双列，emoji 按 `wcwidth()` 视为 2 列。<br>② 断行：从行首累计显示列数；下一个 codepoint 会让累计列数 **> 30 列**时，在该 codepoint 之前断行（即只切到 codepoint 边界，绝不在 continuation byte `0x80-0xBF` 中间断开）。<br>③ 推荐实现：直接用 `lv_txt_get_next_line()` 或 LVGL 内置 `lv_label_set_text` + `LV_LABEL_LONG_BREAK` 模式，让 LVGL 处理断行——避免重造轮子。<br>④ 显示宽度基准：EPD 240px ÷ 14pt 字体 ≈ 30 列（ASCII）/ 15 列（CJK）。<br>⑤ `(truncated)` 标记仍按字节截断位置放在末尾（4096B 缓冲满时）。 |
+| `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（浏览回答时 `\n` 下一页/`\b` 回上一页或退出；**无 `c` 快捷键**，AI 配置走菜单）、`scr_lifecycle_t screen_ai_chat`。**评审 #1.6 修订 + #2.4 二次修订 — UTF-8 安全分页**：必须按 **UTF-8 码点边界**断行，禁止 `strlen()/memcpy()` 字节切。<br>① 输入：`openai_chat()` 返回的字节流按 UTF-8 解码为 codepoint 序列；连续 ASCII 视为单列，连续 CJK/全角视为双列，emoji 按 `wcwidth()` 视为 2 列。<br>② 断行：从行首累计显示列数；下一个 codepoint 会让累计列数 **> 30 列**时，在该 codepoint 之前断行（即只切到 codepoint 边界，绝不在 continuation byte `0x80-0xBF` 中间断开）。<br>③ **LVGL 8.3.11 API 选型（评审 #2.4 修订）**：评审 #1.6 提到的 `lv_txt_get_next_line()` 在 LVGL 8.3.11 中**不存在**（实际是 private `_lv_txt_get_next_line()`，需 `#include "../src/misc/lv_txt.h"` 才能用）；`LV_LABEL_LONG_BREAK` 也是错记——**正确宏名是 `LV_LABEL_LONG_WRAP`**。<br>　　**推荐实现**：直接用 LVGL 公开 API：<br>　　```cpp<br>　　lv_obj_t *lbl = lv_label_create(parent);<br>　　lv_obj_set_width(lbl, LV_PCT(100));                    // 让 label 自适应父容器宽度<br>　　lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);        // 内部按字符宽度自动换行（含 CJK）<br>　　lv_label_set_text(lbl, full_answer);                    // 直接喂全文，LVGL 处理 wrap + UTF-8 码点边界<br>　　lv_label_set_recolor(lbl, false);                       // 关闭 recolor 避免 '$' 字符冲突<br>　　```<br>　　`LV_LABEL_LONG_WRAP` 在 LVGL 8.3.11 是稳定的 public API（声明于 `lvgl/src/widgets/lv_label.h`），不依赖任何私有符号；换行基于实际渲染字体像素宽度，中文/英文混合自动正确断行。<br>④ 显示宽度基准：EPD 240px ÷ 14pt 字体 ≈ 30 列（ASCII）/ 15 列（CJK），由 LVGL 根据 `lv_obj_set_width()` 自动决定每行字符数。<br>⑤ `(truncated)` 标记仍按字节截断位置放在末尾（4096B 缓冲满时）：检测 `body.size() >= CHAT_ANSWER_MAX` 时 `chat_truncated=true`，`chat_render` 末尾追加 `\n(truncated)`。 |
 | `ui_ai_cfg.cpp` | 端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key 三字段，`\n` 确认当前字段并跳下一字段（末字段 `\n` 存 NVS namespace `ai` + 退出）、`\b` 退格/回上一字段；Key 标签掩码显示（`sk-or-v1-***`）、`ai_cfg_keyboard_poll`、`scr_lifecycle_t screen_ai_cfg` |
 | `openai_api.h/.cpp` | **新写 OpenAI 兼容客户端** `openai_chat(prompt, base_url, model, api_key)`：POST `{"model":..., "messages":[{"role":"user","content":...}]}`，**直接复用 `http_post`**（`http_utils.h::http_post` 声明已支持 `auth_header` → `Authorization: Bearer <key>`，`content_type=application/json`），解析 `choices[0].message.content`；默认端点 OpenRouter；TLS 策略见 §2.3 注 |
 | `src/assets.h` | 仅 `LV_IMG_DECLARE` 4 个图标（`extern "C"` 包裹） |
