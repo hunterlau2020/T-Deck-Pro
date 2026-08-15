@@ -14,7 +14,7 @@ A PDA (Personal Digital Assistant) firmware for the **LilyGo T-Deck Pro v1.1** b
 
 ### Existing (from factory)
 - LoRa transceiver (send/receive/settings)
-- WiFi scan and connect
+- WiFi page: **WIFI Config**（编辑/扫描双模式 + 异步扫描 + Connect 成功才保存 + Clear）、**WIFI Scan**（AP 列表）、**WIFI Test**（ifconfig.me 公网 IP，信息层 + Close）、**Time Sync**（NTP 校时，显示同步前后时间）
 - GPS position and satellite view
 - Battery monitoring (BQ25896 charger + BQ27220 fuel gauge)
 - Hardware test suite
@@ -26,12 +26,13 @@ A PDA (Personal Digital Assistant) firmware for the **LilyGo T-Deck Pro v1.1** b
 ### Added PDA Apps
 - **Calculator** — Scientific calculator with Shunting-Yard expression parser. Supports sin/cos/tan/log/sqrt/exp/fact and full operator precedence.
 - **Weather** — OpenWeatherMap One Call API 3.0. Current conditions, 12-hour hourly, 8-day daily forecast. Caches data in NVS for 1 hour. Uses GPS or cached coordinates.
+- **Calendar** — lunar calendar + holiday lookup.
+- **Dictionary** — online dictionaryapi.dev lookup.
+- **AI Voice Chat** — voice AI screen (TTS reply).
+- **AI Text** — text chat via OpenRouter（OpenAI 兼容）：多行输入 + Send/Clear 按钮、异步发送、system 提示（KET English examiner）、回复分页显示。
+- **AI Config** — Base URL（多行）/ Model / Key 各自输入框 + Save / Test 按钮；Test 请求 `/models` 并把 `data[0].id` 显示在 msgbox（倒计时 + Close）；Base/Model/Key 均有固件默认值（NVS 优先）。
 
 ### Planned
-- Calendar (modified from LilyGoLib PDA)
-- GPS (modified — compass + enhanced satellite view)
-- Dictionary (offline lookup)
-- Voice AI (Gemini API)
 - Voice Recorder
 - Internet Radio
 - Microphone (modified)
@@ -39,14 +40,13 @@ A PDA (Personal Digital Assistant) firmware for the **LilyGo T-Deck Pro v1.1** b
 ## Building
 
 ```bash
-# In platformio.ini, set:
-#   src_dir = examples/pda2
+# Build (platformio.ini has the [env:pda2] environment;
+# script/set_srcdir.py maps the env name to examples/pda2)
+python -m platformio run -e pda2
 
-# Build
-pio run -e T-Deck-Pro
-
-# Flash + monitor
-pio run -e T-Deck-Pro -t upload -t monitor
+# Flash + monitor (stop any running serial monitor first: it holds COMx)
+python -m platformio run -e pda2 -t upload --upload-port COM5
+python -m platformio device monitor -p COM5 -b 115200
 ```
 
 WiFi credentials and API keys go in `config_keys.h` (copy from `config_keys.h.example`). This file is gitignored.

@@ -113,6 +113,41 @@
 
 ---
 
+## 5. 第二批发现（时钟 / 信任库 / AI 屏，2026-08-16 下午）
+
+### 5.1 状态栏时间硬编码 "10:19" ✅
+
+- **差异**：`ui_deckpro.cpp::create0` 把任务栏时间写死为 10:19，定时器从不更新；电量显示经核实为 **BQ27220 实时读数**（10s 周期），非写死
+- **修复**：`9551bd7` — 实时本地时间（CST-8），NTP 未同步显示 `--:--`；随后并入电量 10s 刷新周期（`6be70eb`）
+
+### 5.2 时区继承出厂固件的 PST8PDT ✅
+
+- **差异**：三处 `configTzTime` 沿用美国太平洋时区，NTP 同步后本地时间偏 16 小时——"时钟错误"的根因，无独立时间设置功能（也不需要）
+- **修复**：`d8f0ab7` — 全部改 **CST-8**（cn.pool.ntp.org 优先）；连网成功自动校时 + Time Sync 手动按钮
+
+### 5.3 CA 信任库缺根 ✅
+
+- **差异**：代码只内置 ISRG Root X1 一个根（注释声称 3 个）；ifconfig.me 走 LE 2026 新层级（YR1←ISRG Root YR），openrouter.ai 链已从文档记录的 GTS R3 变为 **WE1←GTS Root R4**
+- **后果**：WiFi Test "HTTP -1"（-8576 证书验证失败）；与"系统时间未同步"症状相同，难区分
+- **修复**：`23942f6`/`d8f0ab7` — bundle 扩为 5 根（X1/YR/DigiCert G2/GlobalSign R3/GTS R4）+ HTTPS 前时间校验与 NTP 重试 + `http_response_t.error` 透出具体原因
+- **经验**：换端点前必须 `openssl s_client` 抓链核对根覆盖（ifconfig.me 的 YR 根 2026-05-13 生效，notBefore 很近，对设备时钟敏感）
+
+### 5.4 AI 配置屏交互问题（4 项，用户反馈）✅
+
+- label 与输入框内容重复、Model/Key 无独立输入框、Base 单行放不下长 URL → 重构为三独立输入框（Base 多行 52px），label 只留字段名 + 标记（`6be70eb`）
+- Key 框"写死的默认值"实为 **NVS 存量配置**（此前保存的 Key，非源码硬编码）；用户后续要求做成固件默认 → `AI_KEY_DEFAULT`（`9b104d1`，NVS 优先；⚠️ Key 已入仓库）
+- Save/Test 按钮点击"无反应"：flex 内容高度推算导致命中区与视觉位置偏差 → **FLOATING 钉底 + move_foreground + 高度 34**（`e5b109d`）；反馈从小状态行升级为 **msgbox（倒计时 + Close）**（`d4ccf28`）
+- Model 默认值 `AI_MODEL_DEFAULT = deepseek/deepseek-v4-flash-0731`（`e5b109d`）
+
+### 5.5 AI Text 屏（用户需求 4 项）✅
+
+- 输入框多行（64px/200 字符）；Send/Clear 按钮（FLOATING 钉底）；请求体按 OpenRouter curl 范例（system 提示 + temperature 0.7 + reasoning.exclude）；user 内容经 cJSON 自动 JSON 转义（请求体是 JSON，非 URL 编码，转义语义已与用户澄清）；发送异步化（任务 + 轮询，不冻结 UI）（`9b104d1`）
+
+### 5.6 烧录操作坑：串口监视器占用 COM 口 ⬜（操作规范）
+
+- **现象**：`pio run -t upload` 在监视器后台运行时失败（端口被占），错误信息不明显
+- **规范**：烧录前先停掉 `pio device monitor` 后台任务，烧完再重启监视器（已记入 build-and-code-structure.md §8 与本清单）
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：

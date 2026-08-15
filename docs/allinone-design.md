@@ -199,6 +199,8 @@ keypad 三层——普通层小写 a-z + 空格 + `\n`/`\b`（`peri_keypad.cpp::
 - **TLS 模式为第四字段**（技术评审 §1.4）：键盘可达枚举（CA Verify / Insecure）；切 Insecure 前显示风险确认行；页内持续显示 `⚠️ TLS bypass` 警告；**语义明确为会话级**（仅本次会话生效，不写 NVS——文档不再承诺持久化开关）。词典请求仍强制 CA 验证。
 - 保存：NVS namespace `ai`（`endpoint`/`model`/`key`），**仅 CONFIRM_SAVE 通过后写入**；Key 不打印到日志。
 
+> **pda2 预研实现状态（2026-08-16，供 allinone 移植对照）**：预研版实现了简化子集——三独立输入框（Base 多行 / Model / Key）、Save / Test 按钮（Test = GET `/models?limit=2` 显示 `data[0].id`，msgbox 倒计时 + Close）、异步 Test 与异步发送（FreeRTOS 任务 + 轮询，UI 不冻结）、草稿保留 + 触摸焦点同步、Base/Model/Key 固件默认值（NVS 优先）、请求体含 system 提示（KET English examiner）+ temperature 0.7 + reasoning.exclude。**未实现**：CONFIRM_SAVE 二次确认、CONFIRM_DISCARD、Key 掩码/Reveal、历史记录、错误分类表——allinone 实施时按本节状态机补齐。
+
 ## 5. 文件清单
 
 ### 5.1 原样复制（来自 `examples/pda2/`）

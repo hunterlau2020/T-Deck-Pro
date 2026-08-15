@@ -189,6 +189,11 @@ $PIO = "C:\Users\asdfo\.platformio\penv\Scripts\pio.exe"
 
 ## 8. 环境备注
 
-- **PlatformIO 可执行文件**：`C:\Users\asdfo\.platformio\penv\Scripts\pio.exe`（未加入系统 PATH）
-- **git 不在当前会话 PATH 中**，需要 git 操作时请先配置环境变量
+> 2026-08-16 更新（当前开发机 = hunter 用户；原文 asdfo 路径属另一台机器，保留备查）
+
+- **PlatformIO**：Core 6.1.19，pip 安装；未加入 PATH，统一用 `python -m platformio <命令>` 调用（如 `python -m platformio run -e pda2`）
+- **平台缓存**：`C:\Users\hunter\.platformio`（espressif32@6.5.0 + 工具链 + Arduino 2.0.14 已缓存，首次构建无需再下载）
+- **git**：当前机器 git 可用（原文"git 不在 PATH"为另一机器备注）
+- **烧录坑（重要）**：后台运行 `pio device monitor` 时 COM 口被占用，`-t upload` 会失败——**烧录前先停监视器，烧完重启**；设备端口通常为 COM5（Espressif 303A:1001）
+- **编译前准备**：pda2 需要 `examples/pda2/config_keys.h`（从 `.example` 复制留空即可，gitignored）；分支切换后注意检查
 - 首次构建会下载/解包平台与工具链；本机已缓存，之后构建很快
