@@ -15,7 +15,7 @@ void openai_load_config(char *base, int base_len, char *model, int model_len,
     p.begin("ai", true);
     String b = p.getString("base", AI_BASE_DEFAULT);
     String m = p.getString("model", AI_MODEL_DEFAULT);
-    String k = p.getString("key", "");
+    String k = p.getString("key", AI_KEY_DEFAULT);
     p.end();
     strncpy(base,  b.c_str(), base_len  - 1);
     strncpy(model, m.c_str(), model_len - 1);
@@ -39,20 +39,40 @@ bool openai_chat(const char *prompt, const char *base_url,
     if (!prompt || !base_url || !model || !api_key) return false;
     if (!http_require_wifi("AI")) return false;
 
-    /* Build {"model":..., "messages":[{"role":"user","content":...}]} */
+    /* Request shape mirrors the OpenRouter curl reference:
+     * {"model":..., "temperature":0.7, "reasoning":{"exclude":true},
+     *  "messages":[{"role":"system",...},{"role":"user","content":<prompt>}]}
+     * cJSON_AddStringToObject performs proper JSON string escaping, so
+     * quotes/backslashes/newlines in the user prompt cannot break the body. */
     cJSON *root = cJSON_CreateObject();
     if (!root) return false;
     cJSON_AddStringToObject(root, "model", model);
+    cJSON_AddNumberToObject(root, "temperature", 0.7);
+    cJSON *reasoning = cJSON_AddObjectToObject(root, "reasoning");
+    if (reasoning) cJSON_AddBoolToObject(reasoning, "exclude", true);
+
     cJSON *msgs = cJSON_AddArrayToObject(root, "messages");
-    cJSON *msg = cJSON_CreateObject();
-    if (msgs && msg) {
-        cJSON_AddStringToObject(msg, "role", "user");
-        cJSON_AddStringToObject(msg, "content", prompt);
-        cJSON_AddItemToArray(msgs, msg);
-    } else {
+    if (!msgs) {
         cJSON_Delete(root);
         return false;
     }
+    cJSON *sys = cJSON_CreateObject();
+    if (!sys) {
+        cJSON_Delete(root);
+        return false;
+    }
+    cJSON_AddStringToObject(sys, "role", "system");
+    cJSON_AddStringToObject(sys, "content", AI_SYSTEM_PROMPT);
+    cJSON_AddItemToArray(msgs, sys);
+
+    cJSON *msg = cJSON_CreateObject();
+    if (!msg) {
+        cJSON_Delete(root);
+        return false;
+    }
+    cJSON_AddStringToObject(msg, "role", "user");
+    cJSON_AddStringToObject(msg, "content", prompt);
+    cJSON_AddItemToArray(msgs, msg);
     char *body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!body) return false;

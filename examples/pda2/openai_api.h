@@ -23,6 +23,11 @@ bool openai_chat(const char *prompt, const char *base_url,
 
 #define AI_BASE_DEFAULT "https://openrouter.ai/api/v1/chat/completions"
 #define AI_MODEL_DEFAULT "deepseek/deepseek-v4-flash-0731"
+#define AI_SYSTEM_PROMPT "You are a KET English examer. Now you are going to talk to me with a special topic."
+/* Device default API key (user-provided); NVS always takes precedence.
+ * NOTE: this key is committed to the repository - rotate it if the
+ * repository becomes public or the key is compromised. */
+#define AI_KEY_DEFAULT "REDACTED-OPENROUTER-KEY"
 
 /**
  * @brief Read AI config (endpoint/model/key) from NVS namespace "ai".
