@@ -1384,6 +1384,9 @@ static lv_obj_t *scr4_lab_buf[20];
 
 // --------------------- WIFI Test (list item, no separate screen) ----------
 #include "http_utils.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <lwip/sockets.h>   /* inet_pton / AF_INET for the IP format check */
 
 static lv_obj_t *wifi_test_popup = NULL;
 static bool wifi_test_active = false;           /* set while the WIFI page is on top */
@@ -1432,26 +1435,97 @@ static void wifi_test_show_result(const char *title, const char *text)
     lv_obj_add_event_cb(close_btn, wifi_test_close_cb, LV_EVENT_CLICKED, NULL);
 }
 
-static void wifi_test_run(void)
+/* WiFi Test is fully asynchronous (review round 7 finding 1.3): the HTTP
+ * request runs in a FreeRTOS task, the UI thread polls the result with an
+ * LVGL timer - the UI never freezes and leaving the page works anytime. */
+#define WIFI_TEST_URL "https://ifconfig.me/ip"  /* /ip returns plain text, not HTML */
+
+static TaskHandle_t wifi_test_task = NULL;
+static http_response_t wifi_test_result = {0, "", false, ""};
+static volatile bool wifi_test_result_ready = false;
+static lv_timer_t *wifi_test_timer = NULL;
+static TaskHandle_t time_sync_task = NULL;
+static volatile bool time_sync_result_ready = false;
+static time_t time_sync_before = 0;
+static time_t time_sync_after = 0;
+static bool time_sync_ok = false;
+
+static bool wifi_test_ip_valid(const char *s)
 {
-    if (!http_require_wifi("WiFi Test")) {
+    uint32_t a4 = 0;
+    uint8_t a6[16];
+    if (!s || !*s) return false;
+    return inet_pton(AF_INET, s, &a4) == 1 || inet_pton(AF_INET6, s, a6) == 1;
+}
+
+static void wifi_test_task_func(void *param)
+{
+    wifi_test_result = http_get_ua(WIFI_TEST_URL, "curl/8.5.0", 15000);
+    wifi_test_result_ready = true;
+    wifi_test_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void wifi_page_timer_cb(lv_timer_t *t)
+{
+    /* Time Sync result */
+    if (time_sync_result_ready) {
+        time_sync_result_ready = false;
+        if (!wifi_test_active) {
+            Serial.println("[TimeSync] result dropped (page inactive)");
+        } else {
+            struct tm tmb, tma;
+            localtime_r(&time_sync_before, &tmb);
+            localtime_r(&time_sync_after, &tma);
+            char buf[192];
+            if (time_sync_ok) {
+                snprintf(buf, sizeof(buf),
+                         "Before: %04d-%02d-%02d %02d:%02d:%02d\n"
+                         "After:  %04d-%02d-%02d %02d:%02d:%02d",
+                         tmb.tm_year + 1900, tmb.tm_mon + 1, tmb.tm_mday,
+                         tmb.tm_hour, tmb.tm_min, tmb.tm_sec,
+                         tma.tm_year + 1900, tma.tm_mon + 1, tma.tm_mday,
+                         tma.tm_hour, tma.tm_min, tma.tm_sec);
+            } else {
+                snprintf(buf, sizeof(buf),
+                         "Sync failed\nbefore=%ld after=%ld",
+                         (long)time_sync_before, (long)time_sync_after);
+            }
+            Serial.printf("[TimeSync] before=%ld after=%ld %s\n",
+                          (long)time_sync_before, (long)time_sync_after,
+                          time_sync_ok ? "ok" : "failed");
+            wifi_test_show_result("Time Sync", buf);
+        }
+    }
+
+    /* WiFi Test result */
+    if (!wifi_test_result_ready) return;
+    wifi_test_result_ready = false;
+
+    if (!wifi_test_active) {
+        Serial.println("[WiFiTest] result dropped (page inactive)");
         return;
     }
-    wifi_test_show_result("WiFi Test", "Testing...");
-    lv_timer_handler();                         /* flush before the blocking call */
 
-    /* curl-like User-Agent: ifconfig.me returns plain text to curl, HTML
-     * to unknown/browser agents */
-    http_response_t resp = http_get_ua("https://ifconfig.me/", "curl/8.5.0", 15000);
-
-    if (!wifi_test_active) return;              /* user left the page while fetching */
-
-    if (resp.success && resp.status_code == 200 && resp.body.length() > 0) {
-        Serial.printf("[WiFiTest] public ip: %s\n", resp.body.c_str());
-        size_t end = resp.body.find_last_not_of(" \t\r\n");
-        string ip = (end == string::npos) ? resp.body : resp.body.substr(0, end + 1);
-        string msg = "Public IP:\n" + ip;
-        wifi_test_show_result("WiFi Test OK", msg.c_str());
+    http_response_t resp = wifi_test_result;
+    if (resp.success && resp.status_code == 200) {
+        char ip[80];
+        strncpy(ip, resp.body.c_str(), sizeof(ip) - 1);
+        ip[sizeof(ip) - 1] = '\0';
+        char *endp = ip + strlen(ip);
+        while (endp > ip && (endp[-1] == ' ' || endp[-1] == '\t' ||
+                             endp[-1] == '\r' || endp[-1] == '\n')) {
+            *--endp = '\0';
+        }
+        if (wifi_test_ip_valid(ip)) {
+            Serial.printf("[WiFiTest] public ip: %s\n", ip);
+            char msg[96];
+            snprintf(msg, sizeof(msg), "Public IP:\n%s", ip);
+            wifi_test_show_result("WiFi Test OK", msg);
+        } else {
+            Serial.printf("[WiFiTest] unexpected response: %s\n", ip);
+            wifi_test_show_result("WiFi Test", "Unexpected response\n(not an IP address)");
+        }
     } else {
         Serial.printf("[WiFiTest] request failed code=%d err=%s\n",
                       resp.status_code, resp.error.c_str());
@@ -1462,6 +1536,59 @@ static void wifi_test_run(void)
             snprintf(buf, sizeof(buf), "Request failed\nHTTP %d", resp.status_code);
         }
         wifi_test_show_result("WiFi Test", buf);
+    }
+}
+
+static void wifi_test_run(void)
+{
+    if (!http_require_wifi("WiFi Test")) {
+        /* caller-side feedback: http_require_wifi only reports the state
+         * (review round 6 finding 1.2) */
+        Serial.println("[WiFiTest] WiFi not connected");
+        wifi_test_show_result("WiFi Test", "WiFi not connected\nconfigure it first");
+        return;
+    }
+    if (wifi_test_task != NULL) return;         /* already running */
+
+    wifi_test_show_result("WiFi Test", "Testing...");
+    wifi_test_result_ready = false;
+    if (xTaskCreate(wifi_test_task_func, "wifi_test", 1024 * 8, NULL, 1,
+                    &wifi_test_task) != pdPASS) {
+        wifi_test_task = NULL;
+        wifi_test_show_result("WiFi Test", "Cannot start task");
+    }
+}
+
+/* Time Sync list item: async NTP sync, popup shows before/after times. */
+static void time_sync_task_func(void *param)
+{
+    time_sync_before = time(nullptr);
+    configTzTime("CST-8", "cn.pool.ntp.org", "pool.ntp.org", "time.nist.gov");
+    uint32_t t0 = millis();
+    while (time(nullptr) <= 1700000000 && millis() - t0 < 10000) {
+        delay(100);
+    }
+    time_sync_after = time(nullptr);
+    time_sync_ok = (time_sync_after > 1700000000);
+    time_sync_result_ready = true;
+    time_sync_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void time_sync_run(void)
+{
+    if (!http_require_wifi("Time Sync")) {
+        wifi_test_show_result("Time Sync", "WiFi not connected\nconfigure it first");
+        return;
+    }
+    if (time_sync_task != NULL) return;         /* already running */
+
+    wifi_test_show_result("Time Sync", "Syncing...");
+    time_sync_result_ready = false;
+    if (xTaskCreate(time_sync_task_func, "time_sync", 1024 * 4, NULL, 1,
+                    &time_sync_task) != pdPASS) {
+        time_sync_task = NULL;
+        wifi_test_show_result("Time Sync", "Cannot start task");
     }
 }
 
@@ -1486,6 +1613,10 @@ static void scr4_list_event(lv_event_t *e)
             if(strcmp("- WIFI Test", str) == 0)
             {
                 wifi_test_run();
+            }
+            if(strcmp("- Time Sync", str) == 0)
+            {
+                time_sync_run();
             }
             printf("%s\n", str);
         }
@@ -1540,6 +1671,7 @@ static void create4(lv_obj_t *parent)
     scr4_item_create("- WIFI Config", scr4_list_event);
     scr4_item_create("- WIFI Scan", scr4_list_event);
     scr4_item_create("- WIFI Test", scr4_list_event);
+    scr4_item_create("- Time Sync", scr4_list_event);
 
     // back
     scr_back_btn_create(parent, "WIFI", scr4_btn_event_cb);
@@ -1549,15 +1681,26 @@ static void entry4(void)
 {
     ui_disp_full_refr();
     wifi_test_active = true;
+    if (!wifi_test_timer) {
+        wifi_test_timer = lv_timer_create(wifi_page_timer_cb, 100, NULL);
+    }
 }
 static void exit4(void) {
     ui_disp_full_refr();
     wifi_test_active = false;
     wifi_test_close_cb(NULL);                   /* no popup on other screens */
+    if (wifi_test_timer) {
+        lv_timer_del(wifi_test_timer);
+        wifi_test_timer = NULL;
+    }
 }
 static void destroy4(void) {
     wifi_test_active = false;
     wifi_test_close_cb(NULL);
+    if (wifi_test_timer) {
+        lv_timer_del(wifi_test_timer);
+        wifi_test_timer = NULL;
+    }
 }
 
 static scr_lifecycle_t screen4 = {
@@ -1584,6 +1727,17 @@ static bool wifi_cfg_scan_mode = false;         // true: +/- cycle scan picks (e
 static int16_t wifi_scan_state = WIFI_SCAN_FAILED; // WIFI_SCAN_RUNNING while async scan active
 static uint8_t wifi_scan_gen = 0;                 // bumped to invalidate an in-flight scan
 static uint8_t wifi_scan_pending_gen = 0;         // generation of the scan in flight
+static volatile bool s_scan_done_ev = false;      // set by the framework SCAN_DONE event
+static bool s_scan_event_registered = false;
+
+/* Framework event order (WiFiGenericClass::_eventCallback): the internal
+ * WiFiScanClass::_scanDone() runs FIRST (allocates + fills the results),
+ * user onEvent callbacks dispatch AFTER it. So once this fires, it is safe
+ * to scanDelete() the results (review round 4 finding 1.2). */
+static void wifi_scan_done_cb(arduino_event_id_t event, arduino_event_info_t info)
+{
+    s_scan_done_ev = true;
+}
 static char wifi_scan_ssids[UI_WIFI_SCAN_ITEM_MAX][33];
 static int  wifi_scan_cnt = 0;                  // visible SSIDs from last scan
 static int  wifi_scan_idx = 0;                  // currently shown candidate
@@ -1954,6 +2108,12 @@ static void wifi_clear_btn_cb(lv_event_t *e)
 
 static void create4_1(lv_obj_t *parent)
 {
+    /* SCAN_DONE event signal for the abort path (review round 4 finding 1.2) */
+    if (!s_scan_event_registered) {
+        WiFi.onEvent(wifi_scan_done_cb, ARDUINO_EVENT_WIFI_SCAN_DONE);
+        s_scan_event_registered = true;
+    }
+
     scr_back_btn_create(parent, "Wifi Config", scr4_1_btn_event_cb);
 
     lv_obj_t *cont = lv_obj_create(parent);
@@ -2044,19 +2204,25 @@ static void create4_1(lv_obj_t *parent)
 
 static void entry4_1(void) { ui_disp_full_refr(); }
 static void exit4_1(void) { ui_disp_full_refr(); }
-/* Abort an in-flight async scan (finding 2.2): esp_wifi_scan_stop() makes
- * the WiFi event task deliver SCAN_DONE asynchronously; wait (bounded) for
- * the framework to process it before freeing the results, otherwise
- * scanDelete() races with WiFiScanClass::_scanDone(). */
+/* Abort an in-flight async scan (review round 4 finding 1.2): wait for the
+ * explicit SCAN_DONE event (which guarantees the framework's _scanDone()
+ * has finished allocating/filling the results) before scanDelete(). On
+ * timeout the release is deferred - the next scanNetworks() calls
+ * scanDelete() at start, so nothing leaks permanently. */
 static void wifi_cfg_scan_abort(void)
 {
     if (wifi_scan_state != WIFI_SCAN_RUNNING) return;
+    s_scan_done_ev = false;
     esp_wifi_scan_stop();
     uint32_t t0 = millis();
-    while (WiFi.scanComplete() == WIFI_SCAN_RUNNING && millis() - t0 < 1000) {
+    while (!s_scan_done_ev && millis() - t0 < 3000) {
         delay(1);
     }
-    WiFi.scanDelete();
+    if (s_scan_done_ev) {
+        WiFi.scanDelete();
+    } else {
+        Serial.println("[WiFi] scan abort timeout - deferring result release");
+    }
     wifi_scan_state = WIFI_SCAN_FAILED;
 }
 

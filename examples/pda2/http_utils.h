@@ -42,8 +42,10 @@ void http_set_tls_mode(http_tls_mode_t mode);
 http_tls_mode_t http_get_tls_mode(void);
 
 /**
- * @brief Check WiFi connectivity and show popup if disconnected.
- * @param feature_name Name of the feature requesting WiFi (shown in popup).
+ * @brief Check WiFi connectivity (STA connected).
+ *        Does NOT show any UI by itself: the CALLER is responsible for
+ *        showing user feedback when this returns false.
+ * @param feature_name Name of the feature requesting WiFi (log context).
  * @return true if WiFi is connected.
  */
 bool http_require_wifi(const char *feature_name);
