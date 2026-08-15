@@ -1479,13 +1479,18 @@ static scr_lifecycle_t screen4 = {
 #include <Preferences.h>
 
 static lv_obj_t *wifi_ssid_lab = NULL;
-static lv_obj_t *wifi_ssid_dd = NULL;
+static lv_obj_t *wifi_ssid_ta = NULL;
 static lv_obj_t *wifi_pass_lab = NULL;
 static lv_obj_t *wifi_pass_ta = NULL;
 static lv_obj_t *wifi_status_lab = NULL;
 static bool wifi_cfg_kbd_active = false;
-static int  wifi_cfg_field = 0;                 // 0 = SSID (dropdown), 1 = password
-static bool wifi_scan_empty = true;             // last scan found no visible SSID
+static int  wifi_cfg_field = 0;                 // 0 = SSID, 1 = password
+static bool wifi_cfg_scan_mode = false;         // true: +/- cycle scan picks (else manual edit)
+static int16_t wifi_scan_state = WIFI_SCAN_FAILED; // WIFI_SCAN_RUNNING while async scan active
+static char wifi_scan_ssids[UI_WIFI_SCAN_ITEM_MAX][33];
+static int  wifi_scan_cnt = 0;                  // visible SSIDs from last scan
+static int  wifi_scan_idx = 0;                  // currently shown candidate
+static char wifi_ssid_pre_scan[65] = {0};       // box content before entering scan mode
 static char wifi_ssid[65] = {0};
 static char wifi_pass[65] = {0};
 static char wifi_status[96] = {0};
@@ -1520,66 +1525,72 @@ static void wifi_cfg_refresh(void)
     lv_label_set_text(wifi_ssid_lab, wifi_cfg_field == 0 ? "SSID >" : "SSID");
     lv_label_set_text(wifi_pass_lab, wifi_cfg_field == 1 ? "Pass >" : "Pass");
     lv_label_set_text(wifi_status_lab, wifi_status);
+    lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
     lv_textarea_set_text(wifi_pass_ta, wifi_pass);
 }
 
-/* Run a scan and fill the SSID dropdown. Returns number of visible SSIDs. */
-static int wifi_cfg_scan(void)
+/* Start an asynchronous WiFi scan (Alt+Enter in the SSID field). Keeps the
+ * pre-scan box content so the pick can be cancelled. Returns true if the
+ * scan was actually started. */
+static bool wifi_cfg_scan_start(void)
 {
+    if (!wifi_cfg_scan_mode) {
+        strncpy(wifi_ssid_pre_scan, lv_textarea_get_text(wifi_ssid_ta),
+                sizeof(wifi_ssid_pre_scan) - 1);
+        wifi_ssid_pre_scan[sizeof(wifi_ssid_pre_scan) - 1] = '\0';
+    }
     WiFi.scanDelete();
-    int n = WiFi.scanNetworks();
-    static char opts[1024];
-
-    if (n <= 0) {
-        snprintf(opts, sizeof(opts), "(none found - Enter:rescan)");
-        lv_dropdown_set_options(wifi_ssid_dd, opts);
-        lv_dropdown_set_selected(wifi_ssid_dd, 0);
-        wifi_scan_empty = true;
-        return 0;
+    int16_t r = WiFi.scanNetworks(true);        /* async; main loop keeps draining the key FIFO */
+    if (r == WIFI_SCAN_RUNNING) {
+        wifi_scan_state = WIFI_SCAN_RUNNING;
+        snprintf(wifi_status, sizeof(wifi_status), "Scanning...");
+        lv_label_set_text(wifi_status_lab, wifi_status);
+        return true;
     }
-
-    opts[0] = '\0';
-    int olen = 0, opt_idx = 0, sel = 0;
-    for (int i = 0; i < n; i++) {
-        String s = WiFi.SSID(i);
-        if (s.length() == 0) continue;          /* hidden network */
-        const char *name = s.c_str();
-        int need = strlen(name) + (opt_idx > 0 ? 1 : 0);
-        if (olen + need >= (int)sizeof(opts) - 1) break;
-        if (opt_idx > 0) opts[olen++] = '\n';
-        strcpy(opts + olen, name);
-        olen += strlen(name);
-        if (strcmp(wifi_ssid, name) == 0) sel = opt_idx;
-        opt_idx++;
-    }
-    if (opt_idx == 0) {
-        snprintf(opts, sizeof(opts), "(none found - Enter:rescan)");
-        wifi_scan_empty = true;
-    } else {
-        wifi_scan_empty = false;
-    }
-    lv_dropdown_set_options(wifi_ssid_dd, opts);
-    lv_dropdown_set_selected(wifi_ssid_dd, sel);
-    return opt_idx;
+    wifi_scan_state = r;
+    snprintf(wifi_status, sizeof(wifi_status), "Scan start fail (%d)", r);
+    lv_label_set_text(wifi_status_lab, wifi_status);
+    return false;
 }
 
-/* Touch path: an item in the open dropdown list was tapped. LVGL closes the
- * list and fires VALUE_CHANGED; copy the picked SSID and jump to password.
- *
- * NOTE (reviewer #6): pda2 factory retains the touch driver, so this
- * callback is reachable on this hardware. The allinone build (no touch)
- * will NOT call lv_indev_drv_register for pointer, so this callback will
- * never fire there — the keypad pick path in wifi_cfg_keyboard_poll() is
- * the only path that matters. Keep the callback for pda2 hybrid UX. */
-static void wifi_dd_value_cb(lv_event_t *e)
+/* Called every loop pass while the screen is active: collect the async scan
+ * result when it finishes. */
+static void wifi_cfg_scan_poll(void)
 {
-    if (wifi_scan_empty) return;
-    lv_obj_t *dd = lv_event_get_target(e);
-    char buf[65];
-    lv_dropdown_get_selected_str(dd, buf, sizeof(buf));
-    strncpy(wifi_ssid, buf, sizeof(wifi_ssid) - 1);
-    wifi_cfg_field = 1;
-    wifi_cfg_refresh();
+    if (wifi_scan_state != WIFI_SCAN_RUNNING) return;
+    int16_t r = WiFi.scanComplete();
+    if (r == WIFI_SCAN_RUNNING) return;         /* still scanning */
+
+    if (r < 0) {
+        /* scan failure kept distinct from "no networks found" (finding 1.5) */
+        wifi_scan_state = r;
+        snprintf(wifi_status, sizeof(wifi_status), "Scan failed (%d)", r);
+        lv_label_set_text(wifi_status_lab, wifi_status);
+        return;
+    }
+
+    wifi_scan_state = r;
+    wifi_scan_cnt = 0;
+    wifi_scan_idx = 0;
+    for (int i = 0; i < r && wifi_scan_cnt < UI_WIFI_SCAN_ITEM_MAX; i++) {
+        String s = WiFi.SSID(i);
+        if (s.length() == 0) continue;          /* hidden network */
+        strncpy(wifi_scan_ssids[wifi_scan_cnt], s.c_str(), 32);
+        wifi_scan_ssids[wifi_scan_cnt][32] = '\0';
+        if (strcmp(wifi_ssid, wifi_scan_ssids[wifi_scan_cnt]) == 0) {
+            wifi_scan_idx = wifi_scan_cnt;      /* keep the current pick */
+        }
+        wifi_scan_cnt++;
+    }
+    if (wifi_scan_cnt == 0) {
+        snprintf(wifi_status, sizeof(wifi_status), "Scan: none found");
+        lv_label_set_text(wifi_status_lab, wifi_status);
+        return;                                 /* stay in manual edit mode */
+    }
+    snprintf(wifi_status, sizeof(wifi_status), "Scan: %d found", wifi_scan_cnt);
+    lv_label_set_text(wifi_status_lab, wifi_status);
+    wifi_cfg_scan_mode = true;
+    lv_textarea_set_text(wifi_ssid_ta, wifi_scan_ssids[wifi_scan_idx]);
 }
 
 static void wifi_cfg_commit(void)
@@ -1618,54 +1629,101 @@ static void wifi_cfg_commit(void)
     lv_label_set_text(wifi_status_lab, wifi_status);
 }
 
+/* Touch taps move LVGL focus between the two boxes independently of the
+ * keypad (lv_indev.c::indev_click_focus sends LV_EVENT_FOCUSED on tap);
+ * keep wifi_cfg_field in sync so keypad edits always target the box the
+ * user sees the cursor in. The field guard also preserves uncommitted text:
+ * tapping the already-active box must not reset the textarea. */
+static void wifi_ssid_focus_cb(lv_event_t *e)
+{
+    if (wifi_cfg_field != 0) {
+        wifi_cfg_field = 0;
+        wifi_cfg_refresh();
+    }
+}
+
+static void wifi_pass_focus_cb(lv_event_t *e)
+{
+    if (wifi_cfg_field != 1) {
+        wifi_cfg_field = 1;
+        wifi_cfg_scan_mode = false;             /* abandoning a pick: back to edit mode */
+        wifi_cfg_refresh();
+    }
+}
+
+/* Keypad-driven field switch: also move the visible cursor (LV_EVENT_FOCUSED
+ * restarts the textarea cursor blink) so it matches the ">" marker. */
+static void wifi_cfg_set_field(int f)
+{
+    wifi_cfg_field = f;
+    lv_event_send(f == 0 ? (lv_obj_t *)wifi_ssid_ta : (lv_obj_t *)wifi_pass_ta,
+                  LV_EVENT_FOCUSED, NULL);
+    wifi_cfg_refresh();
+}
+
 void wifi_cfg_keyboard_poll()
 {
-    if (!wifi_cfg_kbd_active || !wifi_ssid_dd || !wifi_pass_ta) return;
+    if (!wifi_cfg_kbd_active || !wifi_ssid_ta || !wifi_pass_ta) return;
+    wifi_cfg_scan_poll();                       /* async scan result (runs every loop) */
     char c;
     if (!keypad_get_val(&c)) return;
     keypad_set_flag();
 
     if (wifi_cfg_field == 0) {
-        if (lv_dropdown_is_open(wifi_ssid_dd)) {
-            /* dropdown list open: +/- (Sym layer) move, Enter pick, Backspace cancel */
-            int cnt = lv_dropdown_get_option_cnt(wifi_ssid_dd);
-            if (c == '+') {
-                if (!wifi_scan_empty && cnt > 0) {
-                    int s = lv_dropdown_get_selected(wifi_ssid_dd);
-                    lv_dropdown_set_selected(wifi_ssid_dd, (s + 1) % cnt);
-                }
-            } else if (c == '-') {
-                if (!wifi_scan_empty && cnt > 0) {
-                    int s = lv_dropdown_get_selected(wifi_ssid_dd);
-                    lv_dropdown_set_selected(wifi_ssid_dd, (s + cnt - 1) % cnt);
-                }
-            } else if (c == '\n') {
-                if (!wifi_scan_empty) {
-                    char buf[65];
-                    lv_dropdown_get_selected_str(wifi_ssid_dd, buf, sizeof(buf));
-                    strncpy(wifi_ssid, buf, sizeof(wifi_ssid) - 1);
-                }
-                lv_dropdown_close(wifi_ssid_dd);
-                wifi_cfg_field = 1;
-                wifi_cfg_refresh();
-            } else if (c == '\b') {
-                lv_dropdown_close(wifi_ssid_dd);
-                wifi_cfg_refresh();
-            }
-            return;
+        if (wifi_scan_state == WIFI_SCAN_RUNNING) {
+            return;                             /* scan in flight: ignore keys */
         }
-        if (c == '\n') {
-            snprintf(wifi_status, sizeof(wifi_status), "Scanning...");
-            lv_label_set_text(wifi_status_lab, wifi_status);
-            lv_timer_handler();
-            wifi_cfg_scan();
-            lv_dropdown_open(wifi_ssid_dd);
-        } else if (c == '\b') {
-            wifi_cfg_kbd_active = false;
-            scr_mgr_pop(false);
+        if (c == '\t') {
+            /* Alt+Enter: independent scan entry, works with any box content
+             * (review finding 1.2) */
+            wifi_cfg_scan_start();
+        } else if (wifi_cfg_scan_mode) {
+            if (c == '+' || c == '-') {
+                wifi_scan_idx = (wifi_scan_idx + (c == '+' ? 1 : wifi_scan_cnt - 1)) % wifi_scan_cnt;
+                lv_textarea_set_text(wifi_ssid_ta, wifi_scan_ssids[wifi_scan_idx]);
+            } else if (c == '\n') {
+                /* pick the shown candidate */
+                strncpy(wifi_ssid, lv_textarea_get_text(wifi_ssid_ta), sizeof(wifi_ssid) - 1);
+                wifi_cfg_scan_mode = false;
+                wifi_cfg_set_field(1);
+            } else if (c == '\b') {
+                /* cancel the pick: restore the pre-scan box content */
+                wifi_cfg_scan_mode = false;
+                lv_textarea_set_text(wifi_ssid_ta, wifi_ssid_pre_scan);
+            } else {
+                /* start manual editing: all visible chars go to the box
+                 * (review finding 1.1) */
+                wifi_cfg_scan_mode = false;
+                lv_textarea_add_char(wifi_ssid_ta, c);
+            }
+        } else {
+            if (c == '\n') {
+                const char *txt = lv_textarea_get_text(wifi_ssid_ta);
+                if (txt && txt[0] != '\0') {
+                    /* commit the box, goto password */
+                    strncpy(wifi_ssid, txt, sizeof(wifi_ssid) - 1);
+                    wifi_cfg_set_field(1);
+                } else {
+                    snprintf(wifi_status, sizeof(wifi_status), "Type SSID or Alt+Enter:scan");
+                    lv_label_set_text(wifi_status_lab, wifi_status);
+                }
+            } else if (c == '\b') {
+                const char *txt = lv_textarea_get_text(wifi_ssid_ta);
+                if (txt && txt[0] != '\0') {
+                    lv_textarea_del_char(wifi_ssid_ta);
+                } else {
+                    wifi_cfg_kbd_active = false;
+                    scr_mgr_pop(false);
+                }
+            } else {
+                lv_textarea_add_char(wifi_ssid_ta, c);
+            }
         }
     } else {
         /* password field */
+        if (c == '\t') {
+            return;                             /* Alt+Enter scan combo: not valid here */
+        }
         if (c == '\n') {
             strncpy(wifi_pass, lv_textarea_get_text(wifi_pass_ta), sizeof(wifi_pass) - 1);
             wifi_cfg_save();
@@ -1676,8 +1734,7 @@ void wifi_cfg_keyboard_poll()
             if (txt && txt[0] != '\0') {
                 lv_textarea_del_char(wifi_pass_ta);
             } else {
-                wifi_cfg_field = 0;
-                wifi_cfg_refresh();
+                wifi_cfg_set_field(0);
             }
         } else {
             lv_textarea_add_char(wifi_pass_ta, c);
@@ -1712,14 +1769,13 @@ static void create4_1(lv_obj_t *parent)
     lv_obj_set_style_text_font(wifi_ssid_lab, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_width(wifi_ssid_lab, lv_pct(100));
 
-    wifi_ssid_dd = lv_dropdown_create(cont);
-    lv_obj_set_width(wifi_ssid_dd, lv_pct(100));
-    lv_obj_set_height(wifi_ssid_dd, 34);
-    lv_dropdown_set_options(wifi_ssid_dd, "(Enter: scan)");
-    lv_dropdown_set_selected(wifi_ssid_dd, 0);
-    lv_obj_set_style_text_font(wifi_ssid_dd, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_font(lv_dropdown_get_list(wifi_ssid_dd), &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_add_event_cb(wifi_ssid_dd, wifi_dd_value_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    wifi_ssid_ta = lv_textarea_create(cont);
+    lv_obj_set_width(wifi_ssid_ta, lv_pct(100));
+    lv_obj_set_height(wifi_ssid_ta, 34);
+    lv_textarea_set_one_line(wifi_ssid_ta, true);
+    lv_textarea_set_max_length(wifi_ssid_ta, 32);
+    lv_textarea_set_placeholder_text(wifi_ssid_ta, "type SSID or Enter=scan");
+    lv_obj_set_style_text_font(wifi_ssid_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
     wifi_pass_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(wifi_pass_lab, &lv_font_montserrat_14, LV_PART_MAIN);
@@ -1733,6 +1789,10 @@ static void create4_1(lv_obj_t *parent)
     lv_textarea_set_placeholder_text(wifi_pass_ta, "password");
     lv_obj_set_style_text_font(wifi_pass_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
+    /* keep the keypad field state in sync with touch focus */
+    lv_obj_add_event_cb(wifi_ssid_ta, wifi_ssid_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(wifi_pass_ta, wifi_pass_focus_cb, LV_EVENT_FOCUSED, NULL);
+
     wifi_status_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(wifi_status_lab, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(wifi_status_lab, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
@@ -1742,8 +1802,12 @@ static void create4_1(lv_obj_t *parent)
     lv_obj_t *hint = lv_label_create(cont);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(hint, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
-    lv_label_set_text(hint, "SSID: Enter=scan  +=/\x2d=select\nPass: Enter=save  Backspace=del/back");
+    lv_label_set_text(hint, "Alt+Enter:scan  +/-:pick\nEnter:next/save  Backspace:del/back");
 
+    wifi_cfg_field = 0;
+    wifi_cfg_scan_mode = false;
+    wifi_scan_cnt = 0;
+    wifi_scan_idx = 0;
     wifi_cfg_load();
     wifi_cfg_refresh();
     wifi_cfg_kbd_active = true;
@@ -1751,7 +1815,15 @@ static void create4_1(lv_obj_t *parent)
 
 static void entry4_1(void) { ui_disp_full_refr(); }
 static void exit4_1(void) { ui_disp_full_refr(); }
-static void destroy4_1(void) { wifi_cfg_kbd_active = false; }
+static void destroy4_1(void)
+{
+    wifi_cfg_kbd_active = false;
+    wifi_cfg_scan_mode = false;
+    if (wifi_scan_state == WIFI_SCAN_RUNNING) {
+        WiFi.scanDelete();                      /* stop a pending async scan */
+        wifi_scan_state = WIFI_SCAN_FAILED;
+    }
+}
 
 static scr_lifecycle_t screen4_1 = {
     .create = create4_1,
