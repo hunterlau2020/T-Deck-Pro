@@ -1545,6 +1545,10 @@ static void wifi_cfg_sync_draft(void)
 /* Start an asynchronous WiFi scan (Alt+Enter in the SSID field). Keeps the
  * pre-scan box content so the pick can be cancelled. Returns true if the
  * scan was actually started. */
+static void wifi_cfg_scan_abort(void);
+static void wifi_scan_overlay_show(void);
+static void wifi_scan_overlay_update(void);
+
 static bool wifi_cfg_scan_start(void)
 {
     wifi_scan_gen++;
@@ -1560,6 +1564,7 @@ static bool wifi_cfg_scan_start(void)
         wifi_scan_state = WIFI_SCAN_RUNNING;
         snprintf(wifi_status, sizeof(wifi_status), "Scanning...");
         lv_label_set_text(wifi_status_lab, wifi_status);
+        wifi_scan_overlay_show();               /* topmost countdown, input blocked */
         return true;
     }
     wifi_scan_state = r;
@@ -1616,12 +1621,14 @@ static void wifi_cfg_scan_poll(void)
     lv_textarea_set_text(wifi_ssid_ta, wifi_scan_ssids[wifi_scan_idx]);
 }
 
-static void wifi_cfg_commit(void)
+/* Try to connect with the current ssid/pass. Returns true on success.
+ * Callers persist to NVS only when this returns true. */
+static bool wifi_cfg_connect(void)
 {
     if (wifi_ssid[0] == '\0') {
         snprintf(wifi_status, sizeof(wifi_status), "No SSID set");
         lv_label_set_text(wifi_status_lab, wifi_status);
-        return;
+        return false;
     }
     snprintf(wifi_status, sizeof(wifi_status), "Connecting...");
     lv_label_set_text(wifi_status_lab, wifi_status);
@@ -1636,7 +1643,10 @@ static void wifi_cfg_commit(void)
         delay(200);
         lv_timer_handler();
     }
-    if (st == WL_CONNECTED) {
+    keypad_clear_chars();   /* drop keys pressed during the blocking connect */
+
+    bool ok = (st == WL_CONNECTED);
+    if (ok) {
         snprintf(wifi_status, sizeof(wifi_status), "OK IP: %s", WiFi.localIP().toString().c_str());
     } else {
         const char *why = "Connect fail";
@@ -1650,6 +1660,7 @@ static void wifi_cfg_commit(void)
         snprintf(wifi_status, sizeof(wifi_status), "%s (%d)", why, st);
     }
     lv_label_set_text(wifi_status_lab, wifi_status);
+    return ok;
 }
 
 /* Touch taps move LVGL focus between the two boxes independently of the
@@ -1696,6 +1707,7 @@ void wifi_cfg_keyboard_poll()
 {
     if (!wifi_cfg_kbd_active || !wifi_ssid_ta || !wifi_pass_ta) return;
     wifi_cfg_scan_poll();                       /* async scan result (runs every loop) */
+    wifi_scan_overlay_update();                 /* countdown/hide of the scan overlay */
     char c;
     if (!keypad_get_val(&c)) return;
     keypad_set_flag();
@@ -1756,9 +1768,10 @@ void wifi_cfg_keyboard_poll()
         }
         if (c == '\n') {
             wifi_cfg_sync_draft();               /* pass box → wifi_pass */
-            wifi_cfg_save();
+            if (wifi_cfg_connect()) {
+                wifi_cfg_save();                 /* persist only on success */
+            }
             wifi_cfg_refresh_labels();
-            wifi_cfg_commit();
         } else if (c == '\b') {
             const char *txt = lv_textarea_get_text(wifi_pass_ta);
             if (txt && txt[0] != '\0') {
@@ -1780,14 +1793,15 @@ static void scr4_1_btn_event_cb(lv_event_t * e)
     }
 }
 
-/* Touch path for Save: same as Enter on the password field — sync the
- * current draft, persist to NVS and connect. */
-static void wifi_save_btn_cb(lv_event_t *e)
+/* Touch path for Connect: same as Enter on the password field — sync the
+ * current draft, try to connect, and persist to NVS ONLY on success. */
+static void wifi_connect_btn_cb(lv_event_t *e)
 {
     wifi_cfg_sync_draft();
-    wifi_cfg_save();
+    if (wifi_cfg_connect()) {
+        wifi_cfg_save();                         /* persist only on success */
+    }
     wifi_cfg_refresh_labels();
-    wifi_cfg_commit();
 }
 
 /* Touch path for Clear: wipe both boxes, the draft buffers and the NVS
@@ -1859,7 +1873,7 @@ static void create4_1(lv_obj_t *parent)
     lv_obj_set_style_text_color(hint, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
     lv_label_set_text(hint, "Enter:scan/next  +/-:pick\nAlt+Enter:scan  Backspace:del/back");
 
-    /* Save / Clear buttons (touch path; keyboard: Enter on pass = save) */
+    /* Connect / Clear buttons (touch path; keyboard: Enter on pass = connect) */
     lv_obj_t *btn_row = lv_obj_create(cont);
     lv_obj_set_width(btn_row, lv_pct(100));
     lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, LV_PART_MAIN);
@@ -1868,13 +1882,13 @@ static void create4_1(lv_obj_t *parent)
     lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(btn_row, 4, LV_PART_MAIN);
 
-    lv_obj_t *save_btn = lv_btn_create(btn_row);
-    lv_obj_set_flex_grow(save_btn, 1);
-    lv_obj_set_height(save_btn, 30);
-    lv_obj_t *save_lab = lv_label_create(save_btn);
-    lv_label_set_text(save_lab, "Save");
-    lv_obj_center(save_lab);
-    lv_obj_add_event_cb(save_btn, wifi_save_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *connect_btn = lv_btn_create(btn_row);
+    lv_obj_set_flex_grow(connect_btn, 1);
+    lv_obj_set_height(connect_btn, 30);
+    lv_obj_t *connect_lab = lv_label_create(connect_btn);
+    lv_label_set_text(connect_lab, "Connect");
+    lv_obj_center(connect_lab);
+    lv_obj_add_event_cb(connect_btn, wifi_connect_btn_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *clear_btn = lv_btn_create(btn_row);
     lv_obj_set_flex_grow(clear_btn, 1);
@@ -1913,11 +1927,77 @@ static void wifi_cfg_scan_abort(void)
     wifi_scan_state = WIFI_SCAN_FAILED;
 }
 
+/* Scan progress overlay (user request): topmost message with a countdown.
+ * Blocks keypad (poll guard) and touch (full-screen clickable layer) while
+ * visible; hidden when the scan finishes or the countdown expires (expiry
+ * also aborts a stuck scan). */
+#define WIFI_SCAN_OVL_TIMEOUT_MS 10000
+static lv_obj_t *wifi_scan_ovl = NULL;
+static lv_obj_t *wifi_scan_ovl_lab = NULL;
+static uint32_t wifi_scan_ovl_t0 = 0;
+static uint32_t wifi_scan_ovl_last_secs = 0;
+
+static void wifi_scan_overlay_show(void)
+{
+    if (wifi_scan_ovl) return;
+    wifi_scan_ovl = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(wifi_scan_ovl, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_opa(wifi_scan_ovl, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(wifi_scan_ovl, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(wifi_scan_ovl, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(wifi_scan_ovl, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(wifi_scan_ovl, LV_OBJ_FLAG_CLICKABLE);   /* swallow touches */
+
+    wifi_scan_ovl_lab = lv_label_create(wifi_scan_ovl);
+    lv_obj_set_style_bg_color(wifi_scan_ovl_lab, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(wifi_scan_ovl_lab, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(wifi_scan_ovl_lab, 1, 0);
+    lv_obj_set_style_border_color(wifi_scan_ovl_lab, lv_color_black(), 0);
+    lv_obj_set_style_radius(wifi_scan_ovl_lab, 6, 0);
+    lv_obj_set_style_pad_all(wifi_scan_ovl_lab, 8, 0);
+    lv_obj_set_style_text_font(wifi_scan_ovl_lab, &lv_font_montserrat_14, 0);
+    lv_obj_align(wifi_scan_ovl_lab, LV_ALIGN_TOP_MID, 0, 60);
+    wifi_scan_ovl_t0 = millis();
+    wifi_scan_ovl_last_secs = 0;
+    lv_label_set_text(wifi_scan_ovl_lab, "Scanning... 10s");
+}
+
+static void wifi_scan_overlay_hide(void)
+{
+    if (wifi_scan_ovl) {
+        lv_obj_del(wifi_scan_ovl);
+        wifi_scan_ovl = NULL;
+        wifi_scan_ovl_lab = NULL;
+    }
+}
+
+/* Called every loop while the screen is active. */
+static void wifi_scan_overlay_update(void)
+{
+    if (!wifi_scan_ovl) return;
+    if (wifi_scan_state != WIFI_SCAN_RUNNING) {
+        wifi_scan_overlay_hide();               /* scan finished (or failed) */
+        return;
+    }
+    uint32_t elapsed = millis() - wifi_scan_ovl_t0;
+    if (elapsed >= WIFI_SCAN_OVL_TIMEOUT_MS) {
+        wifi_cfg_scan_abort();                  /* countdown over: abort stuck scan */
+        wifi_scan_overlay_hide();
+        return;
+    }
+    uint32_t secs = (WIFI_SCAN_OVL_TIMEOUT_MS - elapsed + 999) / 1000;
+    if (secs != wifi_scan_ovl_last_secs) {
+        wifi_scan_ovl_last_secs = secs;
+        lv_label_set_text_fmt(wifi_scan_ovl_lab, "Scanning... %lus", (unsigned)secs);
+    }
+}
+
 static void destroy4_1(void)
 {
     wifi_cfg_kbd_active = false;
     wifi_cfg_scan_mode = false;
     wifi_scan_gen++;                            /* invalidate any in-flight result application */
+    wifi_scan_overlay_hide();
     wifi_cfg_scan_abort();
 }
 
