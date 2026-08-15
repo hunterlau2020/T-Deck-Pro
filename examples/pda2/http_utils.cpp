@@ -240,6 +240,44 @@ http_response_t http_get_ua(const char *url, const char *user_agent, uint32_t ti
     return resp;
 }
 
+http_response_t http_get_auth(const char *url, const char *auth_header, uint32_t timeout_ms)
+{
+    http_response_t resp = {0, "", false, ""};
+    if (s_tls_mode != HTTP_TLS_INSECURE && !http_ensure_time(5000)) {
+        resp.status_code = -3;
+        resp.error = "Time not synced - retry after NTP";
+        resp.body = resp.error;
+        return resp;
+    }
+    WiFiClientSecure client;
+    apply_tls(client);
+    HTTPClient http;
+
+    http.setTimeout(timeout_ms);
+    if (!http.begin(client, url)) {
+        resp.body = (s_tls_mode == HTTP_TLS_INSECURE) ? "Failed to connect" : "Failed to connect (TLS)";
+        char err[128] = {0};
+        client.lastError(err, sizeof(err));
+        resp.error = err[0] ? err : resp.body;
+        return resp;
+    }
+
+    if (auth_header && auth_header[0] != '\0') {
+        http.addHeader("Authorization", auth_header);
+    }
+
+    resp.status_code = http.GET();
+    if (resp.status_code > 0) {
+        resp.body = http.getString().c_str();
+        resp.success = (resp.status_code >= 200 && resp.status_code < 300);
+    } else {
+        resp.body = http.errorToString(resp.status_code).c_str();
+        http_capture_error(resp, http, client);
+    }
+    http.end();
+    return resp;
+}
+
 http_response_t http_post(const char *url, const string &body,
                           const char *content_type,
                           const char *auth_header,
@@ -343,6 +381,7 @@ http_tls_mode_t http_get_tls_mode(void) { return HTTP_TLS_INSECURE; }
 bool http_require_wifi(const char *feature_name) { return false; }
 http_response_t http_get(const char *url, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
 http_response_t http_get_ua(const char *url, const char *user_agent, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
+http_response_t http_get_auth(const char *url, const char *auth_header, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
 http_response_t http_post(const char *url, const string &body, const char *content_type, const char *auth_header, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
 http_response_t http_post_large(const char *url, const uint8_t *data, size_t data_len, const char *content_type, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
 char *base64_encode_psram(const uint8_t *data, size_t len, size_t *out_len) { *out_len = 0; return NULL; }

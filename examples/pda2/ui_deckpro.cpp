@@ -3898,30 +3898,30 @@ static void menu_taskbar_update_timer_cb(lv_timer_t *t)
     bool wifi = 0;
     int percent = 0;
 
-    /* time: show the real local time (was hardcoded "10:19"); "--:--"
-     * until NTP has synced the clock */
-    {
-        time_t now = time(nullptr);
-        int h = -1, m = -1;
-        if (now > 1700000000) {
-            struct tm tmv;
-            localtime_r(&now, &tmv);
-            h = tmv.tm_hour;
-            m = tmv.tm_min;
-        }
-        if (h != taskbar_last_hour || m != taskbar_last_min) {
-            taskbar_last_hour = h;
-            taskbar_last_min = m;
-            if (h >= 0) {
-                lv_label_set_text_fmt(menu_taskbar_time, "%02d:%02d", h, m);
-            } else {
-                lv_label_set_text(menu_taskbar_time, "--:--");
-            }
-        }
-    }
-
     if(sec % 10 == 0)
     {
+        /* time: refreshed together with the battery (every 10s); shows the
+         * real local time, "--:--" until NTP has synced the clock */
+        {
+            time_t now = time(nullptr);
+            int h = -1, m = -1;
+            if (now > 1700000000) {
+                struct tm tmv;
+                localtime_r(&now, &tmv);
+                h = tmv.tm_hour;
+                m = tmv.tm_min;
+            }
+            if (h != taskbar_last_hour || m != taskbar_last_min) {
+                taskbar_last_hour = h;
+                taskbar_last_min = m;
+                if (h >= 0) {
+                    lv_label_set_text_fmt(menu_taskbar_time, "%02d:%02d", h, m);
+                } else {
+                    lv_label_set_text(menu_taskbar_time, "--:--");
+                }
+            }
+        }
+
         finish = ui_battery_27220_get_charge_finish();
         percent = ui_battery_27220_get_percent();
 

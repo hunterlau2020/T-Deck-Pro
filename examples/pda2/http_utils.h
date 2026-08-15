@@ -71,6 +71,17 @@ http_response_t http_get_ua(const char *url, const char *user_agent,
                             uint32_t timeout_ms = 10000);
 
 /**
+ * @brief Perform an HTTPS GET with an Authorization header
+ *        (e.g. "Bearer <key>" for API endpoints).
+ * @param url Full URL to fetch.
+ * @param auth_header Authorization header value (NULL/empty = skip).
+ * @param timeout_ms Request timeout in milliseconds (default 10000).
+ * @return http_response_t with status_code, body, success and error.
+ */
+http_response_t http_get_auth(const char *url, const char *auth_header,
+                              uint32_t timeout_ms = 10000);
+
+/**
  * @brief Perform an HTTPS POST request.
  * @param url Full URL to post to.
  * @param body Request body content.
