@@ -55,9 +55,16 @@ const char keymap_shift[KEYPAD_ROWS][KEYPAD_COLS] = {
 
 Adafruit_TCA8418 keypad;
 keypad_cb keypad_listener = NULL;
-char keypad_curr_val = ' ';
-int keypad_state = KEYPAD_RELEASE;
-bool keypad_update = false;
+
+/* Software character FIFO (review finding 2.1): keypad_loop drains the whole
+ * hardware FIFO into this queue; keypad_get_val pops one char per call, so
+ * several presses arriving within one loop pass are delivered in order
+ * instead of overwriting a single shared slot. */
+#define KBD_CHAR_FIFO_LEN 16
+static char kbd_char_fifo[KBD_CHAR_FIFO_LEN];
+static int kbd_char_cnt  = 0;
+static int kbd_char_head = 0;                   /* next pop position */
+static int kbd_char_tail = 0;                   /* next push position */
 
 /* Each modifier is tracked independently and combined on use: releasing one
  * Shift while the other is still held must keep the uppercase layer
@@ -104,15 +111,21 @@ bool keypad_init(int address)
 
 int keypad_get_val(char *c)
 {
-    if(c){
-        *c = keypad_curr_val;
+    if (kbd_char_cnt <= 0) {
+        return 0;
     }
-    return keypad_update;
+    if (c) {
+        *c = kbd_char_fifo[kbd_char_head];
+    }
+    kbd_char_head = (kbd_char_head + 1) % KBD_CHAR_FIFO_LEN;
+    kbd_char_cnt--;
+    return 1;
 }
 
 void keypad_set_flag(void)
 {
-    keypad_update = false;
+    /* Legacy API: with the software FIFO, get_val already consumes the char,
+     * there is nothing left to clear. */
 }
 
 void keypad_loop(void)
@@ -188,16 +201,24 @@ void keypad_loop(void)
         Serial.printf("[KBD] row=%d col=%d char='%c' (0x%02x)\n",
                       row, col, c >= 0x20 ? c : '?', c);
 
-        keypad_curr_val = c;
-        keypad_state = state;
-        keypad_update = true;
+        if (kbd_char_cnt >= KBD_CHAR_FIFO_LEN) {
+            Serial.println("[KBD] char fifo full - drop");
+            continue;
+        }
+        kbd_char_fifo[kbd_char_tail] = c;
+        kbd_char_tail = (kbd_char_tail + 1) % KBD_CHAR_FIFO_LEN;
+        kbd_char_cnt++;
     }
 
-    /* INT_STAT is read-to-clear; OVR_FLOW_INT means press/release events
-     * were dropped while the FIFO was full (review finding 1.4). */
+    /* INT_STAT bits are write-1-to-clear: OVR_FLOW_INT means press/release
+     * events were dropped while the FIFO was full (review finding 1.4/2.2).
+     * Without the W1C write the bit stays set forever and every loop pass
+     * would reset the modifiers again. */
     uint8_t int_stat = keypad.readRegister(TCA8418_REG_INT_STAT);
     if (int_stat & TCA8418_REG_STAT_OVR_FLOW_INT) {
         keypad_modifiers_recover();
+        keypad.writeRegister(TCA8418_REG_INT_STAT,
+                             TCA8418_REG_STAT_OVR_FLOW_INT);   /* W1C */
     }
 }
 
