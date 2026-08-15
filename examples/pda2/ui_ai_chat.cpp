@@ -117,6 +117,7 @@ static void chat_send(void)
         }
         chat_page = 0;
         chat_viewing = true;
+        lv_textarea_set_text(chat_ta, "");      /* draft consumed; \b in viewing mode pages the answer */
         chat_render();
     } else {
         lv_label_set_text(chat_status_lab, "AI error - check cfg / WiFi");
@@ -147,6 +148,14 @@ void ai_chat_keyboard_poll(void)
                 lv_label_set_text(chat_status_lab, "");
                 lv_label_set_text(chat_answer_lab, "");
             }
+        } else if (c >= ' ') {
+            /* typing while viewing the answer: go back to the input box and
+             * append the key instead of silently dropping it */
+            chat_viewing = false;
+            chat_page = 0;
+            lv_label_set_text(chat_status_lab, "");
+            lv_label_set_text(chat_answer_lab, "");
+            lv_textarea_add_char(chat_ta, c);
         }
         return;
     }
