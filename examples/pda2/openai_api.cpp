@@ -14,7 +14,7 @@ void openai_load_config(char *base, int base_len, char *model, int model_len,
     Preferences p;
     p.begin("ai", true);
     String b = p.getString("base", AI_BASE_DEFAULT);
-    String m = p.getString("model", "");
+    String m = p.getString("model", AI_MODEL_DEFAULT);
     String k = p.getString("key", "");
     p.end();
     strncpy(base,  b.c_str(), base_len  - 1);

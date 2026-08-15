@@ -22,6 +22,7 @@ bool openai_chat(const char *prompt, const char *base_url,
                  const char *model, const char *api_key, string &out);
 
 #define AI_BASE_DEFAULT "https://openrouter.ai/api/v1/chat/completions"
+#define AI_MODEL_DEFAULT "deepseek/deepseek-v4-flash-0731"
 
 /**
  * @brief Read AI config (endpoint/model/key) from NVS namespace "ai".

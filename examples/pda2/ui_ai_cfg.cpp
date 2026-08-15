@@ -105,9 +105,24 @@ static void ai_test_task_func(void *param)
 
 static void ai_test_btn_cb(lv_event_t *e)
 {
+    Serial.println("[AICfg] Test button clicked");
     ai_cfg_sync_draft();
+
+    /* explicit field validation with on-screen hints */
+    if (!http_require_wifi("AI Test")) {
+        lv_label_set_text(ai_status_lab, "WiFi not connected");
+        return;
+    }
+    if (ai_base[0] == '\0') {
+        lv_label_set_text(ai_status_lab, "Base empty - fill it first");
+        return;
+    }
+    if (ai_model[0] == '\0') {
+        lv_label_set_text(ai_status_lab, "Model empty - fill it first");
+        return;
+    }
     if (ai_key[0] == '\0') {
-        lv_label_set_text(ai_status_lab, "Key empty");
+        lv_label_set_text(ai_status_lab, "Key empty - fill it first");
         return;
     }
     if (ai_test_task != NULL) return;           /* already running */
@@ -124,6 +139,7 @@ static void ai_test_btn_cb(lv_event_t *e)
 
 static void ai_save_btn_cb(lv_event_t *e)
 {
+    Serial.println("[AICfg] Save button clicked");
     ai_cfg_save();
 }
 
@@ -252,18 +268,23 @@ static void ai_cfg_create(lv_obj_t *parent)
     lv_label_set_long_mode(ai_status_lab, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(ai_status_lab, lv_pct(100));
 
-    /* Save / Test buttons */
+    /* Save / Test buttons - pinned to the container bottom (FLOATING removes
+     * it from the flex flow, so its position is deterministic regardless of
+     * the content heights above) */
     lv_obj_t *btn_row = lv_obj_create(cont);
     lv_obj_set_width(btn_row, lv_pct(100));
+    lv_obj_set_height(btn_row, 34);
     lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(btn_row, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(btn_row, 0, LV_PART_MAIN);
     lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(btn_row, 4, LV_PART_MAIN);
+    lv_obj_add_flag(btn_row, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(btn_row, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     lv_obj_t *save_btn = lv_btn_create(btn_row);
     lv_obj_set_flex_grow(save_btn, 1);
-    lv_obj_set_height(save_btn, 30);
+    lv_obj_set_height(save_btn, 34);
     lv_obj_t *save_lab = lv_label_create(save_btn);
     lv_label_set_text(save_lab, "Save");
     lv_obj_center(save_lab);
@@ -271,11 +292,12 @@ static void ai_cfg_create(lv_obj_t *parent)
 
     lv_obj_t *test_btn = lv_btn_create(btn_row);
     lv_obj_set_flex_grow(test_btn, 1);
-    lv_obj_set_height(test_btn, 30);
+    lv_obj_set_height(test_btn, 34);
     lv_obj_t *test_lab = lv_label_create(test_btn);
     lv_label_set_text(test_lab, "Test");
     lv_obj_center(test_lab);
     lv_obj_add_event_cb(test_btn, ai_test_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_move_foreground(btn_row);
 
     /* touch focus keeps the keypad editing the box the user sees */
     lv_obj_add_event_cb(ai_base_ta, ai_ta_focus_cb, LV_EVENT_FOCUSED, NULL);
