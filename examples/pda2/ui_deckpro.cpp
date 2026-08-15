@@ -1548,6 +1548,9 @@ static void wifi_cfg_sync_draft(void)
 static void wifi_cfg_scan_abort(void);
 static void wifi_scan_overlay_show(void);
 static void wifi_scan_overlay_update(void);
+static void wifi_banner_show(const char *text);
+static void wifi_banner_update(void);
+static void wifi_banner_hide(void);
 
 static bool wifi_cfg_scan_start(void)
 {
@@ -1565,11 +1568,14 @@ static bool wifi_cfg_scan_start(void)
         snprintf(wifi_status, sizeof(wifi_status), "Scanning...");
         lv_label_set_text(wifi_status_lab, wifi_status);
         wifi_scan_overlay_show();               /* topmost countdown, input blocked */
+        Serial.println("[WiFi] scan started (async)");
         return true;
     }
     wifi_scan_state = r;
     snprintf(wifi_status, sizeof(wifi_status), "Scan start fail (%d)", r);
     lv_label_set_text(wifi_status_lab, wifi_status);
+    Serial.printf("[WiFi] scan start failed r=%d\n", r);
+    wifi_banner_show("Scan start failed");
     return false;
 }
 
@@ -1586,6 +1592,8 @@ static void wifi_cfg_scan_poll(void)
         wifi_scan_state = r;
         snprintf(wifi_status, sizeof(wifi_status), "Scan failed (%d)", r);
         lv_label_set_text(wifi_status_lab, wifi_status);
+        Serial.printf("[WiFi] scan failed r=%d\n", r);
+        wifi_banner_show("Scan failed");
         return;
     }
 
@@ -1595,6 +1603,7 @@ static void wifi_cfg_scan_poll(void)
          * drop the results instead of overwriting the draft (finding 2.3) */
         WiFi.scanDelete();
         wifi_scan_state = WIFI_SCAN_FAILED;
+        Serial.println("[WiFi] scan results dropped (superseded)");
         return;
     }
     wifi_scan_cnt = 0;
@@ -1604,6 +1613,7 @@ static void wifi_cfg_scan_poll(void)
         if (s.length() == 0) continue;          /* hidden network */
         strncpy(wifi_scan_ssids[wifi_scan_cnt], s.c_str(), 32);
         wifi_scan_ssids[wifi_scan_cnt][32] = '\0';
+        Serial.printf("[WiFi] scan[%d] %s\n", wifi_scan_cnt, wifi_scan_ssids[wifi_scan_cnt]);
         if (strcmp(wifi_ssid, wifi_scan_ssids[wifi_scan_cnt]) == 0) {
             wifi_scan_idx = wifi_scan_cnt;      /* keep the current pick */
         }
@@ -1613,12 +1623,17 @@ static void wifi_cfg_scan_poll(void)
     if (wifi_scan_cnt == 0) {
         snprintf(wifi_status, sizeof(wifi_status), "Scan: none found");
         lv_label_set_text(wifi_status_lab, wifi_status);
+        Serial.println("[WiFi] scan done: no networks found");
+        wifi_banner_show("Scan: none found");
         return;                                 /* stay in manual edit mode */
     }
     snprintf(wifi_status, sizeof(wifi_status), "Scan: %d found", wifi_scan_cnt);
     lv_label_set_text(wifi_status_lab, wifi_status);
     wifi_cfg_scan_mode = true;
     lv_textarea_set_text(wifi_ssid_ta, wifi_scan_ssids[wifi_scan_idx]);
+    char banner_buf[48];
+    snprintf(banner_buf, sizeof(banner_buf), "Scan: %d found", wifi_scan_cnt);
+    wifi_banner_show(banner_buf);
 }
 
 /* Try to connect with the current ssid/pass. Returns true on success.
@@ -1648,6 +1663,10 @@ static bool wifi_cfg_connect(void)
     bool ok = (st == WL_CONNECTED);
     if (ok) {
         snprintf(wifi_status, sizeof(wifi_status), "OK IP: %s", WiFi.localIP().toString().c_str());
+        Serial.printf("[WiFi] connected ip=%s\n", WiFi.localIP().toString().c_str());
+        char banner_buf[64];
+        snprintf(banner_buf, sizeof(banner_buf), "Connected! IP: %s", WiFi.localIP().toString().c_str());
+        wifi_banner_show(banner_buf);
     } else {
         const char *why = "Connect fail";
         switch (st) {
@@ -1658,6 +1677,8 @@ static bool wifi_cfg_connect(void)
             default: break;
         }
         snprintf(wifi_status, sizeof(wifi_status), "%s (%d)", why, st);
+        Serial.printf("[WiFi] connect failed st=%d (%s)\n", st, why);
+        wifi_banner_show("Connect failed");
     }
     lv_label_set_text(wifi_status_lab, wifi_status);
     return ok;
@@ -1708,6 +1729,7 @@ void wifi_cfg_keyboard_poll()
     if (!wifi_cfg_kbd_active || !wifi_ssid_ta || !wifi_pass_ta) return;
     wifi_cfg_scan_poll();                       /* async scan result (runs every loop) */
     wifi_scan_overlay_update();                 /* countdown/hide of the scan overlay */
+    wifi_banner_update();                       /* auto-hide of the result banner */
     char c;
     if (!keypad_get_val(&c)) return;
     keypad_set_flag();
@@ -1983,6 +2005,7 @@ static void wifi_scan_overlay_update(void)
     if (elapsed >= WIFI_SCAN_OVL_TIMEOUT_MS) {
         wifi_cfg_scan_abort();                  /* countdown over: abort stuck scan */
         wifi_scan_overlay_hide();
+        wifi_banner_show("Scan timeout");
         return;
     }
     uint32_t secs = (WIFI_SCAN_OVL_TIMEOUT_MS - elapsed + 999) / 1000;
@@ -1992,12 +2015,53 @@ static void wifi_scan_overlay_update(void)
     }
 }
 
+/* Result banner (user request): topmost, non-blocking message that
+ * auto-hides. Used to make scan/connect outcomes unmistakable. */
+#define WIFI_BANNER_MS 3000
+static lv_obj_t *wifi_banner_lab = NULL;
+static uint32_t wifi_banner_t0 = 0;
+
+static void wifi_banner_show(const char *text)
+{
+    if (!wifi_banner_lab) {
+        wifi_banner_lab = lv_label_create(lv_layer_top());
+        lv_obj_set_style_bg_color(wifi_banner_lab, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(wifi_banner_lab, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(wifi_banner_lab, 1, 0);
+        lv_obj_set_style_border_color(wifi_banner_lab, lv_color_black(), 0);
+        lv_obj_set_style_radius(wifi_banner_lab, 6, 0);
+        lv_obj_set_style_pad_all(wifi_banner_lab, 8, 0);
+        lv_obj_set_style_text_font(wifi_banner_lab, &lv_font_montserrat_14, 0);
+        lv_obj_align(wifi_banner_lab, LV_ALIGN_TOP_MID, 0, 60);
+    }
+    lv_label_set_text(wifi_banner_lab, text);
+    lv_obj_move_foreground(wifi_banner_lab);
+    wifi_banner_t0 = millis();
+}
+
+static void wifi_banner_hide(void)
+{
+    if (wifi_banner_lab) {
+        lv_obj_del(wifi_banner_lab);
+        wifi_banner_lab = NULL;
+    }
+}
+
+/* Called every loop while the screen is active. */
+static void wifi_banner_update(void)
+{
+    if (wifi_banner_lab && millis() - wifi_banner_t0 >= WIFI_BANNER_MS) {
+        wifi_banner_hide();
+    }
+}
+
 static void destroy4_1(void)
 {
     wifi_cfg_kbd_active = false;
     wifi_cfg_scan_mode = false;
     wifi_scan_gen++;                            /* invalidate any in-flight result application */
     wifi_scan_overlay_hide();
+    wifi_banner_hide();
     wifi_cfg_scan_abort();
 }
 
@@ -2010,8 +2074,12 @@ static scr_lifecycle_t screen4_1 = {
 #endif
 // --------------------- screen 4.2 --------------------- Wifi Scan
 #if 1
+#include "http_utils.h"
+
 static lv_obj_t *scr4_2_cont;
 static lv_obj_t *wifi_scan_lab;
+static lv_obj_t *wifi_test_lab;
+static lv_obj_t *wifi_test_popup = NULL;
 static lv_timer_t *wifi_scan_timer = NULL;
 
 static ui_wifi_scan_info_t wifi_info_list[UI_WIFI_SCAN_ITEM_MAX];
@@ -2020,6 +2088,74 @@ static void scr4_2_btn_event_cb(lv_event_t * e)
 {
     if(e->code == LV_EVENT_CLICKED){
         scr_mgr_pop(false);
+    }
+}
+
+static void wifi_test_close_cb(lv_event_t *e)
+{
+    if (wifi_test_popup) {
+        lv_obj_del(wifi_test_popup);
+        wifi_test_popup = NULL;
+    }
+}
+
+/* Result popup (信息层): title + wrapped body + Close button. */
+static void wifi_test_show_result(const char *title, const char *text)
+{
+    wifi_test_close_cb(NULL);
+    wifi_test_popup = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(wifi_test_popup, 220, 250);
+    lv_obj_align(wifi_test_popup, LV_ALIGN_CENTER, 0, -10);
+    lv_obj_set_style_bg_color(wifi_test_popup, lv_color_white(), 0);
+    lv_obj_set_style_border_width(wifi_test_popup, 1, 0);
+    lv_obj_set_style_border_color(wifi_test_popup, lv_color_black(), 0);
+    lv_obj_set_style_radius(wifi_test_popup, 6, 0);
+    lv_obj_set_style_pad_all(wifi_test_popup, 8, 0);
+    lv_obj_set_flex_flow(wifi_test_popup, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(wifi_test_popup, 6, 0);
+    lv_obj_clear_flag(wifi_test_popup, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *t = lv_label_create(wifi_test_popup);
+    lv_label_set_text(t, title);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
+
+    lv_obj_t *b = lv_label_create(wifi_test_popup);
+    lv_obj_set_width(b, lv_pct(100));
+    lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(b, text);
+    lv_obj_set_style_text_font(b, &lv_font_montserrat_14, 0);
+    lv_obj_set_flex_grow(b, 1);
+
+    lv_obj_t *close_btn = lv_btn_create(wifi_test_popup);
+    lv_obj_set_width(close_btn, lv_pct(100));
+    lv_obj_set_height(close_btn, 32);
+    lv_obj_t *close_lab = lv_label_create(close_btn);
+    lv_label_set_text(close_lab, "Close");
+    lv_obj_center(close_lab);
+    lv_obj_add_event_cb(close_btn, wifi_test_close_cb, LV_EVENT_CLICKED, NULL);
+}
+
+static void wifi_test_btn_cb(lv_event_t *e)
+{
+    if (!http_require_wifi("WiFi Test")) {
+        return;
+    }
+    lv_label_set_text(wifi_test_lab, "Testing...");
+    lv_timer_handler();                         /* flush the label before the blocking call */
+
+    http_response_t resp = http_get("https://ifconfig.me/", 15000);
+
+    lv_label_set_text(wifi_test_lab, "WiFi Test (ifconfig.me)");
+
+    if (resp.success && resp.status_code == 200 && resp.body.length() > 0) {
+        Serial.printf("[WiFiTest] public ip: %s\n", resp.body.c_str());
+        string msg = "Public IP:\n" + resp.body;
+        wifi_test_show_result("WiFi Test OK", msg.c_str());
+    } else {
+        Serial.printf("[WiFiTest] request failed code=%d\n", resp.status_code);
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Request failed\nHTTP %d", resp.status_code);
+        wifi_test_show_result("WiFi Test", buf);
     }
 }
 
@@ -2075,9 +2211,17 @@ static void create4_2(lv_obj_t *parent)
     wifi_scan_lab = lv_label_create(scr4_2_cont);
     lv_obj_set_width(wifi_scan_lab, lv_pct(95));
     lv_obj_set_style_pad_all(wifi_scan_lab, 0, LV_PART_MAIN);
-    lv_obj_set_style_text_font(wifi_scan_lab, FONT_BOLD_MONO_SIZE_15, LV_PART_MAIN);   
+    lv_obj_set_style_text_font(wifi_scan_lab, FONT_BOLD_MONO_SIZE_15, LV_PART_MAIN);
     lv_obj_set_style_border_width(wifi_scan_lab, 0, LV_PART_MAIN);
     lv_label_set_long_mode(wifi_scan_lab, LV_LABEL_LONG_WRAP);
+
+    lv_obj_t *wifi_test_btn = lv_btn_create(scr4_2_cont);
+    lv_obj_set_width(wifi_test_btn, lv_pct(95));
+    lv_obj_set_height(wifi_test_btn, 32);
+    wifi_test_lab = lv_label_create(wifi_test_btn);
+    lv_label_set_text(wifi_test_lab, "WiFi Test (ifconfig.me)");
+    lv_obj_center(wifi_test_lab);
+    lv_obj_add_event_cb(wifi_test_btn, wifi_test_btn_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *back4_label = scr_back_btn_create(parent, ("Wifi"), scr4_2_btn_event_cb);
 }
@@ -2095,7 +2239,7 @@ static void exit4_2(void) {
     }
 }
 
-static void destroy4_2(void) { }
+static void destroy4_2(void) { wifi_test_close_cb(NULL); }
 
 static scr_lifecycle_t screen4_2 = {
     .create = create4_2,
