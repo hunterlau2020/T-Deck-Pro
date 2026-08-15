@@ -132,6 +132,12 @@ void keypad_set_flag(void)
 
 /* Clear queued chars on screen transitions (review finding 2.1): a screen
  * must not receive keystrokes that were produced for the previous screen.
+ * Also drains the TCA8418 HARDWARE FIFO (review round 4 finding 1.1):
+ * events still sitting in the chip would be re-queued on the next
+ * keypad_loop() and leak into the new page. The momentary modifiers are
+ * reset too - their press/release pairs are dropped together, so no layer
+ * can stick. The Sym LOCK is intentionally kept: it is user-toggled
+ * state, not momentary (documented product semantics).
  * extern "C": called from C code (ui_scr_mrg.c). */
 extern "C" void keypad_clear_chars(void)
 {
@@ -139,8 +145,12 @@ extern "C" void keypad_clear_chars(void)
         kbd_char_cnt  = 0;
         kbd_char_head = 0;
         kbd_char_tail = 0;
-        Serial.println("[KBD] char fifo cleared (screen switch)");
     }
+    uint8_t flushed = keypad.flush();
+    alt_pressed = false;
+    shift_l_press = false;
+    shift_r_press = false;
+    Serial.printf("[KBD] char fifo cleared (screen switch, hw flushed %u)\n", flushed);
 }
 
 void keypad_loop(void)
