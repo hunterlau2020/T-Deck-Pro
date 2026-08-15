@@ -1382,6 +1382,80 @@ static scr_lifecycle_t screen3 = {
 lv_obj_t * scr4_list;
 static lv_obj_t *scr4_lab_buf[20];
 
+// --------------------- WIFI Test (list item, no separate screen) ----------
+#include "http_utils.h"
+
+static lv_obj_t *wifi_test_popup = NULL;
+static bool wifi_test_active = false;           /* set while the WIFI page is on top */
+
+static void wifi_test_close_cb(lv_event_t *e)
+{
+    if (wifi_test_popup) {
+        lv_obj_del(wifi_test_popup);
+        wifi_test_popup = NULL;
+    }
+}
+
+/* Result popup (信息层): title + wrapped body + Close button. */
+static void wifi_test_show_result(const char *title, const char *text)
+{
+    wifi_test_close_cb(NULL);
+    wifi_test_popup = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(wifi_test_popup, 220, 250);
+    lv_obj_align(wifi_test_popup, LV_ALIGN_CENTER, 0, -10);
+    lv_obj_set_style_bg_color(wifi_test_popup, lv_color_white(), 0);
+    lv_obj_set_style_border_width(wifi_test_popup, 1, 0);
+    lv_obj_set_style_border_color(wifi_test_popup, lv_color_black(), 0);
+    lv_obj_set_style_radius(wifi_test_popup, 6, 0);
+    lv_obj_set_style_pad_all(wifi_test_popup, 8, 0);
+    lv_obj_set_flex_flow(wifi_test_popup, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(wifi_test_popup, 6, 0);
+    lv_obj_clear_flag(wifi_test_popup, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *t = lv_label_create(wifi_test_popup);
+    lv_label_set_text(t, title);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
+
+    lv_obj_t *b = lv_label_create(wifi_test_popup);
+    lv_obj_set_width(b, lv_pct(100));
+    lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(b, text);
+    lv_obj_set_style_text_font(b, &lv_font_montserrat_14, 0);
+    lv_obj_set_flex_grow(b, 1);
+
+    lv_obj_t *close_btn = lv_btn_create(wifi_test_popup);
+    lv_obj_set_width(close_btn, lv_pct(100));
+    lv_obj_set_height(close_btn, 32);
+    lv_obj_t *close_lab = lv_label_create(close_btn);
+    lv_label_set_text(close_lab, "Close");
+    lv_obj_center(close_lab);
+    lv_obj_add_event_cb(close_btn, wifi_test_close_cb, LV_EVENT_CLICKED, NULL);
+}
+
+static void wifi_test_run(void)
+{
+    if (!http_require_wifi("WiFi Test")) {
+        return;
+    }
+    wifi_test_show_result("WiFi Test", "Testing...");
+    lv_timer_handler();                         /* flush before the blocking call */
+
+    http_response_t resp = http_get("https://ifconfig.me/", 15000);
+
+    if (!wifi_test_active) return;              /* user left the page while fetching */
+
+    if (resp.success && resp.status_code == 200 && resp.body.length() > 0) {
+        Serial.printf("[WiFiTest] public ip: %s\n", resp.body.c_str());
+        string msg = "Public IP:\n" + resp.body;
+        wifi_test_show_result("WiFi Test OK", msg.c_str());
+    } else {
+        Serial.printf("[WiFiTest] request failed code=%d\n", resp.status_code);
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Request failed\nHTTP %d", resp.status_code);
+        wifi_test_show_result("WiFi Test", buf);
+    }
+}
+
 static void scr4_list_event(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -1399,6 +1473,10 @@ static void scr4_list_event(lv_event_t *e)
             if(strcmp("- WIFI Scan", str) == 0)
             {
                 scr_mgr_push(SCREEN4_2_ID, false);
+            }
+            if(strcmp("- WIFI Test", str) == 0)
+            {
+                wifi_test_run();
             }
             printf("%s\n", str);
         }
@@ -1452,19 +1530,26 @@ static void create4(lv_obj_t *parent)
 
     scr4_item_create("- WIFI Config", scr4_list_event);
     scr4_item_create("- WIFI Scan", scr4_list_event);
+    scr4_item_create("- WIFI Test", scr4_list_event);
 
     // back
     scr_back_btn_create(parent, "WIFI", scr4_btn_event_cb);
 }
 
-static void entry4(void) 
+static void entry4(void)
 {
     ui_disp_full_refr();
+    wifi_test_active = true;
 }
 static void exit4(void) {
     ui_disp_full_refr();
+    wifi_test_active = false;
+    wifi_test_close_cb(NULL);                   /* no popup on other screens */
 }
-static void destroy4(void) { }
+static void destroy4(void) {
+    wifi_test_active = false;
+    wifi_test_close_cb(NULL);
+}
 
 static scr_lifecycle_t screen4 = {
     .create = create4,
@@ -2074,12 +2159,8 @@ static scr_lifecycle_t screen4_1 = {
 #endif
 // --------------------- screen 4.2 --------------------- Wifi Scan
 #if 1
-#include "http_utils.h"
-
 static lv_obj_t *scr4_2_cont;
 static lv_obj_t *wifi_scan_lab;
-static lv_obj_t *wifi_test_lab;
-static lv_obj_t *wifi_test_popup = NULL;
 static lv_timer_t *wifi_scan_timer = NULL;
 
 static ui_wifi_scan_info_t wifi_info_list[UI_WIFI_SCAN_ITEM_MAX];
@@ -2088,74 +2169,6 @@ static void scr4_2_btn_event_cb(lv_event_t * e)
 {
     if(e->code == LV_EVENT_CLICKED){
         scr_mgr_pop(false);
-    }
-}
-
-static void wifi_test_close_cb(lv_event_t *e)
-{
-    if (wifi_test_popup) {
-        lv_obj_del(wifi_test_popup);
-        wifi_test_popup = NULL;
-    }
-}
-
-/* Result popup (信息层): title + wrapped body + Close button. */
-static void wifi_test_show_result(const char *title, const char *text)
-{
-    wifi_test_close_cb(NULL);
-    wifi_test_popup = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(wifi_test_popup, 220, 250);
-    lv_obj_align(wifi_test_popup, LV_ALIGN_CENTER, 0, -10);
-    lv_obj_set_style_bg_color(wifi_test_popup, lv_color_white(), 0);
-    lv_obj_set_style_border_width(wifi_test_popup, 1, 0);
-    lv_obj_set_style_border_color(wifi_test_popup, lv_color_black(), 0);
-    lv_obj_set_style_radius(wifi_test_popup, 6, 0);
-    lv_obj_set_style_pad_all(wifi_test_popup, 8, 0);
-    lv_obj_set_flex_flow(wifi_test_popup, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(wifi_test_popup, 6, 0);
-    lv_obj_clear_flag(wifi_test_popup, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *t = lv_label_create(wifi_test_popup);
-    lv_label_set_text(t, title);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
-
-    lv_obj_t *b = lv_label_create(wifi_test_popup);
-    lv_obj_set_width(b, lv_pct(100));
-    lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(b, text);
-    lv_obj_set_style_text_font(b, &lv_font_montserrat_14, 0);
-    lv_obj_set_flex_grow(b, 1);
-
-    lv_obj_t *close_btn = lv_btn_create(wifi_test_popup);
-    lv_obj_set_width(close_btn, lv_pct(100));
-    lv_obj_set_height(close_btn, 32);
-    lv_obj_t *close_lab = lv_label_create(close_btn);
-    lv_label_set_text(close_lab, "Close");
-    lv_obj_center(close_lab);
-    lv_obj_add_event_cb(close_btn, wifi_test_close_cb, LV_EVENT_CLICKED, NULL);
-}
-
-static void wifi_test_btn_cb(lv_event_t *e)
-{
-    if (!http_require_wifi("WiFi Test")) {
-        return;
-    }
-    lv_label_set_text(wifi_test_lab, "Testing...");
-    lv_timer_handler();                         /* flush the label before the blocking call */
-
-    http_response_t resp = http_get("https://ifconfig.me/", 15000);
-
-    lv_label_set_text(wifi_test_lab, "WiFi Test (ifconfig.me)");
-
-    if (resp.success && resp.status_code == 200 && resp.body.length() > 0) {
-        Serial.printf("[WiFiTest] public ip: %s\n", resp.body.c_str());
-        string msg = "Public IP:\n" + resp.body;
-        wifi_test_show_result("WiFi Test OK", msg.c_str());
-    } else {
-        Serial.printf("[WiFiTest] request failed code=%d\n", resp.status_code);
-        char buf[64];
-        snprintf(buf, sizeof(buf), "Request failed\nHTTP %d", resp.status_code);
-        wifi_test_show_result("WiFi Test", buf);
     }
 }
 
@@ -2215,14 +2228,6 @@ static void create4_2(lv_obj_t *parent)
     lv_obj_set_style_border_width(wifi_scan_lab, 0, LV_PART_MAIN);
     lv_label_set_long_mode(wifi_scan_lab, LV_LABEL_LONG_WRAP);
 
-    lv_obj_t *wifi_test_btn = lv_btn_create(scr4_2_cont);
-    lv_obj_set_width(wifi_test_btn, lv_pct(95));
-    lv_obj_set_height(wifi_test_btn, 32);
-    wifi_test_lab = lv_label_create(wifi_test_btn);
-    lv_label_set_text(wifi_test_lab, "WiFi Test (ifconfig.me)");
-    lv_obj_center(wifi_test_lab);
-    lv_obj_add_event_cb(wifi_test_btn, wifi_test_btn_cb, LV_EVENT_CLICKED, NULL);
-
     lv_obj_t *back4_label = scr_back_btn_create(parent, ("Wifi"), scr4_2_btn_event_cb);
 }
 static void entry4_2(void) 
@@ -2239,7 +2244,7 @@ static void exit4_2(void) {
     }
 }
 
-static void destroy4_2(void) { wifi_test_close_cb(NULL); }
+static void destroy4_2(void) { }
 
 static scr_lifecycle_t screen4_2 = {
     .create = create4_2,
