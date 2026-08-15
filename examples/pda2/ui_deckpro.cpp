@@ -370,7 +370,7 @@ static void create0(lv_obj_t *parent)
     
     menu_taskbar_time = lv_label_create(menu_taskbar);
     lv_obj_set_style_border_width(menu_taskbar_time, 0, 0);
-    lv_label_set_text_fmt(menu_taskbar_time, "%02d:%02d", 10, 19);
+    lv_label_set_text(menu_taskbar_time, "--:--");  /* real time filled by the taskbar timer */
     lv_obj_set_style_text_font(menu_taskbar_time, &Font_Mono_Bold_14, LV_PART_MAIN);
     lv_obj_align(menu_taskbar_time, LV_ALIGN_LEFT_MID, 10, 0);
 
@@ -3889,12 +3889,36 @@ static void menu_keypay_get_event(lv_timer_t *t)
 static void menu_taskbar_update_timer_cb(lv_timer_t *t)
 {
     static int sec = 0;
+    static int taskbar_last_hour = -1;
+    static int taskbar_last_min = -1;
     sec++;
 
     bool charge = 0;
     bool finish = 0;
     bool wifi = 0;
     int percent = 0;
+
+    /* time: show the real local time (was hardcoded "10:19"); "--:--"
+     * until NTP has synced the clock */
+    {
+        time_t now = time(nullptr);
+        int h = -1, m = -1;
+        if (now > 1700000000) {
+            struct tm tmv;
+            localtime_r(&now, &tmv);
+            h = tmv.tm_hour;
+            m = tmv.tm_min;
+        }
+        if (h != taskbar_last_hour || m != taskbar_last_min) {
+            taskbar_last_hour = h;
+            taskbar_last_min = m;
+            if (h >= 0) {
+                lv_label_set_text_fmt(menu_taskbar_time, "%02d:%02d", h, m);
+            } else {
+                lv_label_set_text(menu_taskbar_time, "--:--");
+            }
+        }
+    }
 
     if(sec % 10 == 0)
     {
