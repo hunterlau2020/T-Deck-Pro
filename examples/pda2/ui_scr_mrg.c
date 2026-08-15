@@ -1,5 +1,6 @@
 ﻿
 #include "ui_scr_mrg.h"
+#include "peripheral.h"     /* keypad_clear_chars(): drop stale chars on screen transitions */
 
 /* 记录所有的屏幕卡片 */ 
 scr_card_t *scr_mgr_head;
@@ -136,6 +137,8 @@ bool scr_mgr_switch(int id, bool anim)  // 清空栈，然后切换到指定 id�
     if(tgt_card == NULL) // 没有找到该屏幕
         return false;
 
+    keypad_clear_chars(); // 切换页面：丢弃旧页面残留按键，避免注入新页面
+
     if(scr_stack_top != NULL) { // 如果有多张屏幕卡片叠在一起，就先记录顶层卡片
         curr_obj = scr_stack_top->obj;
         stack_scr = scr_stack_top->prev;
@@ -187,6 +190,8 @@ bool scr_mgr_push(int id, bool anim)
         return false;
     }
 
+    keypad_clear_chars(); // 进入新页面：丢弃此前残留按键，避免注入新页面
+
     stack_scr = lv_mem_alloc(sizeof(scr_card_t));
     stack_scr->id = tgt_card->id;
     // stack_scr->obj = tgt_card->life->create(NULL);
@@ -224,6 +229,8 @@ bool scr_mgr_pop(bool anim)
     if(scr_stack_top == NULL || scr_stack_top == scr_stack_root){
         return false;
     }
+
+    keypad_clear_chars(); // 退出页面：清掉连按产生的积压按键（如多次 Backspace），防止回到上一页后被再次消费
 
     cur_obj = scr_stack_top->obj;
     dst_item = scr_stack_top->prev;

@@ -28,11 +28,13 @@ const char keymap[KEYPAD_ROWS][KEYPAD_COLS] = {
 };
 
 // Secondary layer (sym; locked by Sym, momentary by Alt)
+//   (2,8) volume key -> '\v' (dedicated code, no pollution of text inputs)
+//   (3,6) Mic key     -> '0'  (digit zero on the sym layer)
 const char keymap_sym[KEYPAD_ROWS][KEYPAD_COLS] = {
     {'#', '1', '2', '3', '(', ')', '_', '-', '+', '@'},
     {'*', '4', '5', '6', '/', ':', ';', '\'','"', '\b'},
-    {  0, '7', '8', '9', '?', '!', ',', '.', '0', '\n'},
-    {  0,   0,   0,   0,   0,   0,   0, ' ',   0,   0},
+    {  0, '7', '8', '9', '?', '!', ',', '.', '\v', '\n'},
+    {  0,   0,   0,   0,   0,   0, '0', ' ',   0,   0},
 };
 
 // Tertiary layer (shift = uppercase; held while typing)
@@ -126,6 +128,19 @@ void keypad_set_flag(void)
 {
     /* Legacy API: with the software FIFO, get_val already consumes the char,
      * there is nothing left to clear. */
+}
+
+/* Clear queued chars on screen transitions (review finding 2.1): a screen
+ * must not receive keystrokes that were produced for the previous screen.
+ * extern "C": called from C code (ui_scr_mrg.c). */
+extern "C" void keypad_clear_chars(void)
+{
+    if (kbd_char_cnt > 0) {
+        kbd_char_cnt  = 0;
+        kbd_char_head = 0;
+        kbd_char_tail = 0;
+        Serial.println("[KBD] char fifo cleared (screen switch)");
+    }
 }
 
 void keypad_loop(void)

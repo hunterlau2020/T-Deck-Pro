@@ -57,6 +57,8 @@ void ai_cfg_keyboard_poll(void)
     if (!keypad_get_val(&c)) return;
     keypad_set_flag();
 
+    if (c == '\t' || c == '\v') return;         /* Alt+Enter scan combo / volume key: not for config */
+
     if (c == '\n') {
         /* Commit current field, advance to next; on last field save & exit. */
         const char *txt = lv_textarea_get_text(ai_ta);

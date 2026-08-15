@@ -116,21 +116,22 @@ Alt Z   X   C   V   B   N   M   $   ⏎
 
 **Sym layer** (press Sym to toggle/lock):
 ```
-#  1  2  3  (  )  _  -  +  @
-*  4  5  6  /  :  ;  '  "  ⌫
-Alt 7  8  9  ?  !  ,  .  0  ⏎
-     ⇧  Mic Space Sym ⇧
+#   1  2  3  (  )  _  -  +  @
+*   4  5  6  /  :  ;  '  "  ⌫
+Alt 7  8  9  ?  !  ,  .  Vol ⏎
+     ⇧  0  Space Sym ⇧
 ```
 
 Special keys:
 - `'\b'` (0x08) — Backspace/Delete (⌫)
 - `'\n'` (0x0A) — Enter (⏎)
 - `'\t'` (0x09) — Alt+Enter combo (WiFi-config scan shortcut)
-- `'$'` — Speaker key (app-specific)
+- `'$'` — Volume/speaker key (app-specific; ignored by text inputs)
+- `'\v'` (0x0B) — Volume key on the Sym layer (reserved, no handler yet; ignored by text inputs)
 - Shift keys: **two** Shift keys (bottom row, left and right) — hold for uppercase
 - **Alt** (Z-row left): hold for the **momentary sym layer** (digits/symbols, same map as Sym but not latched; release to return to normal)
-- Sym: toggles the sym-layer lock
-- Mic key is on the TCA8418 matrix but has no keymap function
+- Sym: toggles the sym-layer lock; on the sym layer the Mic key emits `'0'`
+- Mic key is on the TCA8418 matrix; its normal layer has no keymap function
 
 ### 3. Image/icon format
 

@@ -132,6 +132,8 @@ void ai_chat_keyboard_poll(void)
     if (!keypad_get_val(&c)) return;
     keypad_set_flag();
 
+    if (c == '\t' || c == '\v') return;         /* Alt+Enter scan combo / volume key: not for chat */
+
     if (chat_viewing) {
         if (c == '\n') {
             if ((chat_page + 1) * CHAT_LINES_PER_PAGE < chat_line_cnt) {

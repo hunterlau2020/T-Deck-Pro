@@ -48,6 +48,13 @@ int keypad_get_val(char *c);
 void keypad_loop(void);
 void keypad_regetser_cb(keypad_cb cb);
 void keypad_set_flag(void);
+#ifdef __cplusplus
+extern "C" {
+#endif
+void keypad_clear_chars(void);   /* called from C code (ui_scr_mrg.c) */
+#ifdef __cplusplus
+}
+#endif
 
 // gyro
 bool BHI260AP_init(void);
