@@ -2,7 +2,7 @@
 
 > 状态：**评审未通过**（2026-08-09）— 7 项新 finding 待修订（见 [评审结果](allinone-design-review-result.md)）
 > 原评审：2026-08-08 通过；2026-08-09 二次评审：5 项通过 / 4 项不通过 / 2 项缺证据；新增 2 High + 5 Medium
-> 日期：2026-08-07；**2026-08-16 按 pda2 预研最新结论修订**（键盘修饰键模型、WiFi 配置屏设计、扫描生命周期、WiFi Test、AI 输入体验——预研经 7 轮评审 + 真机验证，记录见 `docs/reviews/`）
+> 日期：2026-08-07；**2026-08-16 两轮修订**：① 按 pda2 预研最新结论修订（键盘修饰键模型、WiFi 配置屏设计、扫描生命周期、WiFi Test、AI 输入体验——预研经 11 轮评审 + 真机验证，记录见 `docs/reviews/`）；② **AI 对话/配置交互按两份专项评审重写**（[技术评审](reviews/allinone-ai-interaction-review-result.md) 9 项 + [产品体验评审](reviews/allinone-design-ai-ux-flow-review-result.md) 10 项 + 状态机，§4 AI 两节）
 > 相关文档：[代码结构与编译方法](build-and-code-structure.md)、[评审申请书](allinone-design-review-request.md)、[评审结果](allinone-design-review-result.md)
 
 ## 1. 背景与目标
@@ -23,7 +23,7 @@
 - **MP3 来源**：SD 卡本地文件（非 SPIFFS、非网络流）。
 - **网络功能形态**：调用在线词典接口 `api.dictionaryapi.dev/api/v2/entries/en/<word>`。
 - **组织方式**：新建独立示例 `examples/allinone`（不动现有 `pda2`/`factory`）。
-- **AI 形态**：仅**文本对话**，不做语音（国内大模型聊天接口不收音频，ASR 成本高）。
+- **AI 形态**：仅**文本对话**，不做语音（国内大模型聊天接口不收音频，ASR 成本高）。**v1 为单轮问答**（发送只带当前问题，无多轮上下文，页面明示；多轮上下文列为 v2——体验评审 §1.7 决策）。
 - **配置方式**：WiFi 与 AI 端点（URL/模型/Key）全部**运行时 NVS 可配置**（`Preferences`），不再依赖编译期 `config_keys.h`。
 - **AI 平台**：对接 **OpenRouter**（`https://openrouter.ai/api/v1/chat/completions`，OpenAI 兼容），**模型手动输入**（如 `deepseek/deepseek-chat`、`openai/gpt-4o`），不做厂商预置快捷项；端点保留可改（兼容国内厂商自建端点）。
 - **keypad 修饰键（预研结论，2026-08-16 修订）**：HD-V2 硬件实测（串口矩阵解码）——**无 Ctrl 键**；Z 行最左键丝印为 **Alt(2,0)**，底行有两个 **Shift**（(3,5)/(3,9)），Sym(3,8)。语义（产品决策 B，评审采纳）：
@@ -157,15 +157,47 @@ keypad 三层——普通层小写 a-z + 空格 + `\n`/`\b`（`peri_keypad.cpp::
 - **焦点同步（pda2 有触摸）**：textarea `LV_EVENT_FOCUSED` 回调同步 `wifi_cfg_field`，触摸点框与键盘编辑目标一致；allinone 无触摸则无此需求。
 - 开机：读 NVS，有凭据则自动 `WiFi.begin` + `setAutoReconnect(true)`；无凭据则菜单 WiFi 按钮旁显示 `!`，词典/AI 请求时 `http_require_wifi` 失败提示"先配置 WiFi"。
 
-### AI 对话屏交互
-- 输入态：字符键输入问题（数字/符号需先按 Sym）、`\b` 删除、`\n` 发送。**不用 `c` 作快捷键**（英文提问里 'c' 极常见，会误触配置），AI 配置从**菜单 "8 AI Cfg" 按钮**进入（评审 #1 修复：6 项菜单没有 AI Cfg 入口）。
-- 发送：`openai_chat(prompt, cfg)`（`Authorization: Bearer <key>`），等待期间显示 `…`，返回后分页显示回答；`\b` 返回菜单。
-- 无 WiFi / 未配置 Key：提示 `Set WiFi / Set AI Key`，引导到对应配置屏。
+### AI 对话屏交互（2026-08-16 修订——依据 [技术评审](reviews/allinone-ai-interaction-review-result.md) 9 项 + [产品体验评审](reviews/allinone-design-ai-ux-flow-review-result.md) 10 项 Findings）
 
-### AI 配置屏交互
-- 三字段：端点 URL / 模型 / API Key，`\n` 确认当前字段并跳下一字段（末字段 `\n` 存 NVS 并退出回 AI 对话屏）；`\b` 退格（字段为空时返回上一字段）。
-- 端点**默认预填 OpenRouter** `https://openrouter.ai/api/v1/chat/completions`（可改）；**模型手动输入**（如 `deepseek/deepseek-chat`、`qwen/qwen-2.5-72b-instruct`、`openai/gpt-4o`）；Key 标签掩码显示（`sk-or-v1-***`），编辑时文本框显示明文。
-- 字段均为小写 + `0-9 . : / - _`（keypad 符号层），OpenRouter Key `sk-or-v1-...` 可直接输入。
+- **产品语义（明确决策）**：**v1 为单轮问答**——每次发送只携带当前问题（无多轮上下文）；页面标题与提示明示 "Single-shot Q&A"（体验评审 §1.7）。多轮上下文列为 v2。
+- **状态条**（常显一行，超宽省略中间保留末尾）：`M: <model> · <host> · Key: ****<末4位>`——用户随时知道当前生效配置，多人共用设备不误发（体验评审 §1.1）。
+- **chat_draft 草稿契约**（体验评审 §1.2）：独立草稿缓存，**发送成功才清空**；任何失败、退屏、跳配置页均保留；下次进屏且输入框为空时自动恢复；超长草稿不得因缓冲限制静默截断（上限 2000 字节，超限提示）。
+- **异步发送**（技术评审 §1.5）：`openai_chat` 在 **FreeRTOS 任务**中执行（HTTP 15-30s 不冻结 UI）；结果经消息队列送回 LVGL 线程；**发送代次校验**——取消/离页后的迟到结果丢弃；发送期间按键 FIFO **清空**（不批量注入输入框，体验评审 §1.6）；Enter 防抖（发送态重复 Enter 忽略）。
+- **状态机**（体验评审 §3.2）：
+
+| 状态 | Enter | Backspace | 可见字符 | 其他 |
+|---|---|---|---|---|
+| INPUT | 发送（缺 WiFi/Key → **直接 push 对应配置屏并保留草稿**） | 删字；空框退菜单（草稿保留） | 追加 | 状态条常显 |
+| SENDING | 忽略 | **取消请求** | 屏蔽 | 完成后清按键 FIFO |
+| ANSWER | 下一页 | 上一页；首页回 INPUT | 回 INPUT 并追加（保留回答可返回） | 标题区 `Page X/Y`；Sym-0 首页 / Sym-9 末页（体验评审 §1.9） |
+| FAILED | 打开对应配置屏（草稿保留） | 回 INPUT | 回 INPUT 并追加 | 错误横幅持续到下次发送成功（体验评审 §1.4） |
+
+- **错误分类表**（技术评审 §1.6 + 体验评审 §1.4）：失败提示两行——上行错误类别（`No WiFi` / `Time not synced` / `TLS error` / `401 Auth` / `402/429 Quota` / `404 Model` / `Timeout/5xx` / `Bad response`），下行可执行动作（`Enter=Open Cfg / Sym-1=Retry / Back=Cancel`）；**修 WiFi 跳 `SCREEN_WIFI_CFG_ID`，修 AI 跳 `SCREEN_AI_CFG_ID`**；Retry 保留原问题草稿。
+- 无 WiFi / 未配置 Key：进入 NO_CONFIG 态——不再只显示静态文字，**Enter 直达对应配置屏（保留草稿）**，配置保存后返回对话屏恢复草稿由用户确认再发（技术评审 §1.1）。
+- 不用 `c` 作快捷键（英文提问里 'c' 极常见，会误触配置）；AI 配置入口仍保留菜单 "8 AI Cfg"。
+
+### AI 配置屏交互（2026-08-16 修订——显式状态机 + Test 先行，参照 WiFi 配置屏成熟范式）
+
+- **状态机**（技术评审 §1.2/§1.3 + 体验评审 §1.3/§1.5/§1.10/§3.1）：
+
+| 状态 | 说明 | 允许动作 |
+|---|---|---|
+| EDITING | 进入时拍**快照**；编辑不写 NVS | 字符追加、`\b` 删字（不再用"删空字段"做导航）、**Alt+方向键/`+`/`-` 切字段**（不修改内容）、Alt+T Test |
+| CONFIRM_SAVE | 末字段 Enter 进入，**二次确认** | 展示 `Save? <草稿> replaces <旧值>`；Enter=保存、其他=回 EDITING |
+| TESTING | 发最小请求（`GET /models`） | Backspace 取消；屏蔽字段编辑 |
+| TEST_RESULT | 按错误分类表显示 | Enter=进 CONFIRM_SAVE；Backspace=回 EDITING |
+| SAVING / SAVED | 写入 NVS；失败回 EDITING + 错误 | SAVED 后 Enter 返回对话屏（带草稿） |
+| CONFIRM_DISCARD | 任意位置 Backspace 退屏时 | `Discard changes? Enter=Y / any=N`；确认恢复快照退出 |
+
+- **Test 先行契约**：**Test 通过才允许 Save**（失败不写 NVS，可用配置永不被动覆盖——与 WiFi 配置"连接成功才保存"同一范式）；测试结果保留至下次 Test 或编辑。
+- **字段与校验**（体验评审 §1.5/§1.7/§1.9 + 技术评审 §1.9）：
+  - 端点：预填 OpenRouter `https://openrouter.ai/api/v1/chat/completions`；校验 `https://` 前缀 + 路径非空；字段下小字格式提示 `https://host[:port]/v1`；**最近 3 次端点历史**（`+`/`-` 循环复用）
+  - 模型：非空校验；格式提示 `provider/model`（OpenRouter）vs 仅 `model`（OpenAI 直连）；**最近 3 次成功模型历史**（仅 2xx 响应的模型入史）
+  - Key：长度 ≥16；**默认掩码显示 `****<末4位>`**（通用形式，不再固定 `sk-or-v1-***`）；**Alt+R Reveal 显示明文 5 秒自动恢复**；离开 Key 字段强制一次 EPD 全刷清残影（体验评审 §1.8）
+  - 各字段明确**最大长度**（端点 160 / 模型 80 / Key 80）与**允许字符**（含大写 A-Z、`+` 等真实 Key 字符——超出 keypad 三层可表达范围时按 §4 键层说明输入），超限即时提示、**不静默截断**
+  - **Alt+0 = Reset to defaults**（恢复 OpenRouter 端点 + 清空模型/Key，进 CONFIRM_DISCARD 流程）
+- **TLS 模式为第四字段**（技术评审 §1.4）：键盘可达枚举（CA Verify / Insecure）；切 Insecure 前显示风险确认行；页内持续显示 `⚠️ TLS bypass` 警告；**语义明确为会话级**（仅本次会话生效，不写 NVS——文档不再承诺持久化开关）。词典请求仍强制 CA 验证。
+- 保存：NVS namespace `ai`（`endpoint`/`model`/`key`），**仅 CONFIRM_SAVE 通过后写入**；Key 不打印到日志。
 
 ## 5. 文件清单
 
@@ -217,7 +249,7 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 | `ui_keypad.cpp` | 返回按钮 + 提示 + 回显标签、`keypadtest_keyboard_poll`（`\b` 返回菜单）、`scr_lifecycle_t screen_keypad` |
 | `ui_wifi_config.cpp` | **SSID `lv_textarea` + 编辑/扫描选择双模式**（预研结论，交互细则见 §4 WiFi 配置屏）：Alt+Enter/空框 Enter 异步扫描（`scanNetworks(true)` + `scanComplete()` 轮询 + 扫描代次失效 + 置顶倒计时覆盖层屏蔽输入 + 结果横幅）、`+`/`-` 循环候选、`\n` 提交、`\b` 删字/取消/返回；**密码 `lv_textarea`**：`\n` = **连接成功才存 NVS**（`Preferences` namespace `wifi`）、`\b` 退格/回 SSID；草稿保留（`refresh_labels`/`sync_draft` 分离）；触摸按钮 Connect/Clear（allinone 无触摸需键盘等价：Connect=密码框 Enter、Clear=Alt+Backspace 待定）；`wifi_cfg_keyboard_poll`、`scr_lifecycle_t screen_wifi` |
 | `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（浏览回答时 `\n` 下一页/`\b` 回上一页或退出；**无 `c` 快捷键**，AI 配置走菜单）、`scr_lifecycle_t screen_ai_chat`。**预研补充（pda2 已实现）**：发送成功后清空输入框（浏览态 `\b` 语义无歧义）；浏览回答时按任意可见字符自动回输入模式并追加该字符（不静默丢弃）；`\t`（Alt+Enter）/`\v`（音量码）控制码显式忽略。**评审 #1.6 修订 + #2.4 二次修订 — UTF-8 安全分页**：必须按 **UTF-8 码点边界**断行，禁止 `strlen()/memcpy()` 字节切。<br>① 输入：`openai_chat()` 返回的字节流按 UTF-8 解码为 codepoint 序列；连续 ASCII 视为单列，连续 CJK/全角视为双列，emoji 按 `wcwidth()` 视为 2 列。<br>② 断行：从行首累计显示列数；下一个 codepoint 会让累计列数 **> 30 列**时，在该 codepoint 之前断行（即只切到 codepoint 边界，绝不在 continuation byte `0x80-0xBF` 中间断开）。<br>③ **LVGL 8.3.11 API 选型（评审 #2.4 修订）**：评审 #1.6 提到的 `lv_txt_get_next_line()` 在 LVGL 8.3.11 中**不存在**（实际是 private `_lv_txt_get_next_line()`，需 `#include "../src/misc/lv_txt.h"` 才能用）；`LV_LABEL_LONG_BREAK` 也是错记——**正确宏名是 `LV_LABEL_LONG_WRAP`**。<br>　　**推荐实现**：直接用 LVGL 公开 API：<br>　　```cpp<br>　　lv_obj_t *lbl = lv_label_create(parent);<br>　　lv_obj_set_width(lbl, LV_PCT(100));                    // 让 label 自适应父容器宽度<br>　　lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);        // 内部按字符宽度自动换行（含 CJK）<br>　　lv_label_set_text(lbl, full_answer);                    // 直接喂全文，LVGL 处理 wrap + UTF-8 码点边界<br>　　lv_label_set_recolor(lbl, false);                       // 关闭 recolor 避免 '$' 字符冲突<br>　　```<br>　　`LV_LABEL_LONG_WRAP` 在 LVGL 8.3.11 是稳定的 public API（声明于 `lvgl/src/widgets/lv_label.h`），不依赖任何私有符号；换行基于实际渲染字体像素宽度，中文/英文混合自动正确断行。<br>④ 显示宽度基准：EPD 240px ÷ 14pt 字体 ≈ 30 列（ASCII）/ 15 列（CJK），由 LVGL 根据 `lv_obj_set_width()` 自动决定每行字符数。<br>⑤ `(truncated)` 标记仍按字节截断位置放在末尾（4096B 缓冲满时）：检测 `body.size() >= CHAT_ANSWER_MAX` 时 `chat_truncated=true`，`chat_render` 末尾追加 `\n(truncated)`。 |
-| `ui_ai_cfg.cpp` | 端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key 三字段，`\n` 确认当前字段并跳下一字段（末字段 `\n` 存 NVS namespace `ai` + 退出）、`\b` 退格/回上一字段；Key 标签掩码显示（`sk-or-v1-***`）、`ai_cfg_keyboard_poll`、`scr_lifecycle_t screen_ai_cfg` |
+| `ui_ai_cfg.cpp` | **四字段显式状态机**（端点/模型/Key/TLS，交互细则见 §4 AI 配置屏）：进入拍快照、Alt+方向键切字段、末字段 Enter 进 CONFIRM_SAVE 二次确认（Test 通过才允许保存，失败不写 NVS）、Backspace 退屏走 CONFIRM_DISCARD、Alt+T Test（`GET /models` 按错误分类表显示）、Alt+R Key 明文 Reveal（5s 自动掩码，离开字段强制全刷）、Key 掩码 `****<末4位>`、最近 3 次端点/模型历史、Alt+0 Reset defaults；校验（https 前缀/非空/Key≥16）失败屏内明示不退出、`ai_cfg_keyboard_poll`、`scr_lifecycle_t screen_ai_cfg` |
 | `openai_api.h/.cpp` | **新写 OpenAI 兼容客户端** `openai_chat(prompt, base_url, model, api_key)`：POST `{"model":..., "messages":[{"role":"user","content":...}]}`，**直接复用 `http_post`**（`http_utils.h::http_post` 声明已支持 `auth_header` → `Authorization: Bearer <key>`，`content_type=application/json`），解析 `choices[0].message.content`；默认端点 OpenRouter；TLS 策略见 §2.3 注 |
 | `src/assets.h` | 仅 `LV_IMG_DECLARE` 4 个图标（`extern "C"` 包裹） |
 | ~~`config_keys.h`~~ | **不再需要**：WiFi/AI 全部运行时 NVS 配置，`allinone.ino` 删除对它的 include |
@@ -284,13 +316,15 @@ pio run -e allinone --jobs 8
 7. **GPS UBX 握手启动时阻塞 ~2.4s**（LVGL 初始化之前），仅延迟首屏。
 8. **`.ino` 发现规则**：`allinone/` 顶层只能有一个 `allinone.ino`；已改用 NVS 运行时配置，`config_keys.h` 不再必需。
 9. **keypad 输入限制**：普通层小写 a-z + 空格 + `\n`/`\b`；**Shift 层大写 A-Z**（按住任一 Shift(3,5)/(3,9)，`peri_keypad.cpp::keymap_shift`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（按 Sym(3,8) 锁定，或按住 Alt(2,0) 临时进入，`peri_keypad.cpp::keymap_sym`），文档中数字/符号按键均需先按 Sym 或按住 Alt（见 §4 键层说明）；Alt+Enter → `'\t'` 扫描快捷键；Sym 层音量键 → `'\v'`（保留码）、麦克风键 → `'0'`。**完整修饰键模型已在 pda2 预研实现并经 7 轮评审 + 真机验证**（§1 决策）：大小写/符号 SSID 均可输入；OpenRouter Key `sk-or-v1-...`、模型 ID 多为小写，无需 Shift。
-10. **WiFi/AI 配置屏**：所有联网功能依赖已配好的 WiFi（未配 → 提示先配 WiFi）；AI 请求与词典一样**同步阻塞**（`http_post` 默认 15s 超时，OpenRouter 模型响应可能更慢，可放宽到 30s），AI 屏与音乐屏互斥；Key/端点存 NVS 明文（`Preferences`，namespace `wifi`/`ai`），不打印到日志；OpenRouter 为 OpenAI 兼容接口，个别字段差异以实际响应调通。
+10. **WiFi/AI 配置屏**：所有联网功能依赖已配好的 WiFi（未配 → 提示先配 WiFi）；**AI 请求异步执行**（FreeRTOS 任务 + 发送代次校验，2026-08-16 修订——技术评审 §1.5：同步阻塞 15-30s 冻结 UI 不可接受，迟到结果按代次丢弃，完成后清理发送期间按键 FIFO），AI 屏与音乐屏互斥；Key/端点存 NVS（`Preferences`，namespace `wifi`/`ai`），**仅二次确认 + Test 通过后写入**，不打印到日志；OpenRouter 为 OpenAI 兼容接口，个别字段差异以实际响应调通。
 11. **TLS 证书校验依赖系统时间（评审 #1.2 修订）**：ESP32 冷启动系统时间默认为 epoch（1970-01-01）或编译时间，远早于现代证书 `notBefore`（2024+），mbedtls 直接判 `certificate not yet valid` 并 reject。`allinone.ino::setup()` 必须先 `configTzTime()`，然后 `setup()` 末尾轮询 `time(nullptr) > 1700000000`（即 2023-11-14 之后），最多等 30s；超时仍未同步则在 `WiFi` 屏与 `AI Cfg` 屏均显示 `! time not synced`，**首次 HTTPS 请求返回 `Time not synced, retry after NTP sync` 而非 `Failed to verify`**。GPS 1PPS 校时作为 v2 增强（v1 仅 NTP）。
 
 ## 10. 待评审要点
 
 - [x] AI 平台 → 已确认：**OpenRouter**（OpenAI 兼容），模型手动输入。
-- [x] keypad 无大写 → 已改：pda2 预研实现完整修饰键模型（双 Shift 大写 / Alt 临时符号层 / Sym 锁定 / Alt+Enter 扫描），经 7 轮评审 + 真机验证（记录见 `docs/reviews/`）。
+- [x] keypad 无大写 → 已改：pda2 预研实现完整修饰键模型（双 Shift 大写 / Alt 临时符号层 / Sym 锁定 / Alt+Enter 扫描），经 11 轮评审 + 真机验证（记录见 `docs/reviews/`）。
+- [x] AI v1 语义 → 已确认：**单轮问答**（页面明示；多轮上下文 v2，体验评审 §1.7）。
+- [x] AI 配置交互 → 已按两份专项评审修订：显式状态机（EDITING/CONFIRM_SAVE/TESTING/CONFIRM_DISCARD）、Test 先行、错误分类表 + 可执行入口、Key 掩码/Reveal、草稿跨屏保留、异步发送（§4 AI 两节）。
 - [x] 实现顺序 → 已确认：先在 **pda2 预研** WiFi/AI 配置并真机验证，成熟后移植 allinone（见 `TODO.md` 阶段 0）。
 - [x] MP3 扫描目录 → 已确认：优先 `/music`，不存在回退根目录。
 - [x] 联网查询阻塞 → 已确认：接受 v1 同步阻塞（词典 8s / AI 15-30s）。
