@@ -22,6 +22,7 @@ typedef struct {
     int status_code;
     string body;
     bool success;
+    string error;       /* human-readable failure detail (TLS/time/etc.) */
 } http_response_t;
 
 /**

@@ -1449,9 +1449,14 @@ static void wifi_test_run(void)
         string msg = "Public IP:\n" + resp.body;
         wifi_test_show_result("WiFi Test OK", msg.c_str());
     } else {
-        Serial.printf("[WiFiTest] request failed code=%d\n", resp.status_code);
-        char buf[64];
-        snprintf(buf, sizeof(buf), "Request failed\nHTTP %d", resp.status_code);
+        Serial.printf("[WiFiTest] request failed code=%d err=%s\n",
+                      resp.status_code, resp.error.c_str());
+        char buf[128];
+        if (!resp.error.empty()) {
+            snprintf(buf, sizeof(buf), "Request failed\n%s", resp.error.c_str());
+        } else {
+            snprintf(buf, sizeof(buf), "Request failed\nHTTP %d", resp.status_code);
+        }
         wifi_test_show_result("WiFi Test", buf);
     }
 }
