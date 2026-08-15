@@ -1476,6 +1476,7 @@ static scr_lifecycle_t screen4 = {
 // --------------------- screen 4.1 --------------------- Wifi Config
 #if 1
 #include <WiFi.h>
+#include <esp_wifi.h>       /* esp_wifi_scan_stop(): actually abort an async scan */
 #include <Preferences.h>
 
 static lv_obj_t *wifi_ssid_lab = NULL;
@@ -1520,13 +1521,23 @@ static void wifi_cfg_save(void)
     p.end();
 }
 
-static void wifi_cfg_refresh(void)
+/* Update field markers/status only. The textareas hold live drafts and must
+ * NOT be rewritten from the buffers on field transitions (finding 2.4). */
+static void wifi_cfg_refresh_labels(void)
 {
     lv_label_set_text(wifi_ssid_lab, wifi_cfg_field == 0 ? "SSID >" : "SSID");
     lv_label_set_text(wifi_pass_lab, wifi_cfg_field == 1 ? "Pass >" : "Pass");
     lv_label_set_text(wifi_status_lab, wifi_status);
-    lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
-    lv_textarea_set_text(wifi_pass_ta, wifi_pass);
+}
+
+/* Sync the current field's textarea into its draft buffer, so switching
+ * fields keeps uncommitted edits (finding 2.4). */
+static void wifi_cfg_sync_draft(void)
+{
+    lv_obj_t *ta = (wifi_cfg_field == 0) ? wifi_ssid_ta : wifi_pass_ta;
+    char *buf = (wifi_cfg_field == 0) ? wifi_ssid : wifi_pass;
+    strncpy(buf, lv_textarea_get_text(ta), 64);
+    buf[64] = '\0';
 }
 
 /* Start an asynchronous WiFi scan (Alt+Enter in the SSID field). Keeps the
@@ -1582,6 +1593,7 @@ static void wifi_cfg_scan_poll(void)
         }
         wifi_scan_cnt++;
     }
+    WiFi.scanDelete();                          /* release the framework's result memory (2.3) */
     if (wifi_scan_cnt == 0) {
         snprintf(wifi_status, sizeof(wifi_status), "Scan: none found");
         lv_label_set_text(wifi_status_lab, wifi_status);
@@ -1634,31 +1646,36 @@ static void wifi_cfg_commit(void)
  * keep wifi_cfg_field in sync so keypad edits always target the box the
  * user sees the cursor in. The field guard also preserves uncommitted text:
  * tapping the already-active box must not reset the textarea. */
+static void wifi_cfg_set_field(int f);
+
 static void wifi_ssid_focus_cb(lv_event_t *e)
 {
     if (wifi_cfg_field != 0) {
-        wifi_cfg_field = 0;
-        wifi_cfg_refresh();
+        wifi_cfg_set_field(0);
     }
 }
 
 static void wifi_pass_focus_cb(lv_event_t *e)
 {
     if (wifi_cfg_field != 1) {
-        wifi_cfg_field = 1;
-        wifi_cfg_scan_mode = false;             /* abandoning a pick: back to edit mode */
-        wifi_cfg_refresh();
+        wifi_cfg_set_field(1);
     }
 }
 
-/* Keypad-driven field switch: also move the visible cursor (LV_EVENT_FOCUSED
- * restarts the textarea cursor blink) so it matches the ">" marker. */
+/* Field switch (keypad or touch): sync the outgoing field's draft, move the
+ * visible cursor (LV_EVENT_FOCUSED restarts the textarea cursor blink) so it
+ * matches the ">" marker, and refresh labels only — the other box's content
+ * is never rewritten (finding 2.4). */
 static void wifi_cfg_set_field(int f)
 {
+    if (f != wifi_cfg_field) {
+        wifi_cfg_sync_draft();
+    }
     wifi_cfg_field = f;
+    wifi_cfg_scan_mode = false;
     lv_event_send(f == 0 ? (lv_obj_t *)wifi_ssid_ta : (lv_obj_t *)wifi_pass_ta,
                   LV_EVENT_FOCUSED, NULL);
-    wifi_cfg_refresh();
+    wifi_cfg_refresh_labels();
 }
 
 void wifi_cfg_keyboard_poll()
@@ -1682,9 +1699,7 @@ void wifi_cfg_keyboard_poll()
                 wifi_scan_idx = (wifi_scan_idx + (c == '+' ? 1 : wifi_scan_cnt - 1)) % wifi_scan_cnt;
                 lv_textarea_set_text(wifi_ssid_ta, wifi_scan_ssids[wifi_scan_idx]);
             } else if (c == '\n') {
-                /* pick the shown candidate */
-                strncpy(wifi_ssid, lv_textarea_get_text(wifi_ssid_ta), sizeof(wifi_ssid) - 1);
-                wifi_cfg_scan_mode = false;
+                /* pick the shown candidate (set_field syncs the draft) */
                 wifi_cfg_set_field(1);
             } else if (c == '\b') {
                 /* cancel the pick: restore the pre-scan box content */
@@ -1700,8 +1715,7 @@ void wifi_cfg_keyboard_poll()
             if (c == '\n') {
                 const char *txt = lv_textarea_get_text(wifi_ssid_ta);
                 if (txt && txt[0] != '\0') {
-                    /* commit the box, goto password */
-                    strncpy(wifi_ssid, txt, sizeof(wifi_ssid) - 1);
+                    /* commit the box (set_field syncs the draft), goto password */
                     wifi_cfg_set_field(1);
                 } else {
                     snprintf(wifi_status, sizeof(wifi_status), "Type SSID or Alt+Enter:scan");
@@ -1725,9 +1739,9 @@ void wifi_cfg_keyboard_poll()
             return;                             /* Alt+Enter scan combo: not valid here */
         }
         if (c == '\n') {
-            strncpy(wifi_pass, lv_textarea_get_text(wifi_pass_ta), sizeof(wifi_pass) - 1);
+            wifi_cfg_sync_draft();               /* pass box → wifi_pass */
             wifi_cfg_save();
-            wifi_cfg_refresh();
+            wifi_cfg_refresh_labels();
             wifi_cfg_commit();
         } else if (c == '\b') {
             const char *txt = lv_textarea_get_text(wifi_pass_ta);
@@ -1809,7 +1823,9 @@ static void create4_1(lv_obj_t *parent)
     wifi_scan_cnt = 0;
     wifi_scan_idx = 0;
     wifi_cfg_load();
-    wifi_cfg_refresh();
+    lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
+    lv_textarea_set_text(wifi_pass_ta, wifi_pass);
+    wifi_cfg_refresh_labels();
     wifi_cfg_kbd_active = true;
 }
 
@@ -1820,7 +1836,11 @@ static void destroy4_1(void)
     wifi_cfg_kbd_active = false;
     wifi_cfg_scan_mode = false;
     if (wifi_scan_state == WIFI_SCAN_RUNNING) {
-        WiFi.scanDelete();                      /* stop a pending async scan */
+        /* framework scanDelete() only frees results and clears flags — it
+         * does NOT abort an in-flight scan. Stop it for real so other
+         * screens' scans are not blocked with WIFI_SCAN_RUNNING (2.3). */
+        esp_wifi_scan_stop();
+        WiFi.scanDelete();
         wifi_scan_state = WIFI_SCAN_FAILED;
     }
 }
