@@ -199,6 +199,11 @@ static void http_capture_error(http_response_t &resp, HTTPClient &http,
 
 http_response_t http_get(const char *url, uint32_t timeout_ms)
 {
+    return http_get_ua(url, NULL, timeout_ms);
+}
+
+http_response_t http_get_ua(const char *url, const char *user_agent, uint32_t timeout_ms)
+{
     http_response_t resp = {0, "", false, ""};
     if (s_tls_mode != HTTP_TLS_INSECURE && !http_ensure_time(5000)) {
         resp.status_code = -3;
@@ -217,6 +222,10 @@ http_response_t http_get(const char *url, uint32_t timeout_ms)
         client.lastError(err, sizeof(err));
         resp.error = err[0] ? err : resp.body;
         return resp;
+    }
+
+    if (user_agent && user_agent[0] != '\0') {
+        http.addHeader("User-Agent", user_agent);
     }
 
     resp.status_code = http.GET();
@@ -333,6 +342,7 @@ void http_set_tls_mode(http_tls_mode_t mode) {}
 http_tls_mode_t http_get_tls_mode(void) { return HTTP_TLS_INSECURE; }
 bool http_require_wifi(const char *feature_name) { return false; }
 http_response_t http_get(const char *url, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
+http_response_t http_get_ua(const char *url, const char *user_agent, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
 http_response_t http_post(const char *url, const string &body, const char *content_type, const char *auth_header, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
 http_response_t http_post_large(const char *url, const uint8_t *data, size_t data_len, const char *content_type, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
 char *base64_encode_psram(const uint8_t *data, size_t len, size_t *out_len) { *out_len = 0; return NULL; }

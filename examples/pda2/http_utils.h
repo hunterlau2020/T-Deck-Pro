@@ -57,6 +57,18 @@ bool http_require_wifi(const char *feature_name);
 http_response_t http_get(const char *url, uint32_t timeout_ms = 10000);
 
 /**
+ * @brief Perform an HTTPS GET with an explicit User-Agent header.
+ *        Some endpoints (e.g. ifconfig.me) return HTML to unknown/browser
+ *        agents and plain text to curl-like agents.
+ * @param url Full URL to fetch.
+ * @param user_agent User-Agent value (NULL/empty = default).
+ * @param timeout_ms Request timeout in milliseconds (default 10000).
+ * @return http_response_t with status_code, body, success and error.
+ */
+http_response_t http_get_ua(const char *url, const char *user_agent,
+                            uint32_t timeout_ms = 10000);
+
+/**
  * @brief Perform an HTTPS POST request.
  * @param url Full URL to post to.
  * @param body Request body content.

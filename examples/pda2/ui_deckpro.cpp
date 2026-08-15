@@ -1440,13 +1440,17 @@ static void wifi_test_run(void)
     wifi_test_show_result("WiFi Test", "Testing...");
     lv_timer_handler();                         /* flush before the blocking call */
 
-    http_response_t resp = http_get("https://ifconfig.me/", 15000);
+    /* curl-like User-Agent: ifconfig.me returns plain text to curl, HTML
+     * to unknown/browser agents */
+    http_response_t resp = http_get_ua("https://ifconfig.me/", "curl/8.5.0", 15000);
 
     if (!wifi_test_active) return;              /* user left the page while fetching */
 
     if (resp.success && resp.status_code == 200 && resp.body.length() > 0) {
         Serial.printf("[WiFiTest] public ip: %s\n", resp.body.c_str());
-        string msg = "Public IP:\n" + resp.body;
+        size_t end = resp.body.find_last_not_of(" \t\r\n");
+        string ip = (end == string::npos) ? resp.body : resp.body.substr(0, end + 1);
+        string msg = "Public IP:\n" + ip;
         wifi_test_show_result("WiFi Test OK", msg.c_str());
     } else {
         Serial.printf("[WiFiTest] request failed code=%d err=%s\n",
