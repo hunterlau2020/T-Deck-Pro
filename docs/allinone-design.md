@@ -2,7 +2,7 @@
 
 > 状态：**评审未通过**（2026-08-09）— 7 项新 finding 待修订（见 [评审结果](allinone-design-review-result.md)）
 > 原评审：2026-08-08 通过；2026-08-09 二次评审：5 项通过 / 4 项不通过 / 2 项缺证据；新增 2 High + 5 Medium
-> 日期：2026-08-07
+> 日期：2026-08-07；**2026-08-16 按 pda2 预研最新结论修订**（键盘修饰键模型、WiFi 配置屏设计、扫描生命周期、WiFi Test、AI 输入体验——预研经 7 轮评审 + 真机验证，记录见 `docs/reviews/`）
 > 相关文档：[代码结构与编译方法](build-and-code-structure.md)、[评审申请书](allinone-design-review-request.md)、[评审结果](allinone-design-review-result.md)
 
 ## 1. 背景与目标
@@ -26,7 +26,11 @@
 - **AI 形态**：仅**文本对话**，不做语音（国内大模型聊天接口不收音频，ASR 成本高）。
 - **配置方式**：WiFi 与 AI 端点（URL/模型/Key）全部**运行时 NVS 可配置**（`Preferences`），不再依赖编译期 `config_keys.h`。
 - **AI 平台**：对接 **OpenRouter**（`https://openrouter.ai/api/v1/chat/completions`，OpenAI 兼容），**模型手动输入**（如 `deepseek/deepseek-chat`、`openai/gpt-4o`），不做厂商预置快捷项；端点保留可改（兼容国内厂商自建端点）。
-- **keypad 大写**：pda2 预研阶段已实现 **Shift→大写层**（`peri_keypad.cpp` 第三层 `keymap_shift`，按住 Shift(2,0) 出 A-Z、松开回小写），大写 SSID 可正常输入；**Sym 键仍管符号/数字层**。
+- **keypad 修饰键（预研结论，2026-08-16 修订）**：HD-V2 硬件实测（串口矩阵解码）——**无 Ctrl 键**；Z 行最左键丝印为 **Alt(2,0)**，底行有两个 **Shift**（(3,5)/(3,9)），Sym(3,8)。语义（产品决策 B，评审采纳）：
+  - **Shift（两键，独立状态取逻辑 OR）**：按住出大写层（`keymap_shift`）；
+  - **Alt**：按住出**临时符号层**（`keymap_sym`，不锁存，松开复原）；**Alt+Enter 译为 `'\t'`**，作为 WiFi 配置扫描快捷键；
+  - **Sym**：符号层**锁定开关**（按一下锁/再按解锁）；Sym 层音量键(2,8)发专用码 `'\v'`（文本输入屏显式忽略）、麦克风键(3,6)出 `'0'`；
+  - 交付链：软件字符 FIFO（16 深，`keypad_get_val()` 逐个出队）+ `keypad_clear_chars()`（scr_mgr 切换/push/pop 时清空，防残留按键注入新页面）+ TCA8418 `OVR_FLOW_INT` W1C 清除与修饰键恢复。
 
 ## 2. 现有架构调研结论（复用基础）
 
@@ -37,12 +41,13 @@
 - 每个 App 一个 `.cpp`，导出全局 `scr_lifecycle_t screen_xxx`，在 `ui_deckpro_entry()`（pda2 `ui_deckpro.cpp` 函数定义）里 `extern scr_lifecycle_t screen_xxx; scr_mgr_register(SCREEN_XXX_ID, &screen_xxx);`（紧随其后 `scr_mgr_register(SCREEN_VOICE_AI_ID, &screen_voice_ai);` 等），最后 `scr_mgr_switch(SCREEN0_ID, false)`。
 
 ### 2.2 键盘输入分发
-- `peri_keypad.cpp` 在 `loop()` 中被 `keypad_loop()` 轮询，填充全局键值。
+- `peri_keypad.cpp` 在 `loop()` 中被 `keypad_loop()` 轮询：**每轮排空 TCA8418 硬件 FIFO 并逐字符入软件字符 FIFO**（16 深，防积压字符互相覆盖）；修饰键（Alt/双 Shift/Sym）在驱动内独立维护（两个 Shift 取 OR），`OVR_FLOW_INT` 溢出时按 W1C 写回清除并重置全部修饰键（防丢失释放事件卡层）。
 - 每个需要键盘的 App 暴露 `void xxx_keyboard_poll(void)`，由 `loop()` 无条件调用，内部用静态 `xxx_kbd_active` 标志门控（`create`/`entry` 置 true，`exit`/`destroy` 置 false）。参考 pda2 `ui_weather.cpp::weather_keyboard_poll`、`ui_gps_enhanced.cpp::gps_keyboard_poll`。
-- 读取方式：`keypad_get_val(&c)` + `keypad_set_flag()`。
+- 读取方式：`keypad_get_val(&c)` 每次出队一个字符；`keypad_set_flag()` 为兼容性空操作。
+- **页面边界（预研真实 bug 修复）**：`ui_scr_mrg.c` 在 `scr_mgr_switch/push/pop` 调用 `keypad_clear_chars()`——退出页面时丢弃积压按键，防止连按 Backspace 等残留字符注入新页面（详见 `docs/reviews/` 第三轮 Finding 2.1）。
 
 ### 2.3 HTTP / JSON
-- `http_utils.h/.cpp`：`http_response_t http_get(url, timeout_ms)`、`http_post(url, body, content_type, auth_header, timeout_ms)`（`WiFiClientSecure setInsecure` + `HTTPClient`）、`http_require_wifi()`。
+- `http_utils.h/.cpp`：`http_response_t http_get(url, timeout_ms)`、`http_post(url, body, content_type, auth_header, timeout_ms)`（`WiFiClientSecure` + `HTTPClient`；**预研已改为默认 CA 验证**：内置 ISRG Root X1 / DigiCert Global Root G2 / GlobalSign Root R1，`http_set_tls_mode(HTTP_TLS_INSECURE)` 显式降级）、`http_require_wifi()`（未联网弹提示）。
 - JSON 用 cJSON（ESP32 SDK 自带，`#include <cJSON.h>`），仓库无 ArduinoJson。
 - **词典接口已现成实现**：`examples/pda2/dict_lookup.cpp::dict_lookup_online(word, result)` —— WiFi 检查 → `snprintf` 拼 URL → `http_get(url, 8000)` → cJSON 解析，UI 为 `ui_dictionary.cpp`。
 
@@ -99,7 +104,16 @@
 
 > **评审 #1.5 修订**：之前版本写"8 屏（菜单 + 7 功能屏）"与菜单列出的 8 项入口（GPS/Music/Dict/Keys/WiFi/**WiFi Cfg**/AI/**AI Cfg**）自相矛盾——把 WiFi 与 WiFiCfg 算作 1 个、AI 与 AICfg 算作 1 个才会得到 7 功能屏，但菜单需要 8 个跳转目标。**修正**：WiFi 配置作为独立屏（与 WiFi 扫描/状态分开），AI 配置作为独立屏（与 AI 对话分开），所以是菜单 1 + 8 功能屏 = **9 个 `SCREEN_XXX_ID`**。评审 #1 修复（菜单扩到 8 项）保持不变。
 
-**按键层说明**：keypad 有三层——普通层小写 a-z + 空格 + `\n`/`\b`（`peri_keypad.cpp::keymap`）；**Shift 层大写 A-Z**（按住 Shift(2,0) 临时切换，`peri_keypad.cpp::keymap_shift`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（`peri_keypad.cpp::keymap_sym`，按 Sym(3,8) 锁定/解锁）。本文中所有"数字键 `1`-`8`"、"`+`/`-`"均指 **Sym 层对应键**——先按 Sym 进入符号层再按对应键，结束再按 Sym 退出。
+**按键层说明（预研结论修订，HD-V2 物理布局实测解码，无 Ctrl 键）**：
+
+```
+Q   W   E   R   T   Y   U   I   O   P
+A   S   D   F   G   H   J   K   L   ⌫
+Alt Z   X   C   V   B   N   M   ♪   ⏎
+⇧   Mic Space Sym ⇧
+```
+
+keypad 三层——普通层小写 a-z + 空格 + `\n`/`\b`（`peri_keypad.cpp::keymap`）；**Shift 层大写 A-Z**（按住任一 **Shift(3,5)/(3,9)** 临时切换，`keymap_shift`）；**符号/数字层 `keymap_sym`**（**Sym(3,8) 锁定**，或按住 **Alt(2,0)** 临时进入）。**Alt+Enter → `'\t'`**（扫描快捷键）；Sym 层音量键 → `'\v'`（保留码，输入屏忽略）、麦克风键 → `'0'`。本文中所有"数字键 `1`-`8`"、"`+`/`-`"均指 **Sym 层对应键**（先按 Sym 锁层，或按住 Alt 临时出符号）。
 
 | SCREEN ID | 内容 | 来源 |
 |---|---|---|
@@ -108,8 +122,8 @@
 | `SCREEN_MP3_ID` | SD `.mp3` 文件浏览器（分页）+ 播放控制 | 新写 `ui_mp3.cpp` |
 | `SCREEN_DICT_ID` | keypad 输入英文单词 → 在线查询 → 显示音标 + 释义（前 3 条） | 复制 `ui_dictionary.cpp` + `dict_lookup.cpp` |
 | `SCREEN_KEYPAD_ID` | 键盘回显测试：按键字符 + 0xHEX + 累计次数 | 新写 `ui_keypad.cpp` |
-| `SCREEN_WIFI_ID` | WiFi 状态/扫描：显示当前 SSID/IP/RSSI，扫描周围 AP 列表 | 新写 `ui_wifi_status.cpp` |
-| `SCREEN_WIFI_CFG_ID` | WiFi 配置：输入 SSID/密码 → 存 NVS → 连接 → 显示 IP/状态 | 新写 `ui_wifi_config.cpp` |
+| `SCREEN_WIFI_ID` | WiFi 状态/扫描：显示当前 SSID/IP/RSSI，扫描周围 AP 列表；提供 **WiFi Test** 入口（ifconfig.me 公网 IP 测试 → 信息层展示 + 关闭；pda2 为列表项触摸入口，allinone 无触摸需键盘等价键，如 Sym 层数字或 `t`） | 新写 `ui_wifi_status.cpp` |
+| `SCREEN_WIFI_CFG_ID` | WiFi 配置：SSID 编辑/扫描选择双模式 + 异步扫描覆盖层 + **连接成功才存 NVS** + Connect/Clear 按钮（交互细则见下） | 新写 `ui_wifi_config.cpp`（按 pda2 预研实现移植） |
 | `SCREEN_AI_ID` | AI 文本对话：输入问题 → 调 OpenAI 兼容接口 → 显示回答 | 新写 `ui_ai_chat.cpp` |
 | `SCREEN_AI_CFG_ID` | AI 配置：端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key → 存 NVS | 新写 `ui_ai_cfg.cpp` |
 
@@ -122,10 +136,25 @@
 ### 词典屏
 - 完全复用 pda2 实现。可选增强：`create` 时若 `audio.isRunning()` 则 `audio.stopSong()`，避免 8s HTTP 阻塞期间音乐卡顿。
 
-### WiFi 配置屏交互
-- **SSID 下拉选择**（`lv_dropdown`）：`\n` 触发 `WiFi.scanNetworks()` 扫描并展开列表；列表打开时 `+`/`-`（Sym 层）移动选中、`\n` 选中并跳到密码框、`\b` 取消。**纯 keypad 驱动**（评审 #6 修复：设计已移除触摸，dropdown 的 `LV_EVENT_VALUE_CHANGED` 由触摸释放触发，**allinone 不实现触摸回调**，keypad UI 自行读 `lv_dropdown_get_selected_str` 后关闭列表）。扫描无结果显示 "(none found - Enter:rescan)"。
-- **密码独立输入框**：字符键输入（Shift 大写 / Sym 数字符号）、`\n` 保存 + 连接、`\b` 退格（为空时返回 SSID 字段）。无 `w`/`1` 保留键（SSID 常见字母 'w'）。
-- 保存：`Preferences` namespace `wifi`，`putString("ssid"/"pass")`；随后 `WiFi.begin`，显示 `Connecting…` → 成功（IP）或失败原因（Auth fail / not found / timeout）。
+### WiFi 配置屏交互（预研结论修订——pda2 已实现并经 7 轮评审迭代，allinone 照此移植）
+
+- **SSID 为可编辑 `lv_textarea`**（原 lv_dropdown 方案已废弃：不可手动输入、触摸展开后 Enter 会误选占位文字）。显式**双模式**状态机 `wifi_cfg_scan_mode`：
+
+| 按键 | 手动编辑模式（默认） | 扫描选择模式（扫描有结果后自动进入） |
+|---|---|---|
+| 可见字符（含 `+ -`） | 追加到文本框 | 退出扫描模式回编辑并追加该字符 |
+| Alt+Enter（`'\t'`）/ 空框 Enter | 开始**异步扫描** | 重新扫描 |
+| Enter（框非空） | 提交 → 跳到密码框 | 选中当前候选 → 提交 → 跳到密码框 |
+| `+` / `-`（Sym/Alt 层） | 追加为字符 | 循环切换扫描候选 |
+| `\b` | 有字删字；为空退出本屏 | 取消选择，恢复扫描前内容回编辑模式 |
+
+- **异步扫描**：`WiFi.scanNetworks(true)` + 每 loop 轮询 `WiFi.scanComplete()`（主循环持续排空键盘 FIFO，无阻塞丢事件）；扫描期间**置顶覆盖层**显示 "Scanning... Ns" 倒计时（10s）并**屏蔽全部输入**（键盘守卫 + 全屏可点击层吞触摸），完成/失败即隐藏，倒计时耗尽则中止卡住的扫描；结果用**横幅**明示（"Scan: N found" / "Scan: none found" / "Scan failed"，3s 自动消失，不阻塞输入）；错误码区分启动失败/运行失败/零结果三态。
+- **扫描代次**：离开 SSID 字段、退出屏幕或重扫时 `wifi_scan_gen++` 失效在途结果——迟到的扫描结果**不得覆盖用户草稿**；退出屏幕时 `esp_wifi_scan_stop()` + 等待框架处理完 SCAN_DONE 后 `scanDelete()`（防与 `_scanDone()` 竞态）。
+- **草稿保留**：`wifi_cfg_refresh_labels()`（仅标签/状态）与 `wifi_cfg_sync_draft()`（切换字段前把离场框内容同步进缓存）分离；字段切换**不重写**另一输入框；仅退出页面或显式取消丢弃草稿。
+- **密码独立输入框**：字符键输入（Shift 大写 / Sym 数字符号）、`\n` = **连接（成功才保存）**、`\b` 退格（为空时返回 SSID 字段）。
+- **Connect 语义（预研结论）**：`WiFi.begin` → 15s 内连接**成功才** `Preferences`（namespace `wifi`）写入 `ssid`/`pass`；失败**不保存**（NVS 旧配置不变），横幅/状态栏显示失败原因（No SSID found / Connect failed / Timeout）；连接期间积压按键在返回前丢弃。
+- **触摸按钮（pda2 保留触摸）**：**Connect**（= 密码框 Enter）与 **Clear**（清空两框 + 缓存 + NVS 记录，下次开机不自动连旧凭据）。**allinone 无触摸 → 键盘路径必须完备**：Connect = 密码框 Enter；**Clear 需键盘等价键**（建议 Alt+Backspace 译 `'\x7f'`，实施时定夺并在屏底提示注明）。
+- **焦点同步（pda2 有触摸）**：textarea `LV_EVENT_FOCUSED` 回调同步 `wifi_cfg_field`，触摸点框与键盘编辑目标一致；allinone 无触摸则无此需求。
 - 开机：读 NVS，有凭据则自动 `WiFi.begin` + `setAutoReconnect(true)`；无凭据则菜单 WiFi 按钮旁显示 `!`，词典/AI 请求时 `http_require_wifi` 失败提示"先配置 WiFi"。
 
 ### AI 对话屏交互
@@ -143,8 +172,8 @@
 ### 5.1 原样复制（来自 `examples/pda2/`）
 ```
 utilities.h                  # 引脚定义
-ui_scr_mrg.h / ui_scr_mrg.c  # 屏幕管理器
-peri_keypad.cpp              # TCA8418 键盘
+ui_scr_mrg.h / ui_scr_mrg.c  # 屏幕管理器（已含页面切换 keypad_clear_chars()）
+peri_keypad.cpp              # TCA8418 键盘（软件字符 FIFO + 修饰键状态机 + 溢出恢复，见 §2.2）
 http_utils.h / http_utils.cpp# http_get / http_require_wifi
 dict_lookup.h / dict_lookup.cpp  # dict_lookup_online（dictionaryapi.dev）
 ui_dictionary.cpp            # 词典屏
@@ -186,8 +215,8 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 |---|---|
 | `ui_mp3.cpp` | `ensure_sd()`（`shared_spi_lock` + `SD.begin(48)`）、`scan_files()`、分页列表渲染、播放/暂停/切歌/音量、`void audio_eof_mp3(const char *info)` 强定义（评审 #7 修复：ESP32-audioI2S 的 `audio_eof_mp3` 弱回调实际签名带 `const char *info` 参数，写成无参绑定不到符号）、`mp3_keyboard_poll`、`scr_lifecycle_t screen_mp3` |
 | `ui_keypad.cpp` | 返回按钮 + 提示 + 回显标签、`keypadtest_keyboard_poll`（`\b` 返回菜单）、`scr_lifecycle_t screen_keypad` |
-| `ui_wifi_config.cpp` | **SSID 为 `lv_dropdown`（`WiFi.scanNetworks()` 结果）**：`\n` 扫描+展开，`+`/`-`（Sym 层）移动、`\n` 选中跳密码、`\b` 取消（**评审 #6 修复：不挂 `LV_EVENT_VALUE_CHANGED` 触摸回调**，因 design §5.2 删触摸；选中读取走 `lv_dropdown_get_selected_str` + `lv_dropdown_close`）；**密码独立 `lv_textarea`**：`\n` 保存+连接、`\b` 退格/回 SSID → `Preferences`（namespace `wifi`）存 NVS → `WiFi.begin` 连接 → 显示状态/IP/失败原因、`wifi_cfg_keyboard_poll`、`scr_lifecycle_t screen_wifi`。无 `w`/`1` 保留键 |
-| `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（浏览回答时 `\n` 下一页/`\b` 回上一页或退出；**无 `c` 快捷键**，AI 配置走菜单）、`scr_lifecycle_t screen_ai_chat`。**评审 #1.6 修订 + #2.4 二次修订 — UTF-8 安全分页**：必须按 **UTF-8 码点边界**断行，禁止 `strlen()/memcpy()` 字节切。<br>① 输入：`openai_chat()` 返回的字节流按 UTF-8 解码为 codepoint 序列；连续 ASCII 视为单列，连续 CJK/全角视为双列，emoji 按 `wcwidth()` 视为 2 列。<br>② 断行：从行首累计显示列数；下一个 codepoint 会让累计列数 **> 30 列**时，在该 codepoint 之前断行（即只切到 codepoint 边界，绝不在 continuation byte `0x80-0xBF` 中间断开）。<br>③ **LVGL 8.3.11 API 选型（评审 #2.4 修订）**：评审 #1.6 提到的 `lv_txt_get_next_line()` 在 LVGL 8.3.11 中**不存在**（实际是 private `_lv_txt_get_next_line()`，需 `#include "../src/misc/lv_txt.h"` 才能用）；`LV_LABEL_LONG_BREAK` 也是错记——**正确宏名是 `LV_LABEL_LONG_WRAP`**。<br>　　**推荐实现**：直接用 LVGL 公开 API：<br>　　```cpp<br>　　lv_obj_t *lbl = lv_label_create(parent);<br>　　lv_obj_set_width(lbl, LV_PCT(100));                    // 让 label 自适应父容器宽度<br>　　lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);        // 内部按字符宽度自动换行（含 CJK）<br>　　lv_label_set_text(lbl, full_answer);                    // 直接喂全文，LVGL 处理 wrap + UTF-8 码点边界<br>　　lv_label_set_recolor(lbl, false);                       // 关闭 recolor 避免 '$' 字符冲突<br>　　```<br>　　`LV_LABEL_LONG_WRAP` 在 LVGL 8.3.11 是稳定的 public API（声明于 `lvgl/src/widgets/lv_label.h`），不依赖任何私有符号；换行基于实际渲染字体像素宽度，中文/英文混合自动正确断行。<br>④ 显示宽度基准：EPD 240px ÷ 14pt 字体 ≈ 30 列（ASCII）/ 15 列（CJK），由 LVGL 根据 `lv_obj_set_width()` 自动决定每行字符数。<br>⑤ `(truncated)` 标记仍按字节截断位置放在末尾（4096B 缓冲满时）：检测 `body.size() >= CHAT_ANSWER_MAX` 时 `chat_truncated=true`，`chat_render` 末尾追加 `\n(truncated)`。 |
+| `ui_wifi_config.cpp` | **SSID `lv_textarea` + 编辑/扫描选择双模式**（预研结论，交互细则见 §4 WiFi 配置屏）：Alt+Enter/空框 Enter 异步扫描（`scanNetworks(true)` + `scanComplete()` 轮询 + 扫描代次失效 + 置顶倒计时覆盖层屏蔽输入 + 结果横幅）、`+`/`-` 循环候选、`\n` 提交、`\b` 删字/取消/返回；**密码 `lv_textarea`**：`\n` = **连接成功才存 NVS**（`Preferences` namespace `wifi`）、`\b` 退格/回 SSID；草稿保留（`refresh_labels`/`sync_draft` 分离）；触摸按钮 Connect/Clear（allinone 无触摸需键盘等价：Connect=密码框 Enter、Clear=Alt+Backspace 待定）；`wifi_cfg_keyboard_poll`、`scr_lifecycle_t screen_wifi` |
+| `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（浏览回答时 `\n` 下一页/`\b` 回上一页或退出；**无 `c` 快捷键**，AI 配置走菜单）、`scr_lifecycle_t screen_ai_chat`。**预研补充（pda2 已实现）**：发送成功后清空输入框（浏览态 `\b` 语义无歧义）；浏览回答时按任意可见字符自动回输入模式并追加该字符（不静默丢弃）；`\t`（Alt+Enter）/`\v`（音量码）控制码显式忽略。**评审 #1.6 修订 + #2.4 二次修订 — UTF-8 安全分页**：必须按 **UTF-8 码点边界**断行，禁止 `strlen()/memcpy()` 字节切。<br>① 输入：`openai_chat()` 返回的字节流按 UTF-8 解码为 codepoint 序列；连续 ASCII 视为单列，连续 CJK/全角视为双列，emoji 按 `wcwidth()` 视为 2 列。<br>② 断行：从行首累计显示列数；下一个 codepoint 会让累计列数 **> 30 列**时，在该 codepoint 之前断行（即只切到 codepoint 边界，绝不在 continuation byte `0x80-0xBF` 中间断开）。<br>③ **LVGL 8.3.11 API 选型（评审 #2.4 修订）**：评审 #1.6 提到的 `lv_txt_get_next_line()` 在 LVGL 8.3.11 中**不存在**（实际是 private `_lv_txt_get_next_line()`，需 `#include "../src/misc/lv_txt.h"` 才能用）；`LV_LABEL_LONG_BREAK` 也是错记——**正确宏名是 `LV_LABEL_LONG_WRAP`**。<br>　　**推荐实现**：直接用 LVGL 公开 API：<br>　　```cpp<br>　　lv_obj_t *lbl = lv_label_create(parent);<br>　　lv_obj_set_width(lbl, LV_PCT(100));                    // 让 label 自适应父容器宽度<br>　　lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);        // 内部按字符宽度自动换行（含 CJK）<br>　　lv_label_set_text(lbl, full_answer);                    // 直接喂全文，LVGL 处理 wrap + UTF-8 码点边界<br>　　lv_label_set_recolor(lbl, false);                       // 关闭 recolor 避免 '$' 字符冲突<br>　　```<br>　　`LV_LABEL_LONG_WRAP` 在 LVGL 8.3.11 是稳定的 public API（声明于 `lvgl/src/widgets/lv_label.h`），不依赖任何私有符号；换行基于实际渲染字体像素宽度，中文/英文混合自动正确断行。<br>④ 显示宽度基准：EPD 240px ÷ 14pt 字体 ≈ 30 列（ASCII）/ 15 列（CJK），由 LVGL 根据 `lv_obj_set_width()` 自动决定每行字符数。<br>⑤ `(truncated)` 标记仍按字节截断位置放在末尾（4096B 缓冲满时）：检测 `body.size() >= CHAT_ANSWER_MAX` 时 `chat_truncated=true`，`chat_render` 末尾追加 `\n(truncated)`。 |
 | `ui_ai_cfg.cpp` | 端点 URL（预填 OpenRouter）/ 模型（手动输入）/ API Key 三字段，`\n` 确认当前字段并跳下一字段（末字段 `\n` 存 NVS namespace `ai` + 退出）、`\b` 退格/回上一字段；Key 标签掩码显示（`sk-or-v1-***`）、`ai_cfg_keyboard_poll`、`scr_lifecycle_t screen_ai_cfg` |
 | `openai_api.h/.cpp` | **新写 OpenAI 兼容客户端** `openai_chat(prompt, base_url, model, api_key)`：POST `{"model":..., "messages":[{"role":"user","content":...}]}`，**直接复用 `http_post`**（`http_utils.h::http_post` 声明已支持 `auth_header` → `Authorization: Bearer <key>`，`content_type=application/json`），解析 `choices[0].message.content`；默认端点 OpenRouter；TLS 策略见 §2.3 注 |
 | `src/assets.h` | 仅 `LV_IMG_DECLARE` 4 个图标（`extern "C"` 包裹） |
@@ -249,19 +278,19 @@ pio run -e allinone --jobs 8
        2. **方案 B**：保留 `flush_timer_cb` 设计，但 allinone 必须在 `lvgl_init` 里**显式重新注册** `disp_drv.render_start_cb = disp_render_start_cb`（修拼写），且 `flush_timer_cb` 作为此回调内部逻辑。该方案依赖 LVGL 8.3.11 `render_start_cb` 实际触发频率（实测在 partial 模式下每帧调用）。
      - 同时 `ui_disp_full_refr()` 进屏时仍强制一次全刷。GPS 屏 3s 定时只写局部。
    - **实施时**：在 `allinone.ino::lvgl_init` 末尾加 `Serial.printf("[EPD] refresh strategy: %s\\n", strategy)` 打印所选方案，便于现场确认；pda2 现有 `factory.ino:318` 注释状态作为参考，不在 allinone 中保留。
-4. **触摸移除**（删除清单见 §5.2）→ 无 pointer indev，按钮 `LV_EVENT_CLICKED` 不触发，所有导航必须靠 keypad poll。
+4. **触摸移除**（删除清单见 §5.2）→ 无 pointer indev，按钮 `LV_EVENT_CLICKED` 不触发，所有导航必须靠 keypad poll。**预研补充**：pda2 的 WiFi 配置屏依赖触摸的交互（Connect/Clear 按钮、textarea 焦点同步、扫描覆盖层吞触摸）在 allinone 需键盘等价路径——Connect=密码框 Enter、Clear 键待定（§4）；覆盖层触摸屏蔽自然降级为仅键盘守卫。
 5. **dictionaryapi.dev 仅英文**：UI 文案用英文（与 pda2 一致）；词不在库返回 404 → 显示 "Word not found"。
 6. **SD 未插卡**：`sd_care_init` false → MP3 屏显示 "No SD"，词典本地扫描快速失败，不崩溃。
 7. **GPS UBX 握手启动时阻塞 ~2.4s**（LVGL 初始化之前），仅延迟首屏。
 8. **`.ino` 发现规则**：`allinone/` 顶层只能有一个 `allinone.ino`；已改用 NVS 运行时配置，`config_keys.h` 不再必需。
-9. **keypad 输入限制**：普通层小写 a-z + 空格 + `\n`/`\b`；**Shift 层大写 A-Z**（按住 Shift(2,0)，`peri_keypad.cpp::keymap_shift`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（按 Sym(3,8) 锁定，`peri_keypad.cpp::keymap_sym`），文档中数字/符号按键均需先按 Sym（见 §4 键层说明）。**大写已在 pda2 预研实现**（§1 决策）：大小写 SSID 均可输入；OpenRouter Key `sk-or-v1-...`、模型 ID 多为小写，无需 Shift。
+9. **keypad 输入限制**：普通层小写 a-z + 空格 + `\n`/`\b`；**Shift 层大写 A-Z**（按住任一 Shift(3,5)/(3,9)，`peri_keypad.cpp::keymap_shift`）；**数字与 `+ - . : / _ @` 等符号在 Sym 层**（按 Sym(3,8) 锁定，或按住 Alt(2,0) 临时进入，`peri_keypad.cpp::keymap_sym`），文档中数字/符号按键均需先按 Sym 或按住 Alt（见 §4 键层说明）；Alt+Enter → `'\t'` 扫描快捷键；Sym 层音量键 → `'\v'`（保留码）、麦克风键 → `'0'`。**完整修饰键模型已在 pda2 预研实现并经 7 轮评审 + 真机验证**（§1 决策）：大小写/符号 SSID 均可输入；OpenRouter Key `sk-or-v1-...`、模型 ID 多为小写，无需 Shift。
 10. **WiFi/AI 配置屏**：所有联网功能依赖已配好的 WiFi（未配 → 提示先配 WiFi）；AI 请求与词典一样**同步阻塞**（`http_post` 默认 15s 超时，OpenRouter 模型响应可能更慢，可放宽到 30s），AI 屏与音乐屏互斥；Key/端点存 NVS 明文（`Preferences`，namespace `wifi`/`ai`），不打印到日志；OpenRouter 为 OpenAI 兼容接口，个别字段差异以实际响应调通。
 11. **TLS 证书校验依赖系统时间（评审 #1.2 修订）**：ESP32 冷启动系统时间默认为 epoch（1970-01-01）或编译时间，远早于现代证书 `notBefore`（2024+），mbedtls 直接判 `certificate not yet valid` 并 reject。`allinone.ino::setup()` 必须先 `configTzTime()`，然后 `setup()` 末尾轮询 `time(nullptr) > 1700000000`（即 2023-11-14 之后），最多等 30s；超时仍未同步则在 `WiFi` 屏与 `AI Cfg` 屏均显示 `! time not synced`，**首次 HTTPS 请求返回 `Time not synced, retry after NTP sync` 而非 `Failed to verify`**。GPS 1PPS 校时作为 v2 增强（v1 仅 NTP）。
 
 ## 10. 待评审要点
 
 - [x] AI 平台 → 已确认：**OpenRouter**（OpenAI 兼容），模型手动输入。
-- [x] keypad 无大写 → 已改：pda2 预研实现 **Shift→大写层**（按住 Shift(2,0)，Sym 键仍管符号层）。
+- [x] keypad 无大写 → 已改：pda2 预研实现完整修饰键模型（双 Shift 大写 / Alt 临时符号层 / Sym 锁定 / Alt+Enter 扫描），经 7 轮评审 + 真机验证（记录见 `docs/reviews/`）。
 - [x] 实现顺序 → 已确认：先在 **pda2 预研** WiFi/AI 配置并真机验证，成熟后移植 allinone（见 `TODO.md` 阶段 0）。
 - [x] MP3 扫描目录 → 已确认：优先 `/music`，不存在回退根目录。
 - [x] 联网查询阻塞 → 已确认：接受 v1 同步阻塞（词典 8s / AI 15-30s）。
