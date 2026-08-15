@@ -1488,6 +1488,8 @@ static bool wifi_cfg_kbd_active = false;
 static int  wifi_cfg_field = 0;                 // 0 = SSID, 1 = password
 static bool wifi_cfg_scan_mode = false;         // true: +/- cycle scan picks (else manual edit)
 static int16_t wifi_scan_state = WIFI_SCAN_FAILED; // WIFI_SCAN_RUNNING while async scan active
+static uint8_t wifi_scan_gen = 0;                 // bumped to invalidate an in-flight scan
+static uint8_t wifi_scan_pending_gen = 0;         // generation of the scan in flight
 static char wifi_scan_ssids[UI_WIFI_SCAN_ITEM_MAX][33];
 static int  wifi_scan_cnt = 0;                  // visible SSIDs from last scan
 static int  wifi_scan_idx = 0;                  // currently shown candidate
@@ -1545,6 +1547,8 @@ static void wifi_cfg_sync_draft(void)
  * scan was actually started. */
 static bool wifi_cfg_scan_start(void)
 {
+    wifi_scan_gen++;
+    wifi_scan_pending_gen = wifi_scan_gen;
     if (!wifi_cfg_scan_mode) {
         strncpy(wifi_ssid_pre_scan, lv_textarea_get_text(wifi_ssid_ta),
                 sizeof(wifi_ssid_pre_scan) - 1);
@@ -1581,6 +1585,13 @@ static void wifi_cfg_scan_poll(void)
     }
 
     wifi_scan_state = r;
+    if (wifi_scan_pending_gen != wifi_scan_gen || wifi_cfg_field != 0) {
+        /* superseded by a newer scan/exit, or the user left the SSID field:
+         * drop the results instead of overwriting the draft (finding 2.3) */
+        WiFi.scanDelete();
+        wifi_scan_state = WIFI_SCAN_FAILED;
+        return;
+    }
     wifi_scan_cnt = 0;
     wifi_scan_idx = 0;
     for (int i = 0; i < r && wifi_scan_cnt < UI_WIFI_SCAN_ITEM_MAX; i++) {
@@ -1673,6 +1684,9 @@ static void wifi_cfg_set_field(int f)
     }
     wifi_cfg_field = f;
     wifi_cfg_scan_mode = false;
+    if (f != 0 && wifi_scan_state == WIFI_SCAN_RUNNING) {
+        wifi_scan_gen++;        /* left the SSID field mid-scan: ignore its result (2.3) */
+    }
     lv_event_send(f == 0 ? (lv_obj_t *)wifi_ssid_ta : (lv_obj_t *)wifi_pass_ta,
                   LV_EVENT_FOCUSED, NULL);
     wifi_cfg_refresh_labels();
@@ -1685,6 +1699,8 @@ void wifi_cfg_keyboard_poll()
     char c;
     if (!keypad_get_val(&c)) return;
     keypad_set_flag();
+
+    if (c == '\v') return;                      /* volume key: reserved, no handler yet */
 
     if (wifi_cfg_field == 0) {
         if (wifi_scan_state == WIFI_SCAN_RUNNING) {
@@ -1718,8 +1734,8 @@ void wifi_cfg_keyboard_poll()
                     /* commit the box (set_field syncs the draft), goto password */
                     wifi_cfg_set_field(1);
                 } else {
-                    snprintf(wifi_status, sizeof(wifi_status), "Type SSID or Alt+Enter:scan");
-                    lv_label_set_text(wifi_status_lab, wifi_status);
+                    /* empty box: Enter also scans; Alt+Enter scans anytime */
+                    wifi_cfg_scan_start();
                 }
             } else if (c == '\b') {
                 const char *txt = lv_textarea_get_text(wifi_ssid_ta);
@@ -1762,6 +1778,31 @@ static void scr4_1_btn_event_cb(lv_event_t * e)
         wifi_cfg_kbd_active = false;
         scr_mgr_pop(false);
     }
+}
+
+/* Touch path for Save: same as Enter on the password field — sync the
+ * current draft, persist to NVS and connect. */
+static void wifi_save_btn_cb(lv_event_t *e)
+{
+    wifi_cfg_sync_draft();
+    wifi_cfg_save();
+    wifi_cfg_refresh_labels();
+    wifi_cfg_commit();
+}
+
+/* Touch path for Clear: wipe both boxes, the draft buffers and the NVS
+ * record (so auto-connect on boot no longer uses the old credentials). */
+static void wifi_clear_btn_cb(lv_event_t *e)
+{
+    wifi_ssid[0] = '\0';
+    wifi_pass[0] = '\0';
+    lv_textarea_set_text(wifi_ssid_ta, "");
+    lv_textarea_set_text(wifi_pass_ta, "");
+    wifi_cfg_scan_mode = false;
+    wifi_scan_gen++;                            /* invalidate any in-flight scan */
+    wifi_cfg_save();
+    snprintf(wifi_status, sizeof(wifi_status), "Cleared");
+    wifi_cfg_set_field(0);
 }
 
 static void create4_1(lv_obj_t *parent)
@@ -1816,7 +1857,32 @@ static void create4_1(lv_obj_t *parent)
     lv_obj_t *hint = lv_label_create(cont);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(hint, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
-    lv_label_set_text(hint, "Alt+Enter:scan  +/-:pick\nEnter:next/save  Backspace:del/back");
+    lv_label_set_text(hint, "Enter:scan/next  +/-:pick\nAlt+Enter:scan  Backspace:del/back");
+
+    /* Save / Clear buttons (touch path; keyboard: Enter on pass = save) */
+    lv_obj_t *btn_row = lv_obj_create(cont);
+    lv_obj_set_width(btn_row, lv_pct(100));
+    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btn_row, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(btn_row, 4, LV_PART_MAIN);
+
+    lv_obj_t *save_btn = lv_btn_create(btn_row);
+    lv_obj_set_flex_grow(save_btn, 1);
+    lv_obj_set_height(save_btn, 30);
+    lv_obj_t *save_lab = lv_label_create(save_btn);
+    lv_label_set_text(save_lab, "Save");
+    lv_obj_center(save_lab);
+    lv_obj_add_event_cb(save_btn, wifi_save_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *clear_btn = lv_btn_create(btn_row);
+    lv_obj_set_flex_grow(clear_btn, 1);
+    lv_obj_set_height(clear_btn, 30);
+    lv_obj_t *clear_lab = lv_label_create(clear_btn);
+    lv_label_set_text(clear_lab, "Clear");
+    lv_obj_center(clear_lab);
+    lv_obj_add_event_cb(clear_btn, wifi_clear_btn_cb, LV_EVENT_CLICKED, NULL);
 
     wifi_cfg_field = 0;
     wifi_cfg_scan_mode = false;
@@ -1831,18 +1897,28 @@ static void create4_1(lv_obj_t *parent)
 
 static void entry4_1(void) { ui_disp_full_refr(); }
 static void exit4_1(void) { ui_disp_full_refr(); }
+/* Abort an in-flight async scan (finding 2.2): esp_wifi_scan_stop() makes
+ * the WiFi event task deliver SCAN_DONE asynchronously; wait (bounded) for
+ * the framework to process it before freeing the results, otherwise
+ * scanDelete() races with WiFiScanClass::_scanDone(). */
+static void wifi_cfg_scan_abort(void)
+{
+    if (wifi_scan_state != WIFI_SCAN_RUNNING) return;
+    esp_wifi_scan_stop();
+    uint32_t t0 = millis();
+    while (WiFi.scanComplete() == WIFI_SCAN_RUNNING && millis() - t0 < 1000) {
+        delay(1);
+    }
+    WiFi.scanDelete();
+    wifi_scan_state = WIFI_SCAN_FAILED;
+}
+
 static void destroy4_1(void)
 {
     wifi_cfg_kbd_active = false;
     wifi_cfg_scan_mode = false;
-    if (wifi_scan_state == WIFI_SCAN_RUNNING) {
-        /* framework scanDelete() only frees results and clears flags — it
-         * does NOT abort an in-flight scan. Stop it for real so other
-         * screens' scans are not blocked with WIFI_SCAN_RUNNING (2.3). */
-        esp_wifi_scan_stop();
-        WiFi.scanDelete();
-        wifi_scan_state = WIFI_SCAN_FAILED;
-    }
+    wifi_scan_gen++;                            /* invalidate any in-flight result application */
+    wifi_cfg_scan_abort();
 }
 
 static scr_lifecycle_t screen4_1 = {
