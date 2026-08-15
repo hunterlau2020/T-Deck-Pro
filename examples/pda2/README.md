@@ -100,34 +100,37 @@ The T-Deck Pro keyboard is a 4×10 matrix read by TCA8418. The driver (`peri_key
 
 **Normal layer:**
 ```
-q  w  e  r  t  y  u  i  o  p
-a  s  d  f  g  h  j  k  l  ⌫
-⇧  z  x  c  v  b  n  m  $  ⏎
-       [  space ×3  ]  Sym
+q   w   e   r   t   y   u   i   o   p
+a   s   d   f   g   h   j   k   l   ⌫
+Alt z   x   c   v   b   n   m   $   ⏎
+     ⇧  Mic Space Sym ⇧
 ```
 
-**Shift layer** (hold `⇧` for uppercase, releases back to lowercase):
+**Shift layer** (hold either `⇧` for uppercase, releases back to lowercase):
 ```
-Q  W  E  R  T  Y  U  I  O  P
-A  S  D  F  G  H  J  K  L  ⌫
-⇧  Z  X  C  V  B  N  M  $  ⏎
-       [  space ×3  ]  Sym
+Q   W   E   R   T   Y   U   I   O   P
+A   S   D   F   G   H   J   K   L   ⌫
+Alt Z   X   C   V   B   N   M   $   ⏎
+     ⇧  Mic Space Sym ⇧
 ```
 
 **Sym layer** (press Sym to toggle/lock):
 ```
 #  1  2  3  (  )  _  -  +  @
 *  4  5  6  /  :  ;  '  "  ⌫
-⇧  7  8  9  ?  !  ,  .  0  ⏎
-       [  space ×3  ]  Sym
+Alt 7  8  9  ?  !  ,  .  0  ⏎
+     ⇧  Mic Space Sym ⇧
 ```
 
 Special keys:
-- `'\b'` (0x08) — Backspace/Delete
-- `'\n'` (0x0A) — Enter
+- `'\b'` (0x08) — Backspace/Delete (⌫)
+- `'\n'` (0x0A) — Enter (⏎)
+- `'\t'` (0x09) — Alt+Enter combo (WiFi-config scan shortcut)
 - `'$'` — Speaker key (app-specific)
-- Shift (`⇧`) hold → uppercase; Sym toggles sym lock (digits/symbols)
-- Mic key is NOT on the TCA8418 matrix (separate GPIO)
+- Shift keys: **two** Shift keys (bottom row, left and right) — hold for uppercase
+- **Alt** (Z-row left): hold for the **momentary sym layer** (digits/symbols, same map as Sym but not latched; release to return to normal)
+- Sym: toggles the sym-layer lock
+- Mic key is on the TCA8418 matrix but has no keymap function
 
 ### 3. Image/icon format
 
