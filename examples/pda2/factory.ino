@@ -710,7 +710,7 @@ void setup()
             Serial.printf("[WiFi] Connecting to %s...\n", wifi_ssid_nvs.c_str());
         }
     }
-    configTzTime("PST8PDT,M3.2.0,M11.1.0", "pool.ntp.org");
+    configTzTime("CST-8", "cn.pool.ntp.org", "pool.ntp.org", "time.nist.gov");
 }
 
 

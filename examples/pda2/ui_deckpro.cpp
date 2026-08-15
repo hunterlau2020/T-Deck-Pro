@@ -1726,6 +1726,22 @@ static void wifi_cfg_scan_poll(void)
     wifi_banner_show(banner_buf);
 }
 
+/* Kick off (and briefly await) NTP right after a successful connect so TLS
+ * cert validation has a sane clock. cn.pool.ntp.org first: pool.ntp.org is
+ * often unreachable in CN networks. */
+static void wifi_time_sync(void)
+{
+    Serial.println("[WiFi] connected - syncing NTP time");
+    configTzTime("CST-8", "cn.pool.ntp.org", "pool.ntp.org", "time.nist.gov");
+    uint32_t t0 = millis();
+    while (time(nullptr) <= 1700000000 && millis() - t0 < 8000) {
+        delay(100);
+        lv_timer_handler();
+    }
+    Serial.printf("[WiFi] time sync %s (epoch=%ld)\n",
+                  time(nullptr) > 1700000000 ? "ok" : "pending", (long)time(nullptr));
+}
+
 /* Try to connect with the current ssid/pass. Returns true on success.
  * Callers persist to NVS only when this returns true. */
 static bool wifi_cfg_connect(void)
@@ -1754,6 +1770,7 @@ static bool wifi_cfg_connect(void)
     if (ok) {
         snprintf(wifi_status, sizeof(wifi_status), "OK IP: %s", WiFi.localIP().toString().c_str());
         Serial.printf("[WiFi] connected ip=%s\n", WiFi.localIP().toString().c_str());
+        wifi_time_sync();   /* automatic NTP calibration after connect */
         char banner_buf[64];
         snprintf(banner_buf, sizeof(banner_buf), "Connected! IP: %s", WiFi.localIP().toString().c_str());
         wifi_banner_show(banner_buf);
