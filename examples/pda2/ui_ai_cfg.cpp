@@ -40,6 +40,62 @@ static http_response_t ai_test_result = {0, "", false, ""};
 static volatile bool ai_test_result_ready = false;
 static char ai_test_auth_hdr[128] = {0};
 
+/* Test feedback msgbox: "Testing... Ns" countdown, replaced by the result,
+ * always with a Close button. */
+static lv_obj_t *ai_msgbox = NULL;
+static lv_obj_t *ai_msgbox_body = NULL;
+static bool ai_msgbox_countdown_active = false;
+static uint32_t ai_msgbox_t0 = 0;
+static uint32_t ai_msgbox_last_secs = 99;
+
+static void ai_msgbox_close_cb(lv_event_t *e)
+{
+    if (ai_msgbox) {
+        lv_obj_del(ai_msgbox);
+        ai_msgbox = NULL;
+        ai_msgbox_body = NULL;
+    }
+    ai_msgbox_countdown_active = false;
+}
+
+static void ai_msgbox_set_text(const char *text)
+{
+    if (ai_msgbox_body) {
+        lv_label_set_text(ai_msgbox_body, text);
+    }
+}
+
+static void ai_msgbox_show(const char *text)
+{
+    ai_msgbox_close_cb(NULL);
+    ai_msgbox = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(ai_msgbox, 220, 160);
+    lv_obj_align(ai_msgbox, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(ai_msgbox, lv_color_white(), 0);
+    lv_obj_set_style_border_width(ai_msgbox, 1, 0);
+    lv_obj_set_style_border_color(ai_msgbox, lv_color_black(), 0);
+    lv_obj_set_style_radius(ai_msgbox, 6, 0);
+    lv_obj_set_style_pad_all(ai_msgbox, 8, 0);
+    lv_obj_set_flex_flow(ai_msgbox, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(ai_msgbox, 6, 0);
+    lv_obj_clear_flag(ai_msgbox, LV_OBJ_FLAG_SCROLLABLE);
+
+    ai_msgbox_body = lv_label_create(ai_msgbox);
+    lv_obj_set_width(ai_msgbox_body, lv_pct(100));
+    lv_label_set_long_mode(ai_msgbox_body, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(ai_msgbox_body, text);
+    lv_obj_set_style_text_font(ai_msgbox_body, &lv_font_montserrat_14, 0);
+    lv_obj_set_flex_grow(ai_msgbox_body, 1);
+
+    lv_obj_t *close_btn = lv_btn_create(ai_msgbox);
+    lv_obj_set_width(close_btn, lv_pct(100));
+    lv_obj_set_height(close_btn, 32);
+    lv_obj_t *close_lab = lv_label_create(close_btn);
+    lv_label_set_text(close_lab, "Close");
+    lv_obj_center(close_lab);
+    lv_obj_add_event_cb(close_btn, ai_msgbox_close_cb, LV_EVENT_CLICKED, NULL);
+}
+
 static lv_obj_t *ai_cfg_field_ta(int f)
 {
     return (f == 0) ? ai_base_ta : (f == 1) ? ai_model_ta : ai_key_ta;
@@ -108,32 +164,39 @@ static void ai_test_btn_cb(lv_event_t *e)
     Serial.println("[AICfg] Test button clicked");
     ai_cfg_sync_draft();
 
-    /* explicit field validation with on-screen hints */
+    /* explicit field validation, shown in the msgbox so it is unmissable */
     if (!http_require_wifi("AI Test")) {
-        lv_label_set_text(ai_status_lab, "WiFi not connected");
+        ai_msgbox_show("WiFi not connected\nconfigure it first");
         return;
     }
     if (ai_base[0] == '\0') {
-        lv_label_set_text(ai_status_lab, "Base empty - fill it first");
+        ai_msgbox_show("Base empty - fill it first");
         return;
     }
     if (ai_model[0] == '\0') {
-        lv_label_set_text(ai_status_lab, "Model empty - fill it first");
+        ai_msgbox_show("Model empty - fill it first");
         return;
     }
     if (ai_key[0] == '\0') {
-        lv_label_set_text(ai_status_lab, "Key empty - fill it first");
+        ai_msgbox_show("Key empty - fill it first");
         return;
     }
-    if (ai_test_task != NULL) return;           /* already running */
+    if (ai_test_task != NULL) {
+        ai_msgbox_show("Test already running");
+        return;
+    }
 
     snprintf(ai_test_auth_hdr, sizeof(ai_test_auth_hdr), "Bearer %s", ai_key);
-    lv_label_set_text(ai_status_lab, "Testing...");
+    ai_msgbox_show("Testing... 10s");
+    ai_msgbox_countdown_active = true;
+    ai_msgbox_t0 = millis();
+    ai_msgbox_last_secs = 99;
     ai_test_result_ready = false;
     if (xTaskCreate(ai_test_task_func, "ai_test", 1024 * 8, NULL, 1,
                     &ai_test_task) != pdPASS) {
         ai_test_task = NULL;
-        lv_label_set_text(ai_status_lab, "Cannot start task");
+        ai_msgbox_countdown_active = false;
+        ai_msgbox_set_text("Cannot start task");
     }
 }
 
@@ -145,9 +208,25 @@ static void ai_save_btn_cb(lv_event_t *e)
 
 void ai_cfg_keyboard_poll(void)
 {
-    /* async test result: apply only while the screen is active */
+    /* msgbox countdown: tick only on second changes (EPD-friendly) */
+    if (ai_msgbox != NULL && ai_msgbox_countdown_active) {
+        uint32_t elapsed = millis() - ai_msgbox_t0;
+        uint32_t secs = (10000 - elapsed + 999) / 1000;
+        if (elapsed >= 10000) {
+            ai_msgbox_countdown_active = false;
+            ai_msgbox_set_text("Request timeout\n(check network)");
+        } else if (secs != ai_msgbox_last_secs) {
+            ai_msgbox_last_secs = secs;
+            char buf[48];
+            snprintf(buf, sizeof(buf), "Testing... %lus", (unsigned)secs);
+            ai_msgbox_set_text(buf);
+        }
+    }
+
+    /* async test result: replace the msgbox content */
     if (ai_test_result_ready) {
         ai_test_result_ready = false;
+        ai_msgbox_countdown_active = false;
         if (!ai_cfg_kbd_active) {
             Serial.println("[AICfg] test result dropped (inactive)");
             return;
@@ -160,14 +239,22 @@ void ai_cfg_keyboard_poll(void)
                                ? cJSON_GetArrayItem(data, 0) : NULL;
             cJSON *id = first ? cJSON_GetObjectItem(first, "id") : NULL;
             if (id && cJSON_IsString(id) && id->valuestring) {
+                char buf[96];
+                snprintf(buf, sizeof(buf), "Test OK:\n%s", id->valuestring);
+                ai_msgbox_show(buf);            /* replace content, fresh Close */
                 lv_label_set_text_fmt(ai_status_lab, "Test OK: %s", id->valuestring);
                 Serial.printf("[AICfg] test models[0].id = %s\n", id->valuestring);
             } else {
+                ai_msgbox_show("Test fail: bad JSON");
                 lv_label_set_text(ai_status_lab, "Test fail: bad JSON");
                 Serial.printf("[AICfg] test bad json: %s\n", resp.body.c_str());
             }
             if (root) cJSON_Delete(root);
         } else {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "Test fail: HTTP %d\n%s",
+                     resp.status_code, resp.error.c_str());
+            ai_msgbox_show(buf);
             lv_label_set_text_fmt(ai_status_lab, "Test fail: HTTP %d", resp.status_code);
             Serial.printf("[AICfg] test failed code=%d err=%s\n",
                           resp.status_code, resp.error.c_str());
@@ -175,6 +262,13 @@ void ai_cfg_keyboard_poll(void)
     }
 
     if (!ai_cfg_kbd_active) return;
+
+    /* msgbox open: swallow keypad input until it is closed */
+    if (ai_msgbox != NULL) {
+        char c;
+        if (keypad_get_val(&c)) keypad_set_flag();
+        return;
+    }
 
     char c;
     if (!keypad_get_val(&c)) return;
@@ -319,6 +413,7 @@ static void ai_cfg_exit(void)  { ui_disp_full_refr(); }
 static void ai_cfg_destroy(void)
 {
     ai_cfg_kbd_active = false;
+    ai_msgbox_close_cb(NULL);                   /* no msgbox on other screens */
 }
 
 scr_lifecycle_t screen_ai_cfg = {
