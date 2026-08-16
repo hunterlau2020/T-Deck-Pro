@@ -8,14 +8,37 @@
 #include <Preferences.h>
 #include <cJSON.h>
 
+/* ---- dual-slot config storage (copilot finding 1.2) ---------------------
+ * Fields live in slot 0/1 ("base.0", "model.0", "key.0" / "...1"); the
+ * single "active" key selects the live slot. Staging into the inactive
+ * slot + verifying reads, followed by ONE atomic "active" flip, makes the
+ * switch commit-or-not: a failure before the flip leaves the previous
+ * config fully intact - no rollback of possibly-failed writes needed.
+ * NOTE: load/save must be called from a single thread (Preferences is not
+ * re-entrant); all current callers run on the UI thread. */
+static const char *cfg_key(const char *field, int slot)
+{
+    static char buf[16];
+    snprintf(buf, sizeof(buf), "%s.%d", field, slot);
+    return buf;
+}
+
 void openai_load_config(char *base, int base_len, char *model, int model_len,
                         char *key, int key_len)
 {
     Preferences p;
     p.begin("ai", true);
-    String b = p.getString("base", AI_BASE_DEFAULT);
-    String m = p.getString("model", AI_MODEL_DEFAULT);
-    String k = p.getString("key", AI_KEY_DEFAULT);
+    int slot = (p.getUChar("active", 0) == 0) ? 0 : 1;
+    String b = p.getString(cfg_key("base",  slot), "");
+    String m = p.getString(cfg_key("model", slot), "");
+    String k = p.getString(cfg_key("key",   slot), "");
+    if (b.length() == 0) {
+        /* never saved (or pre-dual-slot layout): fall back to the legacy
+         * flat keys from older firmware, then to the compile-time defaults */
+        b = p.getString("base",  AI_BASE_DEFAULT);
+        m = p.getString("model", AI_MODEL_DEFAULT);
+        k = p.getString("key",   AI_KEY_DEFAULT);
+    }
     p.end();
     strncpy(base,  b.c_str(), base_len  - 1);
     strncpy(model, m.c_str(), model_len - 1);
@@ -23,50 +46,40 @@ void openai_load_config(char *base, int base_len, char *model, int model_len,
     base[base_len-1] = model[model_len-1] = key[key_len-1] = '\0';
 }
 
-bool openai_save_config(const char *base, const char *model, const char *key)
+bool openai_save_config(const char *base, const char *model, const char *key,
+                        const char **err)
 {
-    /* Atomic-ish write (review finding 1.8): NVS has no multi-key
-     * transaction, so the new values are first staged under *.tmp keys and
-     * verified, then swapped into place. If any step fails the previous
-     * config is restored - a failed save never leaves a mixed config. */
     Preferences p;
     p.begin("ai", false);
+    const int active = (p.getUChar("active", 0) == 0) ? 0 : 1;
+    const int next = 1 - active;
 
-    const String ob = p.getString("base",  "");
-    const String om = p.getString("model", "");
-    const String ok = p.getString("key",   "");
     const String nb = base  ? String(base)  : String("");
     const String nm = model ? String(model) : String("");
     const String nk = key   ? String(key)   : String("");
 
-    /* stage + verify: a truncated write is detected before anything moves */
-    if (p.putString("base.tmp",  nb) == 0 ||
-        p.putString("model.tmp", nm) == 0 ||
-        p.putString("key.tmp",   nk) == 0 ||
-        p.getString("base.tmp",  "") != nb ||
-        p.getString("model.tmp", "") != nm ||
-        p.getString("key.tmp",   "") != nk) {
-        p.remove("base.tmp"); p.remove("model.tmp"); p.remove("key.tmp");
+    /* stage the whole config into the INACTIVE slot + verify round-trip */
+    bool staged =
+        p.putString(cfg_key("base",  next), nb) > 0 &&
+        p.putString(cfg_key("model", next), nm) > 0 &&
+        p.putString(cfg_key("key",   next), nk) > 0 &&
+        p.getString(cfg_key("base",  next), "") == nb &&
+        p.getString(cfg_key("model", next), "") == nm &&
+        p.getString(cfg_key("key",   next), "") == nk;
+    if (!staged) {
         p.end();
-        Serial.println("[AI] save aborted: staging failed");
+        if (err) *err = "NVS write failed";
+        Serial.println("[AI] save aborted: slot staging failed");
         return false;
     }
 
-    /* swap: putString on an existing key overwrites atomically per key */
-    if (p.putString("base",  nb) == 0 ||
-        p.putString("model", nm) == 0 ||
-        p.putString("key",   nk) == 0) {
-        /* rollback to the previous values (best effort) */
-        p.putString("base",  ob);
-        p.putString("model", om);
-        p.putString("key",   ok);
-        p.remove("base.tmp"); p.remove("model.tmp"); p.remove("key.tmp");
+    /* COMMIT: one atomic key flip switches the whole config */
+    if (p.putUChar("active", (uint8_t)next) == 0) {
         p.end();
-        Serial.println("[AI] save failed: previous config restored");
+        if (err) *err = "NVS commit failed";
+        Serial.println("[AI] save failed: active-slot flip failed");
         return false;
     }
-
-    p.remove("base.tmp"); p.remove("model.tmp"); p.remove("key.tmp");
     p.end();
     return true;
 }

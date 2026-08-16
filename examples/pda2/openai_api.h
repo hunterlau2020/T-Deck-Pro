@@ -46,7 +46,15 @@ void openai_load_config(char *base, int base_len, char *model, int model_len,
                         char *key, int key_len);
 
 /** @brief Write AI config to NVS namespace "ai".
- *  @return true when all fields were written (a failed write leaves the
- *          previous values in place - callers must not treat partial
- *          writes as success). */
-bool openai_save_config(const char *base, const char *model, const char *key);
+ *
+ *  Dual-slot + single active-version key (copilot finding 1.2): all three
+ *  fields are staged into the INACTIVE slot and read back for verification;
+ *  the commit point is one atomic putUChar("active") flip. A failure
+ *  before the flip leaves the previous slot untouched, so a failed save
+ *  can never leave a mixed config observable - even across power loss.
+ *
+ *  @param err Optional human-readable failure reason ("NVS write failed" /
+ *             "NVS commit failed"); unchanged on success.
+ *  @return true when the new slot was fully staged AND committed. */
+bool openai_save_config(const char *base, const char *model, const char *key,
+                        const char **err = NULL);
