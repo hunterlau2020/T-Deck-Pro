@@ -3,6 +3,11 @@
 > 目的（评审要求：`wifi-config-keyboard-review-result-eecebda..ceade9c.md` 主 §1.9）：
 > 用可读的伪测试描述 `openai_save_config` 双槽原子写在各失败点的预期行为，
 > 作为真机 / 单测（unity）实现的规格。目标固件接口：`examples/pda2/openai_api.cpp`。
+>
+> **本规格已由 `scripts/test_nvs_atomic_save.py` 强制执行**（2026-08-17）：
+> 该脚本以可注入失败的 KV store 镜像本文件的 10 条用例（含掉电提交点），
+> 运行 `python scripts/test_nvs_atomic_save.py` 应得全部 PASS；修改 C++
+> 实现时必须同步更新脚本中的算法模型并重跑。
 
 ## 被测函数
 
