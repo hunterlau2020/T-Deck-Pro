@@ -58,8 +58,13 @@ bool openai_chat(const char *prompt, const char *base_url,
  * ("ai.system") is planned together with the cfg_version migration. */
 #define AI_SYSTEM_PROMPT "You are a KET English examiner. Now you are going to talk to me with a special topic."
 /* Device default API key (user-provided); NVS always takes precedence.
- * NOTE: this key is committed to the repository - rotate it if the
- * repository becomes public or the key is compromised. */
+ * DEV-EXCEPTION (user decision, see SECURITY.md + memory/api-key-dev-exception):
+ * a real key stays in source during development for fast verification.
+ * Compensating control C1: the build warns on every compile while the
+ * key is compiled in (flag set in [env:pda2]). */
+#ifdef AI_KEY_DEFAULT_COMPILED
+#warning "Dev-only API Key in source - rotate before pushing to a public remote"
+#endif
 #define AI_KEY_DEFAULT "REDACTED-OPENROUTER-KEY"
 
 /**
