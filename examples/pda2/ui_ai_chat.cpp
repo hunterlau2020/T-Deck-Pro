@@ -1,12 +1,19 @@
 /**
  * @file      ui_ai_chat.cpp
- * @brief     Text-only AI chat screen (OpenAI-compatible / OpenRouter).
- *            Input via keypad (lowercase), reply shown paginated on E-Paper.
+ * @brief     AI Text chat screen, WeChat/WhatsApp-style layout:
+ *              - top 2/3: read-only, scrollable conversation history
+ *                (AI replies left-aligned, user messages right-aligned)
+ *              - bottom 1/3: multi-line input box for the current draft
+ *              - small Send / Clear buttons on the side of the input box
+ *
+ * Sending is asynchronous (FreeRTOS task + result queue with page
+ * generation). The draft stays in the input box until a reply arrives;
+ * on failure it is kept for direct retry. History is in-RAM only.
  *
  * Keypad map:
- *   \n : send the prompt (or next answer page while viewing)
- *   c  : open AI config screen
- *   \b : backspace (delete last char) / clear view / back to menu when empty
+ *   \n : send                     \b : delete; empty -> back to menu
+ *   + / - (Sym/Alt layer): scroll the history
+ *   '\t' (Alt+Enter) / '\v' (volume): ignored
  */
 #include "Arduino.h"
 #include "ui_deckpro.h"
@@ -17,116 +24,84 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 
-/* Reviewer #3 fix:
- *   - Wrap long replies by display width (30 chars per ~16px font = 240px width).
- *   - Truncate gracefully past CHAT_MAX_LINES with explicit "...(more)" marker.
- *   - Reuse chat_lines[] as a fixed-size char array so no strtok aliasing. */
-#define CHAT_LINES_PER_PAGE 8
-#define CHAT_MAX_LINES      64
-#define CHAT_LINE_WIDTH     30
-#define CHAT_LINE_LEN       (CHAT_LINE_WIDTH + 1)
-#define CHAT_ANSWER_MAX     4096   /* grown from 2048 to cover longer model replies */
+#define CHAT_HIST_MAX    40
+#define CHAT_MSG_MAX     256
+#define CHAT_BUBBLE_W    178     /* bubble width incl. border; label 170 inside */
 
-static lv_obj_t *chat_ta = NULL;
-static lv_obj_t *chat_status_lab = NULL;
-static lv_obj_t *chat_answer_lab = NULL;
-static bool chat_kbd_active = false;
-static bool chat_viewing = false;
-static bool chat_truncated = false;
-static int  chat_page = 0;
-static char chat_answer[CHAT_ANSWER_MAX] = {0};
-static char chat_lines_storage[CHAT_MAX_LINES][CHAT_LINE_LEN];
-static char *chat_lines[CHAT_MAX_LINES];
-static int  chat_line_cnt = 0;
+typedef struct {
+    bool from_user;
+    char text[CHAT_MSG_MAX];
+} chat_msg_t;
 
-static void chat_render(void)
-{
-    static char page_buf[CHAT_LINES_PER_PAGE * CHAT_LINE_LEN + 8];
-    int pos = 0;
-    page_buf[0] = '\0';
-
-    int start = chat_page * CHAT_LINES_PER_PAGE;
-    for (int i = start; i < chat_line_cnt && i < start + CHAT_LINES_PER_PAGE; i++) {
-        int n = snprintf(page_buf + pos, sizeof(page_buf) - pos, "%s\n", chat_lines[i]);
-        if (n <= 0 || pos + n >= (int)sizeof(page_buf) - 1) break;
-        pos += n;
-    }
-
-    lv_label_set_text(chat_answer_lab, page_buf);
-    int pages = (chat_line_cnt + CHAT_LINES_PER_PAGE - 1) / CHAT_LINES_PER_PAGE;
-    if (pages == 0) pages = 1;
-    lv_label_set_text_fmt(chat_status_lab, "Page %d/%d%s",
-                          chat_page + 1, pages,
-                          chat_truncated ? " (truncated)" : "");
-}
-
-/* Break one source line into <=CHAT_LINE_WIDTH-char display lines, pushing
- * into chat_lines[]. Stops if CHAT_MAX_LINES reached, marks chat_truncated.
- * UTF-8 safe (review finding 1.10): the cut point walks back over
- * continuation bytes (0x80-0xBF) so multi-byte sequences are never split. */
-static void chat_push_wrapped(const char *src)
-{
-    int slen = (int)strlen(src);
-    int i = 0;
-    while (i < slen) {
-        if (chat_line_cnt >= CHAT_MAX_LINES) {
-            chat_truncated = true;
-            return;
-        }
-        int take = slen - i;
-        if (take > CHAT_LINE_WIDTH) take = CHAT_LINE_WIDTH;
-        while (take > 0 && ((unsigned char)src[i + take] & 0xC0) == 0x80) {
-            take--;
-        }
-        memcpy(chat_lines_storage[chat_line_cnt], src + i, take);
-        chat_lines_storage[chat_line_cnt][take] = '\0';
-        chat_lines[chat_line_cnt] = chat_lines_storage[chat_line_cnt];
-        chat_line_cnt++;
-        i += take;
-    }
-}
-
-/* Async send (review: sync HTTP would freeze the UI for up to 30s):
- * the request runs in a FreeRTOS task, the reply is applied from the
- * keyboard poll. Results travel over a FreeRTOS queue as heap-allocated
- * structs carrying the page generation - no volatile-flag-guarded
- * std::string cross-core access, stale replies of a previous visit are
- * dropped (review findings 1.4/1.5). */
 typedef struct {
     uint32_t gen;
     bool ok;
     string reply;
 } chat_reply_t;
 
+static lv_obj_t *chat_hist_cont = NULL;     /* scrollable read-only history */
+static lv_obj_t *chat_input_ta = NULL;      /* current draft */
+static lv_obj_t *chat_status_lab = NULL;
+static bool chat_kbd_active = false;
+
+static chat_msg_t chat_history[CHAT_HIST_MAX];
+static int chat_hist_cnt = 0;
+
 static QueueHandle_t s_chat_q = NULL;
 static volatile uint32_t s_chat_page_gen = 0;   /* bumped on entry/destroy */
 static volatile bool s_chat_send_busy = false;  /* UI-owned */
-static char chat_prompt_buf[512] = {0};
+static char chat_prompt_buf[CHAT_MSG_MAX] = {0};
 
-static void chat_apply_reply(const string &reply)
+/* Append a message (rolls: oldest entry is dropped when full). */
+static void chat_history_add(bool from_user, const char *text)
 {
-    strncpy(chat_answer, reply.c_str(), sizeof(chat_answer) - 1);
-    chat_answer[sizeof(chat_answer) - 1] = '\0';
-
-    chat_line_cnt = 0;
-    chat_truncated = false;
-    char *save = NULL;
-    char *line = strtok_r(chat_answer, "\n", &save);
-    while (line) {
-        chat_push_wrapped(line);
-        line = strtok_r(NULL, "\n", &save);
-        if (chat_truncated) break;
+    if (chat_hist_cnt >= CHAT_HIST_MAX) {
+        memmove(&chat_history[0], &chat_history[1],
+                sizeof(chat_msg_t) * (CHAT_HIST_MAX - 1));
+        chat_hist_cnt = CHAT_HIST_MAX - 1;
     }
-    if (chat_line_cnt == 0) {
-        strncpy(chat_lines_storage[0], "(no reply)", CHAT_LINE_LEN - 1);
-        chat_lines[0] = chat_lines_storage[0];
-        chat_line_cnt = 1;
-    }
-    chat_page = 0;
-    chat_viewing = true;
-    chat_render();
+    chat_msg_t *m = &chat_history[chat_hist_cnt++];
+    m->from_user = from_user;
+    strncpy(m->text, text, CHAT_MSG_MAX - 1);
+    m->text[CHAT_MSG_MAX - 1] = '\0';
 }
 
+/* Rebuild the bubbles: AI left-aligned, user right-aligned; jump to the
+ * newest message. UTF-8 wrapping is handled by LV_LABEL_LONG_WRAP. */
+static void chat_history_render(void)
+{
+    lv_obj_clean(chat_hist_cont);
+    lv_coord_t w = lv_obj_get_content_width(chat_hist_cont);
+    int y = 2;
+    for (int i = 0; i < chat_hist_cnt; i++) {
+        chat_msg_t *m = &chat_history[i];
+        lv_obj_t *box = lv_obj_create(chat_hist_cont);
+        lv_obj_set_size(box, CHAT_BUBBLE_W, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_color(box, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(box, 1, 0);
+        lv_obj_set_style_border_color(box, lv_color_black(), 0);
+        lv_obj_set_style_radius(box, 6, 0);
+        lv_obj_set_style_pad_all(box, 4, 0);
+        lv_obj_set_pos(box, m->from_user ? (w - CHAT_BUBBLE_W - 4) : 4, y);
+
+        lv_obj_t *lab = lv_label_create(box);
+        lv_obj_set_width(lab, CHAT_BUBBLE_W - 8);
+        lv_label_set_long_mode(lab, LV_LABEL_LONG_WRAP);
+        lv_label_set_text(lab, m->text);
+        lv_obj_set_style_text_font(lab, &lv_font_montserrat_14, 0);
+
+        lv_obj_update_layout(chat_hist_cont);
+        y += lv_obj_get_height(box) + 4;
+    }
+    lv_obj_update_layout(chat_hist_cont);
+    lv_obj_scroll_to_y(chat_hist_cont, LV_COORD_MAX, LV_ANIM_OFF);
+}
+
+/* Async send (review: sync HTTP would freeze the UI for up to 30s).
+ * Results travel over a FreeRTOS queue as heap-allocated structs
+ * carrying the page generation - no volatile-flag-guarded std::string
+ * cross-core access, stale replies of a previous visit are dropped. */
 static void chat_send_task_func(void *param)
 {
     uint32_t gen = (uint32_t)(uintptr_t)param;
@@ -147,7 +122,7 @@ static void chat_send(void)
 {
     if (s_chat_send_busy) return;               /* already sending */
 
-    const char *prompt = lv_textarea_get_text(chat_ta);
+    const char *prompt = lv_textarea_get_text(chat_input_ta);
     if (!prompt || prompt[0] == '\0') return;
 
     char base[160], model[80], key[80];
@@ -159,9 +134,13 @@ static void chat_send(void)
 
     strncpy(chat_prompt_buf, prompt, sizeof(chat_prompt_buf) - 1);
     chat_prompt_buf[sizeof(chat_prompt_buf) - 1] = '\0';
-    /* the draft STAYS in the input box until success (review finding 1.9):
-     * on failure the user can retry without retyping */
+
+    /* the message goes into the history immediately (chat semantics); the
+     * draft STAYS in the input box until success, so failures can retry */
+    chat_history_add(true, prompt);
+    chat_history_render();
     lv_label_set_text(chat_status_lab, "Thinking...");
+
     s_chat_send_busy = true;
     if (!s_chat_q) s_chat_q = xQueueCreate(4, sizeof(void *));
     TaskHandle_t h = NULL;
@@ -182,8 +161,10 @@ void ai_chat_keyboard_poll(void)
         if (cr->gen == s_chat_page_gen && chat_kbd_active) {
             if (cr->ok) {
                 Serial.printf("[AIChat] reply len=%u\n", (unsigned)cr->reply.length());
-                lv_textarea_set_text(chat_ta, "");      /* success: draft consumed */
-                chat_apply_reply(cr->reply);
+                lv_textarea_set_text(chat_input_ta, "");    /* success: draft consumed */
+                chat_history_add(false, cr->reply.c_str());
+                chat_history_render();
+                lv_label_set_text(chat_status_lab, "");
             } else {
                 /* failure: the draft stays in the box for retry */
                 lv_label_set_text(chat_status_lab, "AI error - check cfg / WiFi");
@@ -200,57 +181,26 @@ void ai_chat_keyboard_poll(void)
     if (!keypad_get_val(&c)) return;
     keypad_set_flag();
 
-    if (c == '\t' || c == '\v') return;         /* Alt+Enter scan combo / volume key: not for chat */
+    if (c == '\t' || c == '\v') return;         /* Alt+Enter scan combo / volume key */
 
     if (s_chat_send_busy) return;               /* sending: swallow input */
 
-    if (chat_viewing) {
-        if (c == '\n') {
-            if ((chat_page + 1) * CHAT_LINES_PER_PAGE < chat_line_cnt) {
-                chat_page++;
-                chat_render();
-            }
-        } else if (c == '\b') {
-            if (chat_page > 0) {
-                chat_page--;
-                chat_render();
-            } else {
-                chat_viewing = false;
-                chat_page = 0;
-                lv_label_set_text(chat_status_lab, "");
-                lv_label_set_text(chat_answer_lab, "");
-            }
-        } else if (c >= ' ') {
-            /* typing while viewing the answer: go back to the input box and
-             * append the key instead of silently dropping it */
-            chat_viewing = false;
-            chat_page = 0;
-            lv_label_set_text(chat_status_lab, "");
-            lv_label_set_text(chat_answer_lab, "");
-            lv_textarea_add_char(chat_ta, c);
-        }
-        return;
-    }
-
     if (c == '\n') {
         chat_send();
+    } else if (c == '+' || c == '-') {
+        /* scroll the history (Sym/Alt layer) */
+        lv_obj_scroll_by(chat_hist_cont, 0, c == '+' ? -120 : 120, LV_ANIM_OFF);
     } else if (c == '\b') {
-        const char *txt = lv_textarea_get_text(chat_ta);
+        const char *txt = lv_textarea_get_text(chat_input_ta);
         if (txt && txt[0] != '\0') {
-            lv_textarea_del_char(chat_ta);
+            lv_textarea_del_char(chat_input_ta);
         } else {
             chat_kbd_active = false;
             scr_mgr_pop(false);
         }
     } else {
-        lv_textarea_add_char(chat_ta, c);
+        lv_textarea_add_char(chat_input_ta, c);
     }
-}
-
-static void chat_back_cb(lv_event_t *e)
-{
-    chat_kbd_active = false;
-    scr_mgr_pop(false);
 }
 
 static void chat_send_btn_cb(lv_event_t *e)
@@ -262,7 +212,13 @@ static void chat_send_btn_cb(lv_event_t *e)
 static void chat_clear_btn_cb(lv_event_t *e)
 {
     Serial.println("[AIChat] Clear button clicked");
-    lv_textarea_set_text(chat_ta, "");
+    lv_textarea_set_text(chat_input_ta, "");
+}
+
+static void chat_back_cb(lv_event_t *e)
+{
+    chat_kbd_active = false;
+    scr_mgr_pop(false);
 }
 
 static void chat_create(lv_obj_t *parent)
@@ -275,58 +231,72 @@ static void chat_create(lv_obj_t *parent)
     lv_obj_set_style_border_width(cont, 0, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_pad_all(cont, 4, LV_PART_MAIN);
-    lv_obj_set_style_pad_row(cont, 4, LV_PART_MAIN);
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(cont, 4, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
 
-    chat_ta = lv_textarea_create(cont);
-    lv_obj_set_width(chat_ta, lv_pct(100));
-    lv_obj_set_height(chat_ta, 64);            /* multi-line: room for ~150+ chars */
-    lv_textarea_set_max_length(chat_ta, 200);
-    lv_textarea_set_placeholder_text(chat_ta, "Ask anything...");
-    lv_obj_set_style_text_font(chat_ta, &lv_font_montserrat_14, LV_PART_MAIN);
+    /* --- history: read-only, scrollable, top 2/3 --- */
+    chat_hist_cont = lv_obj_create(cont);
+    lv_obj_set_width(chat_hist_cont, lv_pct(100));
+    lv_obj_set_height(chat_hist_cont, 164);
+    lv_obj_set_style_bg_color(chat_hist_cont, lv_color_white(), 0);
+    lv_obj_set_style_border_width(chat_hist_cont, 1, 0);
+    lv_obj_set_style_border_color(chat_hist_cont, lv_color_black(), 0);
+    lv_obj_set_style_radius(chat_hist_cont, 4, 0);
+    lv_obj_set_style_pad_all(chat_hist_cont, 2, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(chat_hist_cont, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scroll_dir(chat_hist_cont, LV_DIR_VER);
+    lv_obj_clear_flag(chat_hist_cont, LV_OBJ_FLAG_SCROLL_CHAIN);
 
+    /* --- status line --- */
     chat_status_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(chat_status_lab, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(chat_status_lab, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
     lv_label_set_text(chat_status_lab, "");
 
-    chat_answer_lab = lv_label_create(cont);
-    lv_obj_set_width(chat_answer_lab, lv_pct(100));
-    lv_obj_set_flex_grow(chat_answer_lab, 1);
-    lv_obj_set_style_text_font(chat_answer_lab, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_label_set_long_mode(chat_answer_lab, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(chat_answer_lab, "");
+    /* --- input row: multi-line box (1/3) + small side buttons --- */
+    lv_obj_t *input_row = lv_obj_create(cont);
+    lv_obj_set_width(input_row, lv_pct(100));
+    lv_obj_set_height(input_row, 82);
+    lv_obj_set_style_bg_opa(input_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(input_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(input_row, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(input_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(input_row, 4, LV_PART_MAIN);
 
-    /* Send / Clear buttons pinned to the container bottom */
-    lv_obj_t *btn_row = lv_obj_create(cont);
-    lv_obj_set_width(btn_row, lv_pct(100));
-    lv_obj_set_height(btn_row, 34);
-    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(btn_row, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(btn_row, 0, LV_PART_MAIN);
-    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(btn_row, 4, LV_PART_MAIN);
-    lv_obj_add_flag(btn_row, LV_OBJ_FLAG_FLOATING);
-    lv_obj_align(btn_row, LV_ALIGN_BOTTOM_MID, 0, 0);
+    chat_input_ta = lv_textarea_create(input_row);
+    lv_obj_set_width(chat_input_ta, 176);
+    lv_obj_set_height(chat_input_ta, 82);
+    lv_textarea_set_max_length(chat_input_ta, 200);
+    lv_textarea_set_placeholder_text(chat_input_ta, "Type here...");
+    lv_obj_set_style_text_font(chat_input_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
-    lv_obj_t *send_btn = lv_btn_create(btn_row);
-    lv_obj_set_flex_grow(send_btn, 1);
-    lv_obj_set_height(send_btn, 34);
+    /* small Send / Clear buttons stacked on the side */
+    lv_obj_t *btn_col = lv_obj_create(input_row);
+    lv_obj_set_width(btn_col, 44);
+    lv_obj_set_height(btn_col, 82);
+    lv_obj_set_style_bg_opa(btn_col, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn_col, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btn_col, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(btn_col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(btn_col, 4, LV_PART_MAIN);
+
+    lv_obj_t *send_btn = lv_btn_create(btn_col);
+    lv_obj_set_width(send_btn, 44);
+    lv_obj_set_height(send_btn, 38);
     lv_obj_t *send_lab = lv_label_create(send_btn);
     lv_label_set_text(send_lab, "Send");
     lv_obj_center(send_lab);
     lv_obj_add_event_cb(send_btn, chat_send_btn_cb, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *clear_btn = lv_btn_create(btn_row);
-    lv_obj_set_flex_grow(clear_btn, 1);
-    lv_obj_set_height(clear_btn, 34);
+    lv_obj_t *clear_btn = lv_btn_create(btn_col);
+    lv_obj_set_width(clear_btn, 44);
+    lv_obj_set_height(clear_btn, 38);
     lv_obj_t *clear_lab = lv_label_create(clear_btn);
     lv_label_set_text(clear_lab, "Clear");
     lv_obj_center(clear_lab);
     lv_obj_add_event_cb(clear_btn, chat_clear_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_move_foreground(btn_row);
 
     chat_kbd_active = true;
 }
@@ -340,10 +310,6 @@ static void chat_exit(void)  { ui_disp_full_refr(); }
 static void chat_destroy(void)
 {
     chat_kbd_active = false;
-    chat_viewing = false;
-    chat_page = 0;
-    chat_line_cnt = 0;
-    chat_truncated = false;
     s_chat_page_gen++;                          /* late replies of this visit are dropped */
     s_chat_send_busy = false;                   /* the arriving reply will be dropped by gen */
 }
