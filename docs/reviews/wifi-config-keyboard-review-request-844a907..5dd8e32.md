@@ -13,9 +13,14 @@
   - `8461f65` — `pda2: ca_bundle_check - fail fast when openssl is missing`
   - `a6388b0` — `docs: review workflow README + nvs atomic save test spec + archive results`
   - `e1b2d0f` — `pda2: AI Chat - send recent history as multi-turn API context`（用户追加需求）
+  - `06f9235` — `pda2: accumulate response usage into NVS ai_stats`（用户追加需求）
+  - `23063b0` — `pda2: AI Chat - rename Hist button to New`（用户追加需求）
+  - `5dd8e32` — `pda2: API key dev exception - compile-time warning (C1) + SECURITY.md (C2)`
 - **评审依据**：
   - [主评审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c.md)（部分接受，11 Findings）
   - [Copilot 复审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c-copilot.md)（退回修订，10 Findings）
+  - [主评审 844a907..e1b2d0f](wifi-config-keyboard-review-result-844a907..e1b2d0f.md)（部分接受；其 C1/C2 要求已由 `5dd8e32` 落地）
+  - [Copilot 复审 844a907..23063b0](wifi-config-keyboard-review-result-844a907..23063b0-copilot.md)（退回修订；其 Findings 列入下轮整改，见 §5）
 - **历史文档**：前二十轮申请与结果见 `docs/reviews/`（合并流程见 `docs/reviews/README.md`）
 - **硬件**：T-Deck-Pro HD-V2（V1.1，25-09-15 批次，COM5，**已连接、已烧录**）
 
@@ -87,6 +92,35 @@
 - `ui_ai_chat` 发送时把**最近 8KB**（约 2K token）历史快照进任务自有结构：整条轮次不拆、最旧先裁、排除 pending 气泡（其内容就是当前 prompt）；角色按 from_user 映射 user/assistant
 - 快照所有权仍归任务（契约 finding 1.6），串口打印 `[AIChat] send: N context turns` 便于核对
 
+### 2.10 usage 用量统计（`06f9235`）— 用户追加需求
+
+服务器 response 的 `usage` 块按**容错原则**解析（用户要求 2：任何字段可能缺失——缺失计 0，未知字段忽略；`cJSON_IsNumber` 双重检查），累加到 NVS `ai_stats`（8 个键，NVS 键名 ≤15 字符故用短名）：
+
+| 字段 | NVS 键 | 来源 |
+|---|---|---|
+| prompt_tokens | `p_tok` | usage.prompt_tokens |
+| completion_tokens | `c_tok` | usage.completion_tokens |
+| total_tokens | `tot_tok` | usage.total_tokens |
+| cost | `cost` (double) | usage.cost |
+| cached_tokens | `cached` | prompt_tokens_details.cached_tokens |
+| cache_write_tokens | `cwrite` | prompt_tokens_details.cache_write_tokens |
+| audio_tokens | `audio` | prompt_tokens_details.audio_tokens |
+| reasoning_tokens | `reasoning` | completion_tokens_details.reasoning_tokens |
+
+- 计数**不随 New 清空**（用量账本 ≠ 会话数据）；Test 的 ping 也计入（真实计费）
+- 串口日志：`[AI] usage +p/c tok, cost +x | totals ...`；将来统计屏直接读 `ai_stats`
+
+### 2.11 New 按钮（`23063b0`）— 用户追加需求
+
+Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 日志（usage 计数保留）。行为与改名同步：UI 文案、代码注释、本申请回归清单全部改用 New。
+
+### 2.12 Key 补偿控制 C1/C2（`5dd8e32`）— 主评审 844a907..e1b2d0f §1.1
+
+按用户 `api-key-dev-exception` 决策补齐补偿控制：
+
+- **C1**：`openai_api.h` 在 `AI_KEY_DEFAULT_COMPILED` 定义时每次编译发出 `#warning "Dev-only API Key in source - rotate before pushing to a public remote"`；`[env:pda2]` build_flags 加 `-DAI_KEY_DEFAULT_COMPILED`。已实测警告触发
+- **C2**：仓库根 `SECURITY.md`：例外说明、推公网前必做 4 步（删 Key 字符串、去掉编译宏、OpenRouter 轮换、filter-repo）、当前控制状态
+
 ## 3. 验证状态
 
 | 项目 | 状态 | 证据 |
@@ -113,6 +147,8 @@
 8. 重启/重进 AI Text → 历史完整恢复（SPIFFS）且重进立即渲染；Hist 按钮清空历史后重启确认已清空
 9. 长回答 >4KB → `(truncated)` 无乱码；中文/emoji 正常
 10. **多轮记忆**：连续两问（第二问引用第一问内容，如 "把上面那句翻译成英文"）→ AI 能正确引用上文；串口可见 `send: 1+ context turns`
+11. **usage 统计**：一次对话后串口出现 `[AI] usage +232/215 tok, cost +...`；重启后再对话，totals 在上次基础上累加
+12. **New 按钮**：点 New → 历史清空、状态行 `History cleared`；重启后仍为空；usage 计数不受影响
 
 **P2 其他**
 10. WiFi Test/Time Sync 进行中离页 → 立即重进 → 可立即发起新请求（不再被 busy 拒绝）
@@ -121,17 +157,17 @@
 
 ## 5. 遗留项（明示）
 
-- **Critical：真实 API Key 仍在 `openai_api.h:36`**（主 1.1 / Cop 1.1）——用户决策延后，用户已自行 revoke。**下次评审必查**：Key 字符串删除或占位符替代 + `git filter-repo` 计划/通告。本批所有评审文档均不再复制凭据正文
-- **主 1.6 system prompt NVS 化**：随 AI Config 下一轮重构处理
-- **真机回归 §4**：上轮评审明确"最迟在下一批申请提交前完成"——本次仍待用户实测，结果将回填并写入下批申请
+- **Key**：按用户 `api-key-dev-exception` 决策延后保留（非 blocking）；补偿控制 **C1/C2 已于 `5dd8e32` 落地**，C3（用户侧 free-tier 轮换）用户已承诺。推公网/重大 release 前重新升级为 Critical
+- **Copilot 复审 844a907..23063b0 的 11 项 Findings**：列入下轮整改（含 2 High：Sleep 同步等待发生在 `entry()`——`scr_mgr_push` 先 entry 后 `lv_scr_load`，等待的是旧帧且重入 LVGL；扫描共享状态在临界区外读取）。下轮申请逐条映射
+- **真机回归 §4**：已连续多轮 ⏸，P0 Sleep 三项必须在合并前完成；结果回填本申请
 
 ## 6. 回滚方案
 
 ```bash
-git revert e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
+git revert 5dd8e32 23063b0 06f9235 e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
 ```
 
-9 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。
+12 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。
 
 ## 7. 申请审批事项
 
