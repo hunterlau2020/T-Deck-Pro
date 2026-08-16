@@ -3884,10 +3884,17 @@ static void create11(lv_obj_t *parent)
 }
 static void entry11(void)
 {
-    ui_disp_full_refr();                        /* the prompt must be visible first */
+    /* Wait until the prompt frame actually REACHED the panel: the EPD full
+     * refresh takes 1-2 s, so starting the countdown from "refresh
+     * requested" would shorten the visible time (copilot finding 1.4). */
+    ui_disp_full_refr_sync();
     sleep_countdown = 2;                        /* 2 ticks -> sleep after ~3s */
+    /* defensive order (main review 1.7): del + NULL before create, so a
+     * re-entry can never hold a stale handle; no nested Sleep screen is
+     * possible, but the cleanup must stay double-free-safe */
     if (sleep_timer) {
         lv_timer_del(sleep_timer);
+        sleep_timer = NULL;
     }
     sleep_timer = lv_timer_create(sleep_timer_event, 1000, NULL);
     if (sleep_timer) {

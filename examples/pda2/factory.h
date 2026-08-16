@@ -64,6 +64,7 @@ union flush_buf_pixel
  *                              GLOBAL PROTOTYPES
  * *******************************************************************************/
 void disp_full_refr(void); // Next global refresh
+void disp_full_refr_wait(uint32_t timeout_ms); // request full refresh and wait until it reached the panel
 void ink_screen_prepare_shutdown(void);
 void shared_spi_bus_init(void);
 void shared_spi_lock(void);

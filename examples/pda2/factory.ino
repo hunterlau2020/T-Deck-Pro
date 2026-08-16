@@ -58,6 +58,11 @@ InkDisplay *display = &display_v1_1;
 uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
 int disp_refr_mode = DISP_REFR_MODE_PART;
+/* Set by disp_full_refr(), cleared when a FULL-mode flush has actually
+ * reached the panel (either via the LVGL flush cb or the flush timer).
+ * Lets callers wait for "display complete" instead of "refresh requested"
+ * (copilot finding 1.4: the EPD full refresh takes 1-2 s). */
+static volatile bool disp_flush_pending = false;
 
 uint8_t isT_Deck_Pro_v1_1 = 0;
 const char Version_str1[] = "T-Deck-Pro V1.0";
@@ -195,18 +200,19 @@ static void flush_epd_bitmap(const lv_area_t *area)
         return;
     }
 
+    const bool full = (disp_refr_mode == DISP_REFR_MODE_FULL);
     shared_spi_lock();
     shared_spi_prepare_device(BOARD_EPD_CS);
 
-    if (disp_refr_mode == DISP_REFR_MODE_PART) {
-        display->setPartialWindow(area->x1, area->y1, width, height);
-    } else {
+    if (full) {
         display->setFullWindow();
+    } else {
+        display->setPartialWindow(area->x1, area->y1, width, height);
     }
 
     display->firstPage();
     do {
-        if (disp_refr_mode == DISP_REFR_MODE_FULL) {
+        if (full) {
             display->fillScreen(GxEPD_WHITE);
         }
         display->drawInvertedBitmap(area->x1, area->y1, decodebuffer, width, height, GxEPD_BLACK);
@@ -215,6 +221,9 @@ static void flush_epd_bitmap(const lv_area_t *area)
 
     display->powerOff();
     shared_spi_unlock();
+    if (full) {
+        disp_flush_pending = false;     /* the full refresh reached the panel */
+    }
 }
 
 static void flush_timer_cb(lv_timer_t *t)
@@ -762,6 +771,20 @@ void loop()
 void disp_full_refr(void)
 {
     disp_refr_mode = DISP_REFR_MODE_FULL;
+    disp_flush_pending = true;
+}
+
+/* Request a full refresh and wait until it has actually reached the panel
+ * (bounded). Pumps lv_task_handler so the flush timer can run; callers
+ * must NOT be inside an LVGL timer callback when using this. */
+void disp_full_refr_wait(uint32_t timeout_ms)
+{
+    disp_full_refr();
+    uint32_t t0 = millis();
+    while (disp_flush_pending && millis() - t0 < timeout_ms) {
+        lv_task_handler();
+        delay(5);
+    }
 }
 
 

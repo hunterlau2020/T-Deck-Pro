@@ -39,6 +39,7 @@ extern "C" {
  *                              GLOBAL PROTOTYPES
  * *******************************************************************************/
 void ui_disp_full_refr(void);
+void ui_disp_full_refr_sync(void);
 
 // [ screen 1 ] --- lora
 float ui_lora_get_freq(void);

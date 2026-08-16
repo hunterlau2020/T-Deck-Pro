@@ -32,6 +32,15 @@ void ui_disp_full_refr(void)
 {
     disp_full_refr();
 }
+
+/* Full refresh that BLOCKS until the frame has actually reached the EPD
+ * panel (full waveform refresh takes 1-2 s). Use where timing must start
+ * from "display complete" rather than "refresh requested", e.g. the Sleep
+ * countdown (copilot finding 1.4). Not for use inside LVGL callbacks. */
+void ui_disp_full_refr_sync(void)
+{
+    disp_full_refr_wait(5000);
+}
 //************************************[ screen 0 ]****************************************** menu
 //************************************[ screen 1 ]****************************************** lora
 
