@@ -29,8 +29,8 @@ A PDA (Personal Digital Assistant) firmware for the **LilyGo T-Deck Pro v1.1** b
 - **Calendar** — lunar calendar + holiday lookup.
 - **Dictionary** — online dictionaryapi.dev lookup.
 - **AI Voice Chat** — voice AI screen (TTS reply).
-- **AI Text** — text chat via OpenRouter（OpenAI 兼容）：多行输入 + Send/Clear 按钮、异步发送、system 提示（KET English examiner）、回复分页显示。
-- **AI Config** — Base URL（多行）/ Model / Key 各自输入框 + Save / Test 按钮；Test 请求 `/models` 并把 `data[0].id` 显示在 msgbox（倒计时 + Close）；Base/Model/Key 均有固件默认值（NVS 优先）。
+- **AI Text** — WeChat 式聊天界面 via OpenRouter（OpenAI 兼容）：上 2/3 可滚动历史（AI 左/用户右气泡）+ 下 1/3 多行输入 + Send/Clear/**New** 侧按钮；**多轮上下文**（最近 8KB 整轮配对，`openai_chat_multi`）；历史持久化 SPIFFS `/chat.log`（原子换入 + 校验和），失败草稿存 `/chat.draft` 重启可恢复；发送异步（任务快照 + 页面代次）；usage 统计入 NVS `ai_stats`。
+- **AI Config** — Base URL（多行）/ Model / Key 各自输入框 + Save / Test 按钮；**Test = 最小 chat-completion**（msgbox 计费提示 + 15s 绝对 deadline + Close 取消）；Save 门槛 = Test 通过（状态行明示原因）；**NVS 双槽原子保存**（暂存非活动槽 + 单键 active 翻转）；Base/Model/Key 均有固件默认值（NVS 优先）。
 
 ### Planned
 - Voice Recorder
