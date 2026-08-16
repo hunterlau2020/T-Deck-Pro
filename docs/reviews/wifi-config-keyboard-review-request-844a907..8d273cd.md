@@ -21,11 +21,17 @@
   - `35e9eae` — `pda2: AI Chat - atomic log + turn pairing + New confirmation`
   - `74c24ff` — `pda2: AI usage stats - mutex-guarded single-blob accounting`
   - `538e6d0` — `tests: align nvs atomic save spec with the dual-slot implementation`
+  - `c90307f` — `pda2: AI Chat - fix log record count, turn pairing, draft sync`
+  - `0328cd2` — `pda2: usage stats - static mutex, chat/test split, throttled persist`
+  - `4c1ceda` — `pda2: sleep - cancel instead of deep-sleeping on frame-wait timeout`
+  - `8d273cd` — `tests: executable state-machine test for the dual-slot NVS save`
 - **评审依据**：
   - [主评审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c.md)（部分接受，11 Findings）
   - [Copilot 复审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c-copilot.md)（退回修订，10 Findings）
   - [主评审 844a907..e1b2d0f](wifi-config-keyboard-review-result-844a907..e1b2d0f.md)（部分接受；其 C1/C2 要求已由 `5dd8e32` 落地）
-  - [Copilot 复审 844a907..23063b0](wifi-config-keyboard-review-result-844a907..23063b0-copilot.md)（退回修订；其 Findings 列入下轮整改，见 §5）
+  - [Copilot 复审 844a907..23063b0](wifi-config-keyboard-review-result-844a907..23063b0-copilot.md)（退回修订；其 Findings 由 `9a89cdd..538e6d0` 整改）
+  - [主评审 844a907..538e6d0](wifi-config-keyboard-review-result-844a907..538e6d0.md)（部分接受；前置条件由 `c90307f..8d273cd` 落地，P0 真机回归除外）
+  - [Copilot 复审 844a907..538e6d0](wifi-config-keyboard-review-result-844a907..538e6d0-copilot.md)（退回修订；确定性逻辑错误由 `c90307f..8d273cd` 修复）
 - **历史文档**：前二十轮申请与结果见 `docs/reviews/`（合并流程见 `docs/reviews/README.md`）
 - **硬件**：T-Deck-Pro HD-V2（V1.1，25-09-15 批次，COM5，**已连接、已烧录**）
 
@@ -67,7 +73,7 @@
 
 - **动态正文**：`chat_msg_t.text` 改 `std::string`（堆分配），固定 256B 硬切删除；总预算 16KB 从最旧淘汰（字符串安全赋值，不用 memmove）
 - **单一截断机制**（主 1.5）：仅 `CHAT_MSG_MAX=4096` 单条上限会截断，UTF-8 码点回退 + `(truncated)` 标记——与气泡存储同一份代码产出
-- **SPIFFS 持久化**（主 1.2）：`/chat.log` 二进制记录（1B 标志+2B 长度+正文），每次变更整写（16KB 上限内）；进屏时恢复；SPIFFS 不可用时降级 RAM-only（串口记录一次）；新增 **Hist 侧按钮**清空历史（含日志截断）
+- **SPIFFS 持久化**（主 1.2）：`/chat.log` 二进制记录（1B 标志+2B 长度+正文），每次变更整写（16KB 上限内）；进屏时恢复；SPIFFS 不可用时降级 RAM-only（串口记录一次）；新增 **Hist 侧按钮**（后按用户要求改名 New，见 §2.11）清空历史（含日志截断）
 - **重进渲染**（Cop 1.6）：`chat_create` 末尾渲染恢复的历史，不再空白
 - **重试复用气泡**（Cop 1.7）：任务创建成功后才加入用户气泡；重试 drop-last+re-add 复用同一气泡；失败追加 `(failed)` 标记，草稿仍保留可重试
 - **快照不截断**（Cop 1.8）：prompt 以完整 `std::string` 复制进任务快照，200 字符（≤800 UTF-8 字节）不受 255 字节切分
@@ -141,6 +147,23 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 | Cop 1.10 NVS 写放大 | `74c24ff`：每次响应**一次** putBytes blob 提交（magic 校验），持久化失败记日志且 RAM 总数不丢；顺带 load 回退改 isKey 槽初始化判定（同 Cop 1.8） |
 | Cop 1.11 申请未登记 | 本申请 §2.10-2.12 已登记 `06f9235`/`23063b0`/`5dd8e32`（`331c6f9` 完成，本扩展继续登记本轮 5 commit） |
 
+### 2.14 第三轮整改（`c90307f..8d273cd`）— 对应 844a907..538e6d0 双评审 Findings
+
+| 评审项 | 处理（commit） |
+|---|---|
+| **Cop 1.1 High** chat.log 校验和必失败 | `c90307f`：文件头加**记录数**，loader 精确解析 N 条后读校验和——旧循环条件会把尾部校验和当消息头吃掉，合法日志（含空日志）全部被误判损坏丢弃；现空/单条/多条日志均可恢复 |
+| **Cop 1.2 High** 轮次配对条件写反 | `c90307f`：assistant 的前一条**是** user 才配对（原条件取反导致首轮即 break，多轮上下文从未生效） |
+| **Cop 1.3 High** mutex 惰性创建竞态 | `0328cd2`：改**静态初始化** `xSemaphoreCreateMutexStatic`（加载期创建，无 first-use 竞态，不泄漏句柄） |
+| **Cop 1.4 High** watcher 超时仍深睡 | `4c1ceda`：3s 超时改为**取消深睡**并显示 `Display sync failed - sleep cancelled`——只有目标帧完成事件才允许启动倒计时 |
+| Cop 1.5 草稿生命周期不同步 | `c90307f`：exit() 按 textarea 实况保存/清除草稿；Clear 按钮同步清持久化文件 |
+| Cop 1.6 / 主 1.2 测试不可执行 | `8d273cd`：`scripts/test_nvs_atomic_save.py` 可注入失败的 KV store 镜像算法，10 用例全部断言执行（**实测 11/11 PASS**，含 fail_at 提交点失败、掉电状态、槽交替、legacy 回退、空 Base）；spec 顶部引用脚本 |
+| 主 1.3 NVS 写放大 | `0328cd2`：持久化**节流**——每 60s 或每 20 次响应最多一次 blob 提交；RAM 总数实时，掉电最多丢一个节流窗口 |
+| 主 1.4 Test 混入 chat 统计 | `0328cd2`：blob 内 **chat/test 两组独立计数**，串口分别打印；Test ping 不再污染聊天 totals |
+| 主 1.7 轮次配对文档化 | `docs/async_ipc_contract.md` 新增第 11 条"多轮上下文轮次配对规则" |
+| 主 1.8 SPIFFS 状态可视 | `c90307f`：SPIFFS 不可用时状态行显示 `Storage: RAM-only (log not saved)` |
+| 主 1.11 分段评审条款 | `docs/reviews/README.md` 加入"单次申请 ≥10 commit 应分段" |
+| Cop 1.8 申请书旧名称 | 本申请 §4 回归项已统一为 New / `send: N context msgs` |
+
 ## 3. 验证状态
 
 | 项目 | 状态 | 证据 |
@@ -164,9 +187,9 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 
 **P1 AI Chat（11/12）**
 7. 发送成功 → 输入框清空、回复左对齐追加、自动滚底；发送失败 → 草稿保留、气泡标 `(failed)`；重试**不产生重复气泡**
-8. 重启/重进 AI Text → 历史完整恢复（SPIFFS）且重进立即渲染；Hist 按钮清空历史后重启确认已清空
+8. 重启/重进 AI Text → 历史完整恢复（SPIFFS）且重进立即渲染；New 按钮（确认后）清空历史后重启确认已清空
 9. 长回答 >4KB → `(truncated)` 无乱码；中文/emoji 正常
-10. **多轮记忆**：连续两问（第二问引用第一问内容，如 "把上面那句翻译成英文"）→ AI 能正确引用上文；串口可见 `send: 1+ context turns`
+10. **多轮记忆**：连续两问（第二问引用第一问内容，如 "把上面那句翻译成英文"）→ AI 能正确引用上文；串口可见 `send: 2+ context msgs`（恒为偶数，尾部未回复的 user 除外）
 11. **usage 统计**：一次对话后串口出现 `[AI] usage +232/215 tok, cost +...`；重启后再对话，totals 在上次基础上累加
 12. **New 按钮**：点 New → **先弹确认框**；OK → 历史清空、状态行 `History cleared`；Cancel/任意键 → 无变化；重启后仍为空；usage 计数不受影响
 13. **Sleep 帧等待**：点 Sleep → 提示画面完整显示后倒计时才从 2 开始（旧固件会吃掉 1-2s 全刷时间）；倒计时内 Back 取消
@@ -181,16 +204,16 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 ## 5. 遗留项（明示）
 
 - **Key**：按用户 `api-key-dev-exception` 决策延后保留（非 blocking）；补偿控制 **C1/C2 已于 `5dd8e32` 落地**，C3（用户侧 free-tier 轮换）用户已承诺。推公网/重大 release 前重新升级为 Critical
-- **真机回归 §4**：已连续多轮 ⏸，P0 Sleep 三项必须在合并前完成；结果回填本申请
-- **主评审 844a907..e1b2d0f 的跟踪项**：SPIFFS 写放大（append+compact 或后台线程）、CJK 8KB 预算静默裁剪（状态行显示裁剪信息）——本扩展已通过"整轮不拆+校验和+临时文件"降低风险，但按整文件重写方案未改为 append-only，下轮评审继续跟踪
+- **真机回归 §4**：已连续多轮 ⏸（第 5 次提示）——主评审 844a907..538e6d0 明确 **P0 Sleep 三项为合并前置条件**；§4 各子项编号已按最新 UI（New、`context msgs`）修正
+- **SPIFFS 整文件重写写放大**（主评审 1.2 跟踪项）：已通过临时文件 + 校验和 + rename 保证安全，但 append+compact 或后台保存线程未实施；CJK 8KB 预算静默裁剪（主评审 1.3 跟踪项）的 UI 提示未实施——下轮评审继续跟踪
 
 ## 6. 回滚方案
 
 ```bash
-git revert 538e6d0 74c24ff 35e9eae ba31181 9a89cdd 5dd8e32 23063b0 06f9235 e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
+git revert 8d273cd 4c1ceda 0328cd2 c90307f 538e6d0 74c24ff 35e9eae ba31181 9a89cdd 5dd8e32 23063b0 06f9235 e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
 ```
 
-17 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。
+21 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。（按评审 §1.11 约定，下轮起单次申请 ≥10 commit 时分段评审。）
 
 ## 7. 申请审批事项
 
