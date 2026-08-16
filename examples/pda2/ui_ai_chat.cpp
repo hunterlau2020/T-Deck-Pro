@@ -15,6 +15,7 @@
 #include "ui_scr_mrg.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/queue.h>
 
 /* Reviewer #3 fix:
  *   - Wrap long replies by display width (30 chars per ~16px font = 240px width).
@@ -60,7 +61,9 @@ static void chat_render(void)
 }
 
 /* Break one source line into <=CHAT_LINE_WIDTH-char display lines, pushing
- * into chat_lines[]. Stops if CHAT_MAX_LINES reached, marks chat_truncated. */
+ * into chat_lines[]. Stops if CHAT_MAX_LINES reached, marks chat_truncated.
+ * UTF-8 safe (review finding 1.10): the cut point walks back over
+ * continuation bytes (0x80-0xBF) so multi-byte sequences are never split. */
 static void chat_push_wrapped(const char *src)
 {
     int slen = (int)strlen(src);
@@ -72,6 +75,9 @@ static void chat_push_wrapped(const char *src)
         }
         int take = slen - i;
         if (take > CHAT_LINE_WIDTH) take = CHAT_LINE_WIDTH;
+        while (take > 0 && ((unsigned char)src[i + take] & 0xC0) == 0x80) {
+            take--;
+        }
         memcpy(chat_lines_storage[chat_line_cnt], src + i, take);
         chat_lines_storage[chat_line_cnt][take] = '\0';
         chat_lines[chat_line_cnt] = chat_lines_storage[chat_line_cnt];
@@ -82,11 +88,19 @@ static void chat_push_wrapped(const char *src)
 
 /* Async send (review: sync HTTP would freeze the UI for up to 30s):
  * the request runs in a FreeRTOS task, the reply is applied from the
- * keyboard poll when ready. */
-static TaskHandle_t chat_send_task = NULL;
-static volatile bool chat_send_result_ready = false;
-static bool chat_send_ok = false;
-static string chat_send_reply;
+ * keyboard poll. Results travel over a FreeRTOS queue as heap-allocated
+ * structs carrying the page generation - no volatile-flag-guarded
+ * std::string cross-core access, stale replies of a previous visit are
+ * dropped (review findings 1.4/1.5). */
+typedef struct {
+    uint32_t gen;
+    bool ok;
+    string reply;
+} chat_reply_t;
+
+static QueueHandle_t s_chat_q = NULL;
+static volatile uint32_t s_chat_page_gen = 0;   /* bumped on entry/destroy */
+static volatile bool s_chat_send_busy = false;  /* UI-owned */
 static char chat_prompt_buf[512] = {0};
 
 static void chat_apply_reply(const string &reply)
@@ -115,17 +129,23 @@ static void chat_apply_reply(const string &reply)
 
 static void chat_send_task_func(void *param)
 {
+    uint32_t gen = (uint32_t)(uintptr_t)param;
+    chat_reply_t *res = new chat_reply_t;
+    res->gen = gen;
     char base[160], model[80], key[80];
     openai_load_config(base, sizeof(base), model, sizeof(model), key, sizeof(key));
-    chat_send_ok = openai_chat(chat_prompt_buf, base, model, key, chat_send_reply);
-    chat_send_result_ready = true;
-    chat_send_task = NULL;
+    res->ok = openai_chat(chat_prompt_buf, base, model, key, res->reply);
+    if (s_chat_q) {
+        xQueueSend(s_chat_q, &res, portMAX_DELAY);
+    } else {
+        delete res;
+    }
     vTaskDelete(NULL);
 }
 
 static void chat_send(void)
 {
-    if (chat_send_task != NULL) return;         /* already sending */
+    if (s_chat_send_busy) return;               /* already sending */
 
     const char *prompt = lv_textarea_get_text(chat_ta);
     if (!prompt || prompt[0] == '\0') return;
@@ -139,31 +159,39 @@ static void chat_send(void)
 
     strncpy(chat_prompt_buf, prompt, sizeof(chat_prompt_buf) - 1);
     chat_prompt_buf[sizeof(chat_prompt_buf) - 1] = '\0';
-    lv_textarea_set_text(chat_ta, "");          /* draft consumed */
+    /* the draft STAYS in the input box until success (review finding 1.9):
+     * on failure the user can retry without retyping */
     lv_label_set_text(chat_status_lab, "Thinking...");
-    chat_send_result_ready = false;
-    if (xTaskCreate(chat_send_task_func, "chat_send", 1024 * 8, NULL, 1,
-                    &chat_send_task) != pdPASS) {
-        chat_send_task = NULL;
+    s_chat_send_busy = true;
+    if (!s_chat_q) s_chat_q = xQueueCreate(4, sizeof(void *));
+    TaskHandle_t h = NULL;
+    if (xTaskCreate(chat_send_task_func, "chat_send", 1024 * 8,
+                    (void *)(uintptr_t)s_chat_page_gen, 1, &h) != pdPASS) {
+        s_chat_send_busy = false;
         lv_label_set_text(chat_status_lab, "Cannot start task");
     }
 }
 
 void ai_chat_keyboard_poll(void)
 {
-    /* async reply: apply only while the screen is active */
-    if (chat_send_result_ready) {
-        chat_send_result_ready = false;
-        if (!chat_kbd_active) {
-            Serial.println("[AIChat] reply dropped (inactive)");
-            return;
-        }
-        if (chat_send_ok) {
-            Serial.printf("[AIChat] reply len=%u\n", (unsigned)chat_send_reply.length());
-            chat_apply_reply(chat_send_reply);
+    /* Drain async replies (queue, ownership transfers to the UI). */
+    chat_reply_t *cr = NULL;
+    while (s_chat_q && xQueueReceive(s_chat_q, &cr, 0) == pdTRUE) {
+        if (!cr) continue;
+        s_chat_send_busy = false;               /* the only in-flight request is done */
+        if (cr->gen == s_chat_page_gen && chat_kbd_active) {
+            if (cr->ok) {
+                Serial.printf("[AIChat] reply len=%u\n", (unsigned)cr->reply.length());
+                lv_textarea_set_text(chat_ta, "");      /* success: draft consumed */
+                chat_apply_reply(cr->reply);
+            } else {
+                /* failure: the draft stays in the box for retry */
+                lv_label_set_text(chat_status_lab, "AI error - check cfg / WiFi");
+            }
         } else {
-            lv_label_set_text(chat_status_lab, "AI error - check cfg / WiFi");
+            Serial.println("[AIChat] stale reply dropped");
         }
+        delete cr;
     }
 
     if (!chat_kbd_active) return;
@@ -174,7 +202,7 @@ void ai_chat_keyboard_poll(void)
 
     if (c == '\t' || c == '\v') return;         /* Alt+Enter scan combo / volume key: not for chat */
 
-    if (chat_send_task != NULL) return;         /* sending: swallow input */
+    if (s_chat_send_busy) return;               /* sending: swallow input */
 
     if (chat_viewing) {
         if (c == '\n') {
@@ -303,7 +331,11 @@ static void chat_create(lv_obj_t *parent)
     chat_kbd_active = true;
 }
 
-static void chat_entry(void) { ui_disp_full_refr(); }
+static void chat_entry(void)
+{
+    ui_disp_full_refr();
+    s_chat_page_gen++;                          /* invalidate replies of a previous visit */
+}
 static void chat_exit(void)  { ui_disp_full_refr(); }
 static void chat_destroy(void)
 {
@@ -312,6 +344,8 @@ static void chat_destroy(void)
     chat_page = 0;
     chat_line_cnt = 0;
     chat_truncated = false;
+    s_chat_page_gen++;                          /* late replies of this visit are dropped */
+    s_chat_send_busy = false;                   /* the arriving reply will be dropped by gen */
 }
 
 scr_lifecycle_t screen_ai_chat = {
