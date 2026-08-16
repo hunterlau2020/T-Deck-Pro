@@ -12,6 +12,7 @@
   - `e60b2e8` — `pda2: AI Config - billing transparency + save failure reason`
   - `8461f65` — `pda2: ca_bundle_check - fail fast when openssl is missing`
   - `a6388b0` — `docs: review workflow README + nvs atomic save test spec + archive results`
+  - `e1b2d0f` — `pda2: AI Chat - send recent history as multi-turn API context`（用户追加需求）
 - **评审依据**：
   - [主评审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c.md)（部分接受，11 Findings）
   - [Copilot 复审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c-copilot.md)（退回修订，10 Findings）
@@ -78,6 +79,14 @@
 - 新建 `tests/test_nvs_atomic_save.md`：双槽保存的 10 条失败注入规格
 - 上轮两份评审结果归档
 
+### 2.9 AI Chat 多轮上下文（`e1b2d0f`）— 用户追加需求（呼应主 1.2"单轮问答"实证）
+
+此前历史只在本地渲染/持久化，API 请求固定为 `[system, 当前user]`，模型对会话无记忆。现改为：
+
+- `openai_api` 新增 `openai_chat_multi(history, count, prompt, ...)`：messages = system + 历史轮次（时序）+ 当前 prompt；`openai_chat` 保留为单轮包装（Test ping 用）
+- `ui_ai_chat` 发送时把**最近 8KB**（约 2K token）历史快照进任务自有结构：整条轮次不拆、最旧先裁、排除 pending 气泡（其内容就是当前 prompt）；角色按 from_user 映射 user/assistant
+- 快照所有权仍归任务（契约 finding 1.6），串口打印 `[AIChat] send: N context turns` 便于核对
+
 ## 3. 验证状态
 
 | 项目 | 状态 | 证据 |
@@ -103,6 +112,7 @@
 7. 发送成功 → 输入框清空、回复左对齐追加、自动滚底；发送失败 → 草稿保留、气泡标 `(failed)`；重试**不产生重复气泡**
 8. 重启/重进 AI Text → 历史完整恢复（SPIFFS）且重进立即渲染；Hist 按钮清空历史后重启确认已清空
 9. 长回答 >4KB → `(truncated)` 无乱码；中文/emoji 正常
+10. **多轮记忆**：连续两问（第二问引用第一问内容，如 "把上面那句翻译成英文"）→ AI 能正确引用上文；串口可见 `send: 1+ context turns`
 
 **P2 其他**
 10. WiFi Test/Time Sync 进行中离页 → 立即重进 → 可立即发起新请求（不再被 busy 拒绝）
@@ -118,10 +128,10 @@
 ## 6. 回滚方案
 
 ```bash
-git revert a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
+git revert e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
 ```
 
-8 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。
+9 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。
 
 ## 7. 申请审批事项
 
