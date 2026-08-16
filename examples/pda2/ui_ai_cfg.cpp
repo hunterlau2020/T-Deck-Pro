@@ -197,12 +197,18 @@ static void ai_cfg_save(void)
         return;
     }
 
-    if (openai_save_config(ai_base, ai_model, ai_key)) {
+    const char *err = NULL;
+    if (openai_save_config(ai_base, ai_model, ai_key, &err)) {
         lv_label_set_text(ai_status_lab, "Saved");
         Serial.println("[AICfg] saved");
     } else {
+        /* state the reason (main finding 1.9): dual-slot save fails either
+         * while staging the new slot or at the active-slot commit */
+        char buf[96];
+        snprintf(buf, sizeof(buf), "Save failed:\n%s", err ? err : "NVS error");
+        ai_msgbox_show(buf);
         lv_label_set_text(ai_status_lab, "Save failed");
-        Serial.println("[AICfg] save failed (NVS)");
+        Serial.printf("[AICfg] save failed: %s\n", err ? err : "NVS error");
     }
 }
 
@@ -290,7 +296,9 @@ static void ai_test_btn_cb(lv_event_t *e)
 
     s_ai_test_req_gen = rq->req_gen;
     s_ai_test_busy = true;
-    ai_msgbox_show("Testing... 15s");
+    /* billing transparency (main finding 1.3/1.4): the minimal completion
+     * still consumes tokens, and it only proves network+auth */
+    ai_msgbox_show("Testing... 15s\ncosts ~1 token\n(network+auth only)");
     ai_msgbox_countdown_active = true;
     ai_msgbox_t0 = millis();
     ai_msgbox_last_secs = 99;
@@ -329,7 +337,7 @@ void ai_cfg_keyboard_poll(void)
         } else if (secs != ai_msgbox_last_secs) {
             ai_msgbox_last_secs = secs;
             char buf[48];
-            snprintf(buf, sizeof(buf), "Testing... %lus", (unsigned)secs);
+            snprintf(buf, sizeof(buf), "Testing... %lus\ncosts ~1 token", (unsigned)secs);
             ai_msgbox_set_text(buf);
         }
     }
@@ -345,7 +353,7 @@ void ai_cfg_keyboard_poll(void)
             if (tr->ok) {
                 /* the draft model answered: endpoint+key+model all work */
                 char buf[128];
-                snprintf(buf, sizeof(buf), "Test OK:\n%.70s...",
+                snprintf(buf, sizeof(buf), "Test OK:\n%.60s...\n(billed ~1 token)",
                          tr->reply.c_str());
                 ai_msgbox_show(buf);            /* replace content, fresh Close */
                 s_ai_test_passed = true;
