@@ -174,10 +174,16 @@ static void chat_log_save(void)
         Serial.println("[AIChat] log save: tmp open failed");
         return;
     }
+    /* record count first (copilot finding 1.1): the loader must know how
+     * many records to read so it stops BEFORE the trailing checksum */
+    uint32_t count = 0;
+    for (int i = 0; i < chat_hist_cnt; i++) {
+        if (i != chat_pending_idx) count++;
+    }
     uint32_t magic = CHAT_LOG_MAGIC;
     uint32_t sum = 0;
-    int n = 0;
     bool ok = (f.write((const uint8_t *)&magic, 4) == 4);
+    ok = ok && (f.write((uint8_t *)&count, 4) == 4);
     for (int i = 0; i < chat_hist_cnt && ok; i++) {
         if (i == chat_pending_idx) continue;    /* unconfirmed: skip */
         uint8_t fl = chat_history[i].from_user ? 1 : 0;
@@ -190,7 +196,6 @@ static void chat_log_save(void)
         sum += fl;
         sum += len;
         for (uint16_t k = 0; k < len; k++) sum += data[k];
-        n++;
     }
     ok = ok && (f.write((uint8_t *)&sum, 4) == 4);
     f.close();
@@ -199,7 +204,7 @@ static void chat_log_save(void)
         Serial.println("[AIChat] log save failed - previous log kept");
         return;
     }
-    Serial.printf("[AIChat] log saved: %d msgs\n", n);
+    Serial.printf("[AIChat] log saved: %lu msgs\n", (unsigned long)count);
 }
 
 /* Restore the ring from /chat.log on screen create. A log is accepted
@@ -217,21 +222,33 @@ static void chat_log_load(void)
     if (!f) return;
 
     uint32_t magic = 0;
-    if (f.available() < 4 || f.read((uint8_t *)&magic, 4) != 4 || magic != CHAT_LOG_MAGIC) {
+    if (f.available() < 8 || f.read((uint8_t *)&magic, 4) != 4 || magic != CHAT_LOG_MAGIC) {
         f.close();
         Serial.println("[AIChat] log corrupt: bad magic - ignored");
         return;
     }
+    /* record count from the header (copilot finding 1.1): parse EXACTLY
+     * this many records, then the 4-byte checksum - the loop must never
+     * consume the checksum as a record header */
+    uint32_t count = 0;
+    f.read((uint8_t *)&count, 4);
+    if (count > CHAT_HIST_MAX) {
+        f.close();
+        Serial.println("[AIChat] log corrupt: bad record count - ignored");
+        return;
+    }
     char buf[CHAT_MSG_MAX + 1];
     uint32_t sum = 0;
-    int loaded = 0;
-    while (f.available() >= 3 && chat_hist_cnt < CHAT_HIST_MAX) {
+    bool ok = true;
+    for (uint32_t n = 0; n < count && ok; n++) {
+        if (f.available() < 3) { ok = false; break; }
         uint8_t fl = 0;
         uint16_t len = 0;
         f.read(&fl, 1);
         f.read((uint8_t *)&len, 2);
         if (len == 0 || len > CHAT_MSG_MAX || f.available() < len) {
-            break;                  /* corrupt tail */
+            ok = false;                 /* corrupt tail */
+            break;
         }
         f.read((uint8_t *)buf, len);
         buf[len] = '\0';
@@ -239,10 +256,9 @@ static void chat_log_load(void)
         sum += fl;
         sum += len;
         for (uint16_t k = 0; k < len; k++) sum += (uint8_t)buf[k];
-        loaded++;
     }
     uint32_t stored = 0;
-    if (f.available() < 4 || f.read((uint8_t *)&stored, 4) != 4 || stored != sum) {
+    if (!ok || f.available() < 4 || f.read((uint8_t *)&stored, 4) != 4 || stored != sum) {
         f.close();
         for (int i = 0; i < chat_hist_cnt; i++) chat_history[i].text.clear();
         chat_hist_cnt = 0;
@@ -251,8 +267,8 @@ static void chat_log_load(void)
         return;
     }
     f.close();
-    Serial.printf("[AIChat] history restored: %d msgs, %d bytes\n",
-                  loaded, chat_hist_bytes);
+    Serial.printf("[AIChat] history restored: %lu msgs, %d bytes\n",
+                  (unsigned long)count, chat_hist_bytes);
 }
 
 /* ---- retry draft persistence (copilot finding 1.5) ---------------------
@@ -381,8 +397,10 @@ static void chat_history_snapshot(chat_send_req_t *rq)
         if (i == chat_pending_idx) { i--; continue; }
         turn_t t = { -1, -1 };
         if (!chat_history[i].from_user) {
-            /* assistant: requires its user partner right before it */
-            if (i - 1 < 0 || chat_history[i - 1].from_user ||
+            /* assistant: requires its USER partner right before it; a
+             * previous message that is NOT a user makes it orphan
+             * (copilot finding 1.2: the condition was inverted) */
+            if (i - 1 < 0 || !chat_history[i - 1].from_user ||
                 i - 1 == chat_pending_idx) {
                 break;                  /* orphan assistant - stop the window */
             }
@@ -575,6 +593,8 @@ static void chat_clear_btn_cb(lv_event_t *e)
 {
     Serial.println("[AIChat] Clear button clicked");
     lv_textarea_set_text(chat_input_ta, "");
+    chat_draft_clear();                 /* a cleared draft must not resurrect
+                                         * from the persisted file (copilot 1.5) */
 }
 
 /* ---- New-chat confirmation overlay (copilot finding 1.7) ----------------
@@ -787,6 +807,11 @@ static void chat_create(lv_obj_t *parent)
     if (chat_hist_cnt == 0) {
         chat_log_load();
     }
+    if (!chat_spiffs_ok) {
+        /* storage visibility (main review 1.8): tell the user the log
+         * will not survive a reboot instead of failing silently */
+        lv_label_set_text(chat_status_lab, "Storage: RAM-only (log not saved)");
+    }
     String draft = chat_draft_load();
     if (draft.length() > 0) {
         lv_textarea_set_text(chat_input_ta, draft.c_str());
@@ -800,7 +825,19 @@ static void chat_entry(void)
     ui_disp_full_refr();
     s_chat_page_gen++;                          /* invalidate replies of a previous visit */
 }
-static void chat_exit(void)  { ui_disp_full_refr(); }
+static void chat_exit(void)
+{
+    ui_disp_full_refr();
+    /* sync the retry draft with the ACTUAL textarea state (copilot finding
+     * 1.5): edits after a failure, an explicit Clear, or leaving mid-flight
+     * must not let a stale persisted draft resurrect on re-entry */
+    const char *txt = lv_textarea_get_text(chat_input_ta);
+    if (txt && txt[0] != '\0') {
+        chat_draft_save(txt);
+    } else {
+        chat_draft_clear();
+    }
+}
 static void chat_destroy(void)
 {
     chat_kbd_active = false;
