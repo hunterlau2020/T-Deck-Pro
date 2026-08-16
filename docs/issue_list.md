@@ -154,6 +154,13 @@
 - **修复（docs，2026-08-17）**：allinone-design 第三轮修订同步 §1 决策 / §4 AI 两节 / §2.3 CA（实装 5 根 + `ca_bundle_check.py`）/ §5.3 移植清单 / §10；CLAUDE.md 存储布局表更新（NVS `ai` 双槽 + `ai_stats` + `wifi`；SPIFFS `/chat.log` + `/chat.draft`）
 - **经验**：设计稿"AI 形态"类产品语义必须随预研每轮评审回写，否则 allinone 实施时按旧决策移植会退回到单轮
 
+### 5.8 SPIFFS rename 目标已存在时失败（真机回归发现）✅
+
+- **差异**：`SPIFFS.rename()`（→ `spiffs_rename`）**不是 POSIX 语义**——目标文件已存在时返回失败（CONFLICTING_NAME），不会覆盖
+- **后果**：`/chat.log` 原子换入第一次成功、**第二次起全部静默失败**，日志永远停留在第一条 → 重启后历史几乎全丢（2026-08-17 真机回归"重启恢复"失败的直接根因）
+- **修复**：`867435e` — bak 三步换入：`remove(.bak)` → `rename(正式→.bak)` → `rename(tmp→正式)` → `remove(.bak)`；loader 启动时把遗留 `.bak` 提升回主路径（中断恢复）
+- **经验**：SPIFFS/LittleFS 上的"原子替换"必须自带三步舞；凡 rename 都要先确认目标不存在或走备份
+
 ## 6. Shutdown 关机后的开机行为（2026-08-16 观察，⏳ 待继续观察）
 
 - **机制**：菜单 Shutdown = XPowersLib `shutdown()` = `BATFET_DIS`（BQ25896 强制断开电池供电通路，整机断电）；库注释声明"只能通过按 PWR 键或接入电源开机"

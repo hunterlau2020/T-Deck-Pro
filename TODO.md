@@ -11,10 +11,13 @@
 
 ### 阻塞项（合并前置条件）
 
-- [ ] **P0 Sleep 三项真机回归**（评审第 5 次提示，不可逆操作，合并前必须完成）：
-      提示完整显示 → `Sleep in: 2` → `1` → 深睡；倒计时内 Back 取消；BOOT 键唤醒回主菜单。
-- [ ] **P1/P2 真机回归**（申请 §4 其余 12 项）：AI Config Test 计费提示/取消、AI Chat
-      多轮记忆（`send: N context msgs`）/重启恢复/New 确认/重试草稿、WiFi Test 连按与离页重进。
+- [x] **P0 Sleep 三项真机回归**（2026-08-17 用户实测 ✅：倒计时 2→1→深睡、Back 取消、
+      BOOT 唤醒）——合并门禁满足。
+- [ ] **重启恢复复测**（2026-08-17 第一轮 ❌，根因 SPIFFS rename 冲突已修 `867435e`）：
+      聊 2-3 轮 → RESET → 历史恢复（串口 `chat.log present` / `history restored`）→
+      追问上文 AI 能接上。
+- [ ] **P1/P2 真机回归**（申请 §4 剩余项）：多轮记忆 ✅ 已过；AI Config Test 计费提示/
+      取消、New 确认/重试草稿、WiFi Test 连按与离页重进、长回答 `(truncated)`。
 
 ### 预研收尾（评审跟踪项）
 
@@ -28,6 +31,8 @@
       迁移一起做（openai_api.h 已有 TODO）。
 - [ ] **usage 统计展示屏**：读取 NVS `ai_stats` blob（chat/test 两组）做统计界面；
       如需再提供 "Reset test usage" 入口（主评审 1.4）。
+- [ ] **NVS 状态机 C++ 单测化**：把 openai_api 的存取状态机提取为无 Arduino 依赖的
+      单元直接编译测试（现 Python 镜像存在漂移风险，Cop 1.6）。
 - [ ] **音量键 `'\v'` 处理器**：Sym 层音量键目前仅被文本输入屏忽略，无音量 UI（issue_list 1.2）。
 - [ ] **麦克风键功能**：正常层麦克风键未接入录音功能（issue_list 1.3）。
 - [ ] **Shutdown 观察项**（issue_list §6）：① 下次 shutdown 后插 USB 是否直接进系统
