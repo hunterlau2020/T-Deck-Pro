@@ -3701,36 +3701,26 @@ static scr_lifecycle_t screen10 = {
 //************************************[ screen 11 ]****************************************** Sleep
 #if 1
 #include <TouchDrvCSTXXX.hpp>
+static lv_timer_t *sleep_timer = NULL;
+
 static void scr11_btn_event_cb(lv_event_t * e)
 {
     if(e->code == LV_EVENT_CLICKED){
-        scr_mgr_pop(false);
+        scr_mgr_pop(false);                     /* exit11 cancels the pending sleep */
     }
 }
 
-static void create11(lv_obj_t *parent)
+/* Power down peripherals and enter deep sleep (wake: BOOT key, ext1).
+ * Runs from a 3s timer so the "Entering sleep..." message is visible
+ * first; setup() releases the gpio holds after wake. */
+static void sleep_timer_event(lv_timer_t *t)
 {
     // extern TouchDrvCSTXXX touch;
-
     // touch.sleep();
 
     lora_sleep();
 
     SerialGPS.end();
-    
-    // pinMode(BOARD_GPS_PPS, OUTPUT);
-    // pinMode(BOARD_GPS_RXD, OUTPUT);
-    // pinMode(BOARD_GPS_TXD, OUTPUT);
-    // pinMode(BOARD_LORA_RST, OUTPUT);
-    // pinMode(BOARD_TOUCH_RST, OUTPUT);
-    // pinMode(BOARD_LORA_BUSY, OUTPUT);
-
-    // digitalWrite(BOARD_GPS_PPS, LOW);
-    // digitalWrite(BOARD_GPS_RXD, LOW);
-    // digitalWrite(BOARD_GPS_TXD, LOW);
-    // digitalWrite(BOARD_LORA_RST, LOW);
-    // digitalWrite(BOARD_TOUCH_RST, LOW);
-    // digitalWrite(BOARD_LORA_BUSY, LOW);
 
     gpio_reset_pin((gpio_num_t)BOARD_GPS_PPS);
     gpio_reset_pin((gpio_num_t)BOARD_GPS_RXD);
@@ -3742,37 +3732,52 @@ static void create11(lv_obj_t *parent)
     digitalWrite(BOARD_6609_EN, LOW);
     digitalWrite(BOARD_LORA_EN, LOW);
     digitalWrite(BOARD_GPS_EN, LOW);
-    
+
     digitalWrite(BOARD_A7682E_PWRKEY, LOW);
 
-    // gpio_hold_en((gpio_num_t)BOARD_GPS_PPS);
-    // gpio_hold_en((gpio_num_t)BOARD_TOUCH_RST);
-    // gpio_hold_en((gpio_num_t)BOARD_GPS_RXD);
-    // gpio_hold_en((gpio_num_t)BOARD_GPS_TXD);
-    // gpio_hold_en((gpio_num_t)BOARD_LORA_RST);
-    // gpio_hold_en((gpio_num_t)BOARD_LORA_BUSY);
     gpio_hold_en((gpio_num_t)BOARD_6609_EN);
     gpio_hold_en((gpio_num_t)BOARD_LORA_EN);
     gpio_hold_en((gpio_num_t)BOARD_GPS_EN);
     gpio_hold_en((gpio_num_t)BOARD_A7682E_PWRKEY);
     gpio_deep_sleep_hold_en();
 
-    
-    // esp_sleep_enable_ext0_wakeup((gpio_num_t)ENCODER_KEY, 0);                            
+    // esp_sleep_enable_ext0_wakeup((gpio_num_t)ENCODER_KEY, 0);
     esp_sleep_enable_ext1_wakeup((1UL << BOARD_BOOT_PIN), ESP_EXT1_WAKEUP_ANY_LOW);   // Hibernate using user keys
     esp_deep_sleep_start();
-
-    // back 
-    scr_back_btn_create(parent, "Sleep", scr8_btn_event_cb);
 }
-static void entry11(void) 
+
+static void create11(lv_obj_t *parent)
+{
+    lv_obj_t *label = lv_label_create(parent);
+    lv_obj_set_width(label, lv_pct(95));
+    lv_obj_set_style_text_font(label, FONT_BOLD_SIZE_15, LV_PART_MAIN);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(label, "Entering sleep...\n\nWake: press BOOT key.");
+    lv_obj_center(label);
+
+    // back (cancels the pending sleep within the 3s window)
+    scr_back_btn_create(parent, "Sleep", scr11_btn_event_cb);
+
+    lv_timer_create(sleep_timer_event, 3000, NULL);
+}
+static void entry11(void)
 {
     ui_disp_full_refr();
 }
 static void exit11(void) {
     ui_disp_full_refr();
+    if (sleep_timer) {
+        lv_timer_del(sleep_timer);              /* back pressed: cancel sleep */
+        sleep_timer = NULL;
+    }
 }
-static void destroy11(void) { }
+static void destroy11(void)
+{
+    if (sleep_timer) {
+        lv_timer_del(sleep_timer);
+        sleep_timer = NULL;
+    }
+}
 
 static scr_lifecycle_t screen11 = {
     .create = create11,
