@@ -3762,7 +3762,9 @@ static scr_lifecycle_t screen10 = {
 //************************************[ screen 11 ]****************************************** Sleep
 #if 1
 #include <TouchDrvCSTXXX.hpp>
-static lv_timer_t *sleep_timer = NULL;
+static lv_timer_t *sleep_timer = NULL;      /* handle saved so exit11 can cancel */
+static lv_obj_t *sleep_count_lab = NULL;
+static int sleep_countdown = 0;
 
 static void scr11_btn_event_cb(lv_event_t * e)
 {
@@ -3771,10 +3773,11 @@ static void scr11_btn_event_cb(lv_event_t * e)
     }
 }
 
-/* Power down peripherals and enter deep sleep (wake: BOOT key, ext1).
- * Runs from a 3s timer so the "Entering sleep..." message is visible
- * first; setup() releases the gpio holds after wake. */
-static void sleep_timer_event(lv_timer_t *t)
+/* Power down peripherals and enter deep sleep.
+ * Wake source: ext1 on BOARD_BOOT_PIN (BOOT button), any-low. On wake the
+ * chip REBOOTS (statics re-init, keypad_init() flushes the TCA8418), so no
+ * modifier state can stick; setup() releases the gpio holds. */
+static void sleep_do_enter(void)
 {
     // extern TouchDrvCSTXXX touch;
     // touch.sleep();
@@ -3802,28 +3805,50 @@ static void sleep_timer_event(lv_timer_t *t)
     gpio_hold_en((gpio_num_t)BOARD_A7682E_PWRKEY);
     gpio_deep_sleep_hold_en();
 
-    // esp_sleep_enable_ext0_wakeup((gpio_num_t)ENCODER_KEY, 0);
-    esp_sleep_enable_ext1_wakeup((1UL << BOARD_BOOT_PIN), ESP_EXT1_WAKEUP_ANY_LOW);   // Hibernate using user keys
+    esp_sleep_enable_ext1_wakeup((1UL << BOARD_BOOT_PIN), ESP_EXT1_WAKEUP_ANY_LOW);
     esp_deep_sleep_start();
+}
+
+/* 1s ticks: "Sleep in: 2" -> "1" -> enter sleep. The NULL-handle guard
+ * makes a pending tick a no-op after exit11/destroy11 cancelled. */
+static void sleep_timer_event(lv_timer_t *t)
+{
+    if (sleep_timer == NULL) return;            /* cancelled */
+    if (sleep_countdown > 0) {
+        lv_label_set_text_fmt(sleep_count_lab,
+                              "Entering sleep...\n\nWake: press BOOT key.\n\nSleep in: %d",
+                              sleep_countdown);
+        sleep_countdown--;
+    } else {
+        sleep_timer = NULL;                     /* no re-entry */
+        lv_timer_del(t);
+        sleep_do_enter();
+    }
 }
 
 static void create11(lv_obj_t *parent)
 {
-    lv_obj_t *label = lv_label_create(parent);
-    lv_obj_set_width(label, lv_pct(95));
-    lv_obj_set_style_text_font(label, FONT_BOLD_SIZE_15, LV_PART_MAIN);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(label, "Entering sleep...\n\nWake: press BOOT key.");
-    lv_obj_center(label);
+    sleep_count_lab = lv_label_create(parent);
+    lv_obj_set_width(sleep_count_lab, lv_pct(95));
+    lv_obj_set_style_text_font(sleep_count_lab, FONT_BOLD_SIZE_15, LV_PART_MAIN);
+    lv_label_set_long_mode(sleep_count_lab, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(sleep_count_lab, "Entering sleep...\n\nWake: press BOOT key.");
+    lv_obj_center(sleep_count_lab);
 
-    // back (cancels the pending sleep within the 3s window)
+    // back (cancels the pending sleep)
     scr_back_btn_create(parent, "Sleep", scr11_btn_event_cb);
-
-    lv_timer_create(sleep_timer_event, 3000, NULL);
 }
 static void entry11(void)
 {
-    ui_disp_full_refr();
+    ui_disp_full_refr();                        /* the prompt must be visible first */
+    sleep_countdown = 2;                        /* 2 ticks -> sleep after ~3s */
+    if (sleep_timer) {
+        lv_timer_del(sleep_timer);
+    }
+    sleep_timer = lv_timer_create(sleep_timer_event, 1000, NULL);
+    if (sleep_timer) {
+        lv_timer_set_repeat_count(sleep_timer, 4);  /* backstop: never fires forever */
+    }
 }
 static void exit11(void) {
     ui_disp_full_refr();
