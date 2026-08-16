@@ -7,6 +7,8 @@
 #include "http_utils.h"
 #include <Preferences.h>
 #include <cJSON.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 /* ---- dual-slot config storage (copilot finding 1.2) ---------------------
  * Fields live in slot 0/1 ("base.0", "model.0", "key.0" / "...1"); the
@@ -26,18 +28,35 @@ static const char *cfg_key(const char *field, int slot)
 void openai_load_config(char *base, int base_len, char *model, int model_len,
                         char *key, int key_len)
 {
+    /* Fallback chain (copilot finding 1.8 + main review 1.6):
+     * 1. ACTIVE SLOT, if it is initialized. A slot counts as initialized
+     *    as soon as ANY of its three keys exists - an empty-but-saved Base
+     *    must be read back as empty, NOT silently replaced.
+     * 2. Legacy flat keys from pre-dual-slot firmware (any of base/model/
+     *    key present).
+     * 3. Compile-time defaults.
+     * The first save always lands in the INACTIVE slot (active defaults
+     * to 0, so next = 1) and flips "active"; after that the legacy branch
+     * is never taken again. */
     Preferences p;
     p.begin("ai", true);
     int slot = (p.getUChar("active", 0) == 0) ? 0 : 1;
-    String b = p.getString(cfg_key("base",  slot), "");
-    String m = p.getString(cfg_key("model", slot), "");
-    String k = p.getString(cfg_key("key",   slot), "");
-    if (b.length() == 0) {
-        /* never saved (or pre-dual-slot layout): fall back to the legacy
-         * flat keys from older firmware, then to the compile-time defaults */
-        b = p.getString("base",  AI_BASE_DEFAULT);
-        m = p.getString("model", AI_MODEL_DEFAULT);
-        k = p.getString("key",   AI_KEY_DEFAULT);
+    const bool slot_init = p.isKey(cfg_key("base",  slot)) ||
+                           p.isKey(cfg_key("model", slot)) ||
+                           p.isKey(cfg_key("key",   slot));
+    String b, m, k;
+    if (slot_init) {
+        b = p.getString(cfg_key("base",  slot), "");
+        m = p.getString(cfg_key("model", slot), "");
+        k = p.getString(cfg_key("key",   slot), "");
+    } else if (p.isKey("base") || p.isKey("model") || p.isKey("key")) {
+        b = p.getString("base",  "");
+        m = p.getString("model", "");
+        k = p.getString("key",   "");
+    } else {
+        b = AI_BASE_DEFAULT;
+        m = AI_MODEL_DEFAULT;
+        k = AI_KEY_DEFAULT;
     }
     p.end();
     strncpy(base,  b.c_str(), base_len  - 1);
@@ -95,21 +114,34 @@ static cJSON *ai_msg_add(cJSON *msgs, const char *role, const char *content)
 }
 
 /* ---- usage statistics (round 21) ----------------------------------------
- * The response's "usage" block is accumulated into NVS namespace
- * "ai_stats" for a future statistics screen. Fields are provider-specific
- * (user requirement 2): EVERY field is optional and read as 0 when absent,
- * and unknown extra fields are ignored. NVS keys are shortened because
- * NVS names are limited to 15 chars:
- *   prompt_tokens       -> p_tok        (usage.prompt_tokens)
- *   completion_tokens   -> c_tok        (usage.completion_tokens)
- *   total_tokens        -> tot_tok      (usage.total_tokens)
- *   cost                -> cost         (usage.cost, double)
- *   cached_tokens       -> cached       (prompt_tokens_details.cached_tokens)
- *   cache_write_tokens  -> cwrite       (prompt_tokens_details.cache_write_tokens)
- *   audio_tokens        -> audio        (prompt_tokens_details.audio_tokens)
- *   reasoning_tokens    -> reasoning    (completion_tokens_details.reasoning_tokens)
- * The counters are NEVER reset by the chat "New"/clear-history button -
- * they are usage accounting, not conversation data. */
+ * The response's "usage" block is accumulated for a future statistics
+ * screen. Fields are provider-specific (user requirement 2): EVERY field
+ * is optional and read as 0 when absent, unknown extra fields ignored.
+ * Storage: ONE NVS blob "stats" in namespace "ai_stats" - a single
+ * putBytes commit per response instead of eight separate NVS writes
+ * (copilot finding 1.10: write amplification). The RAM copy is guarded
+ * by a mutex because chat-send and config-Test tasks may complete
+ * concurrently (copilot finding 1.9: read-modify-write race).
+ * The counters are NEVER reset by the chat "New" button - they are usage
+ * accounting, not conversation data. */
+#define AI_STATS_MAGIC 0x53544154u  /* "STAT" */
+
+typedef struct {
+    uint32_t magic;
+    uint64_t p_tok;         /* usage.prompt_tokens */
+    uint64_t c_tok;         /* usage.completion_tokens */
+    uint64_t tot_tok;       /* usage.total_tokens */
+    double   cost;          /* usage.cost */
+    uint64_t cached;        /* prompt_tokens_details.cached_tokens */
+    uint64_t cwrite;        /* prompt_tokens_details.cache_write_tokens */
+    uint64_t audio;         /* prompt_tokens_details.audio_tokens */
+    uint64_t reasoning;     /* completion_tokens_details.reasoning_tokens */
+} ai_stats_t;
+
+static SemaphoreHandle_t s_ai_stats_mux = NULL;
+static ai_stats_t s_ai_stats;
+static bool s_ai_stats_loaded = false;
+
 static uint64_t ai_json_u64(cJSON *obj, const char *key)
 {
     cJSON *it = cJSON_GetObjectItem(obj, key);
@@ -122,6 +154,23 @@ static double ai_json_dbl(cJSON *obj, const char *key)
     return (it && cJSON_IsNumber(it)) ? it->valuedouble : 0.0;
 }
 
+/* Call with the mutex held. */
+static void ai_stats_load_locked(void)
+{
+    if (s_ai_stats_loaded) return;
+    memset(&s_ai_stats, 0, sizeof(s_ai_stats));
+    Preferences p;
+    if (p.begin("ai_stats", false)) {
+        size_t n = p.getBytes("stats", &s_ai_stats, sizeof(s_ai_stats));
+        p.end();
+        if (n != sizeof(s_ai_stats) || s_ai_stats.magic != AI_STATS_MAGIC) {
+            memset(&s_ai_stats, 0, sizeof(s_ai_stats));
+        }
+    }
+    s_ai_stats.magic = AI_STATS_MAGIC;
+    s_ai_stats_loaded = true;
+}
+
 static void ai_usage_accumulate(cJSON *root)
 {
     cJSON *usage = cJSON_GetObjectItem(root, "usage");
@@ -130,34 +179,46 @@ static void ai_usage_accumulate(cJSON *root)
     cJSON *pd = cJSON_GetObjectItem(usage, "prompt_tokens_details");
     cJSON *cd = cJSON_GetObjectItem(usage, "completion_tokens_details");
 
-    uint64_t p_tok  = ai_json_u64(usage, "prompt_tokens");
-    uint64_t c_tok  = ai_json_u64(usage, "completion_tokens");
-    uint64_t tot    = ai_json_u64(usage, "total_tokens");
-    double   cost   = ai_json_dbl(usage, "cost");
-    uint64_t cached = pd ? ai_json_u64(pd, "cached_tokens") : 0;
-    uint64_t cwrite = pd ? ai_json_u64(pd, "cache_write_tokens") : 0;
-    uint64_t audio  = pd ? ai_json_u64(pd, "audio_tokens") : 0;
-    uint64_t reason = cd ? ai_json_u64(cd, "reasoning_tokens") : 0;
+    const uint64_t p_tok  = ai_json_u64(usage, "prompt_tokens");
+    const uint64_t c_tok  = ai_json_u64(usage, "completion_tokens");
+    const uint64_t tot    = ai_json_u64(usage, "total_tokens");
+    const double   cost   = ai_json_dbl(usage, "cost");
+    const uint64_t cached = pd ? ai_json_u64(pd, "cached_tokens") : 0;
+    const uint64_t cwrite = pd ? ai_json_u64(pd, "cache_write_tokens") : 0;
+    const uint64_t audio  = pd ? ai_json_u64(pd, "audio_tokens") : 0;
+    const uint64_t reason = cd ? ai_json_u64(cd, "reasoning_tokens") : 0;
 
+    if (!s_ai_stats_mux) s_ai_stats_mux = xSemaphoreCreateMutex();
+    if (!s_ai_stats_mux) return;
+    if (xSemaphoreTake(s_ai_stats_mux, portMAX_DELAY) != pdTRUE) return;
+
+    ai_stats_load_locked();
+    s_ai_stats.p_tok     += p_tok;
+    s_ai_stats.c_tok     += c_tok;
+    s_ai_stats.tot_tok   += tot;
+    s_ai_stats.cost      += cost;
+    s_ai_stats.cached    += cached;
+    s_ai_stats.cwrite    += cwrite;
+    s_ai_stats.audio     += audio;
+    s_ai_stats.reasoning += reason;
+
+    /* ONE blob commit per response; a failed begin/write is logged and
+     * the RAM totals stay correct for the next flush */
+    bool saved = false;
     Preferences p;
-    p.begin("ai_stats", false);
-    p.putULong64("p_tok",     p.getULong64("p_tok", 0)     + p_tok);
-    p.putULong64("c_tok",     p.getULong64("c_tok", 0)     + c_tok);
-    p.putULong64("tot_tok",   p.getULong64("tot_tok", 0)   + tot);
-    p.putDouble("cost",       p.getDouble("cost", 0.0)     + cost);
-    p.putULong64("cached",    p.getULong64("cached", 0)    + cached);
-    p.putULong64("cwrite",    p.getULong64("cwrite", 0)    + cwrite);
-    p.putULong64("audio",     p.getULong64("audio", 0)     + audio);
-    p.putULong64("reasoning", p.getULong64("reasoning", 0) + reason);
-    /* read the totals BEFORE end(): the handle is dead afterwards */
-    uint64_t tot_p = p.getULong64("p_tok", 0);
-    uint64_t tot_c = p.getULong64("c_tok", 0);
-    double tot_cost = p.getDouble("cost", 0.0);
-    p.end();
+    if (p.begin("ai_stats", false)) {
+        saved = p.putBytes("stats", &s_ai_stats, sizeof(s_ai_stats)) == sizeof(s_ai_stats);
+        p.end();
+    }
+    if (!saved) {
+        Serial.println("[AI] stats persist failed - totals stay in RAM");
+    }
 
-    Serial.printf("[AI] usage +%llu/%llu tok, cost +%.8f | totals %llu/%llu, %.6f\n",
+    Serial.printf("[AI] usage +%llu/%llu tok, cost +%.8f | totals %llu/%llu, %.6f%s\n",
                   (unsigned long long)p_tok, (unsigned long long)c_tok, cost,
-                  (unsigned long long)tot_p, (unsigned long long)tot_c, tot_cost);
+                  (unsigned long long)s_ai_stats.p_tok, (unsigned long long)s_ai_stats.c_tok,
+                  s_ai_stats.cost, saved ? "" : " (unsaved)");
+    xSemaphoreGive(s_ai_stats_mux);
 }
 
 bool openai_chat_multi(const ai_message_t *history, int history_count,
