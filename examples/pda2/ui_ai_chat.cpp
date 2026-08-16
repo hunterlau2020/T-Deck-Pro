@@ -4,7 +4,8 @@
  *              - top 2/3: read-only, scrollable conversation history
  *                (AI replies left-aligned, user messages right-aligned)
  *              - bottom 1/3: multi-line input box for the current draft
- *              - small Send / Clear / Hist buttons on the side of the input
+ *              - small Send / Clear / New buttons on the side of the input
+ *                (New = start a fresh conversation, clears history + log)
  *
  * Sending is asynchronous (FreeRTOS task + result queue with page
  * generation). The draft stays in the input box until a reply arrives;
@@ -516,7 +517,7 @@ static void chat_create(lv_obj_t *parent)
     lv_textarea_set_placeholder_text(chat_input_ta, "Type here...");
     lv_obj_set_style_text_font(chat_input_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
-    /* small Send / Clear / Hist buttons stacked on the side (3 x 26 px) */
+    /* small Send / Clear / New buttons stacked on the side (3 x 26 px) */
     lv_obj_t *btn_col = lv_obj_create(input_row);
     lv_obj_set_width(btn_col, 44);
     lv_obj_set_height(btn_col, 86);
@@ -542,13 +543,15 @@ static void chat_create(lv_obj_t *parent)
     lv_obj_center(clear_lab);
     lv_obj_add_event_cb(clear_btn, chat_clear_btn_cb, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *hist_btn = lv_btn_create(btn_col);
-    lv_obj_set_width(hist_btn, 44);
-    lv_obj_set_height(hist_btn, 26);
-    lv_obj_t *hist_lab = lv_label_create(hist_btn);
-    lv_label_set_text(hist_lab, "Hist");
-    lv_obj_center(hist_lab);
-    lv_obj_add_event_cb(hist_btn, chat_hist_btn_cb, LV_EVENT_CLICKED, NULL);
+    /* "New" starts a fresh conversation (user request): clears the visible
+     * history AND the persisted log; usage counters in ai_stats survive */
+    lv_obj_t *new_btn = lv_btn_create(btn_col);
+    lv_obj_set_width(new_btn, 44);
+    lv_obj_set_height(new_btn, 26);
+    lv_obj_t *new_lab = lv_label_create(new_btn);
+    lv_label_set_text(new_lab, "New");
+    lv_obj_center(new_lab);
+    lv_obj_add_event_cb(new_btn, chat_hist_btn_cb, LV_EVENT_CLICKED, NULL);
 
     chat_kbd_active = true;
 
