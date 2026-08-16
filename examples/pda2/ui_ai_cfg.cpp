@@ -5,17 +5,20 @@
  *            buttons at the bottom.
  *
  * Review findings incorporated:
- *   - Test targets the DRAFT config: the models endpoint is derived from
- *     the user's base URL (…/chat/completions -> …/models?limit=2) with the
- *     draft key, and shows data[0].id (finding 1.6)
+ *   - Test sends a minimal chat-completion against the DRAFT base/model/key
+ *     (finding 1.7): the draft model is actually exercised, not just listed
+ *     by /models; a reply proves the endpoint+key+model triplet works
  *   - Save validates all fields and requires a successful Test since the
- *     last edit (finding 1.7); NVS write failure never replaces old config
- *   - the 10s msgbox countdown IS the request deadline (HTTP timeout 10s);
- *     Close = Cancel: bumps the request generation so a late result is
- *     dropped (finding 1.8)
+ *     last edit (finding 1.7); NVS write never leaves a mixed config
+ *   - the msgbox countdown is the ABSOLUTE deadline: HTTP timeout 10s +
+ *     5s worst-case NTP = 15s; on deadline the request generation is
+ *     bumped so a late result is dropped (finding 1.9)
+ *   - Close = Cancel: bumps the request generation (finding 1.8)
  *   - async results travel over a FreeRTOS queue as heap-allocated structs
- *     carrying the request generation; the UI owns the busy state
- *     (findings 1.4/1.5)
+ *     carrying the request generation; the task works on its own snapshot
+ *     of the draft config (findings 1.4/1.5, contract: async_ipc_contract.md)
+ *   - Save UX (finding 1.4): the status line states why Save is blocked
+ *     (never tested / test stale after an edit)
  *
  * Keypad map:
  *   \n : commit the active field -> next field; on the last field -> save
@@ -28,13 +31,14 @@
 #include "openai_api.h"
 #include "ui_scr_mrg.h"
 #include "http_utils.h"
-#include <cJSON.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
 
 #define AI_CFG_FIELD_NUM 3
-#define AI_TEST_TIMEOUT_MS 10000      /* == the msgbox countdown: the deadline is real */
+#define AI_TEST_HTTP_MS 10000     /* connect + response read */
+#define AI_TEST_NTP_MS  5000      /* worst-case NTP wait inside http_* */
+#define AI_TEST_DEADLINE_MS (AI_TEST_HTTP_MS + AI_TEST_NTP_MS)
 
 static lv_obj_t *ai_base_lab = NULL;
 static lv_obj_t *ai_base_ta = NULL;      /* multi-line: long URLs stay editable */
@@ -49,13 +53,22 @@ static char ai_base[160] = {0};
 static char ai_model[80] = {0};
 static char ai_key[80] = {0};
 
+/* The task works on its OWN snapshot of the draft (finding 1.6 pattern):
+ * UI edits while the request is in flight can never corrupt it. */
 typedef struct {
     uint32_t req_gen;                   /* invalidated by Close / a new Test */
-    http_response_t resp;
+    char base[160];
+    char model[80];
+    char key[80];
+} ai_test_req_t;
+
+typedef struct {
+    uint32_t req_gen;
+    bool ok;                            /* chat-completion succeeded */
+    string reply;                       /* assistant reply (test proof) */
 } ai_test_result_t;
 
 static QueueHandle_t s_ai_test_q = NULL;
-static volatile uint32_t s_ai_cfg_page_gen = 0;    /* bumped on every page entry */
 static volatile uint32_t s_ai_test_req_gen = 0;    /* bumped to cancel a pending test */
 static volatile bool s_ai_test_busy = false;       /* UI-owned */
 static bool s_ai_test_passed = false;              /* required by Save; cleared on edit */
@@ -203,34 +216,30 @@ static void ai_ta_focus_cb(lv_event_t *e)
     }
 }
 
-/* Derive the models endpoint from the DRAFT base URL:
- * https://host/api/v1/chat/completions -> https://host/api/v1/models?limit=2 */
-static void ai_build_models_url(char *out, int outlen)
+/* Save gate UX (finding 1.4): tell the user WHY Save is blocked. */
+static void ai_cfg_status_hint(void)
 {
-    strncpy(out, ai_base, outlen - 1);
-    out[outlen - 1] = '\0';
-    char *p = strstr(out, "chat/completions");
-    if (p) {
-        strcpy(p, "models");
+    if (s_ai_test_passed) {
+        lv_label_set_text(ai_status_lab, "Test OK - ready to Save");
+    } else if (s_ai_test_busy) {
+        lv_label_set_text(ai_status_lab, "Testing...");
     } else {
-        int len = strlen(out);
-        while (len > 0 && out[len - 1] == '/') out[--len] = '\0';
-        strncat(out, "/models", outlen - strlen(out) - 1);
+        lv_label_set_text(ai_status_lab, "Run Test to enable Save");
     }
-    strncat(out, "?limit=2", outlen - strlen(out) - 1);
 }
 
 static void ai_test_task_func(void *param)
 {
-    uint32_t req_gen = (uint32_t)(uintptr_t)param;
+    ai_test_req_t *rq = (ai_test_req_t *)param;     /* task-owned snapshot */
     ai_test_result_t *res = new ai_test_result_t;
-    res->req_gen = req_gen;
-    char url[192];
-    ai_build_models_url(url, sizeof(url));
-    char auth[128];
-    snprintf(auth, sizeof(auth), "Bearer %s", ai_key);
-    /* HTTP timeout == the 10s msgbox countdown: the deadline is real */
-    res->resp = http_get_auth(url, auth, AI_TEST_TIMEOUT_MS);
+    res->req_gen = rq->req_gen;
+    /* Minimal chat-completion (finding 1.7): proves the draft endpoint,
+     * model AND key actually work - a /models listing cannot. The HTTP
+     * timeout covers connect+read; the NTP wait is inside http_* and is
+     * bounded by AI_TEST_NTP_MS, so the whole task fits the UI deadline. */
+    res->ok = openai_chat("ping", rq->base, rq->model, rq->key,
+                          res->reply, AI_TEST_HTTP_MS);
+    delete rq;
     if (s_ai_test_q) {
         xQueueSend(s_ai_test_q, &res, portMAX_DELAY);
     } else {
@@ -265,20 +274,35 @@ static void ai_test_btn_cb(lv_event_t *e)
         ai_msgbox_show("Test already running");
         return;
     }
+    /* finding 1.5: create and CHECK the queue before going busy */
     if (!s_ai_test_q) s_ai_test_q = xQueueCreate(4, sizeof(void *));
+    if (!s_ai_test_q) {
+        ai_msgbox_show("Out of memory - retry");
+        return;
+    }
 
-    s_ai_test_req_gen++;
+    /* snapshot the draft so the task is immune to edits while in flight */
+    ai_test_req_t *rq = new ai_test_req_t;
+    rq->req_gen = s_ai_test_req_gen + 1;
+    strncpy(rq->base,  ai_base,  sizeof(rq->base)  - 1); rq->base[sizeof(rq->base)  - 1]  = '\0';
+    strncpy(rq->model, ai_model, sizeof(rq->model) - 1); rq->model[sizeof(rq->model) - 1] = '\0';
+    strncpy(rq->key,   ai_key,   sizeof(rq->key)   - 1); rq->key[sizeof(rq->key)    - 1]  = '\0';
+
+    s_ai_test_req_gen = rq->req_gen;
     s_ai_test_busy = true;
-    ai_msgbox_show("Testing... 10s");
+    ai_msgbox_show("Testing... 15s");
     ai_msgbox_countdown_active = true;
     ai_msgbox_t0 = millis();
     ai_msgbox_last_secs = 99;
+    ai_cfg_status_hint();
     TaskHandle_t h = NULL;
     if (xTaskCreate(ai_test_task_func, "ai_test", 1024 * 8,
-                    (void *)(uintptr_t)s_ai_test_req_gen, 1, &h) != pdPASS) {
+                    rq, 1, &h) != pdPASS) {
+        delete rq;
         s_ai_test_busy = false;
         ai_msgbox_countdown_active = false;
         ai_msgbox_set_text("Cannot start task");
+        ai_cfg_status_hint();
     }
 }
 
@@ -291,14 +315,17 @@ static void ai_save_btn_cb(lv_event_t *e)
 void ai_cfg_keyboard_poll(void)
 {
     /* msgbox countdown: tick only on second changes (EPD-friendly).
-     * The countdown IS the request deadline (HTTP timeout 10s). */
+     * The countdown IS the absolute deadline: AI_TEST_HTTP_MS for the
+     * request + AI_TEST_NTP_MS worst-case NTP wait inside http_*. */
     if (ai_msgbox != NULL && ai_msgbox_countdown_active) {
         uint32_t elapsed = millis() - ai_msgbox_t0;
-        uint32_t secs = (AI_TEST_TIMEOUT_MS - elapsed + 999) / 1000;
-        if (elapsed >= AI_TEST_TIMEOUT_MS) {
+        uint32_t secs = (AI_TEST_DEADLINE_MS - elapsed + 999) / 1000;
+        if (elapsed >= AI_TEST_DEADLINE_MS) {
             ai_msgbox_countdown_active = false;
             s_ai_test_busy = false;
+            s_ai_test_req_gen++;                /* finding 1.9: a late result is dropped */
             ai_msgbox_set_text("Request timeout\n(check network)");
+            ai_cfg_status_hint();
         } else if (secs != ai_msgbox_last_secs) {
             ai_msgbox_last_secs = secs;
             char buf[48];
@@ -308,42 +335,28 @@ void ai_cfg_keyboard_poll(void)
     }
 
     /* async test result: apply only when the page is active and the
-     * request generation is still current (Close = cancel). */
+     * request generation is still current (Close/timeout = cancel). */
     ai_test_result_t *tr = NULL;
     while (s_ai_test_q && xQueueReceive(s_ai_test_q, &tr, 0) == pdTRUE) {
         if (!tr) continue;
         if (tr->req_gen == s_ai_test_req_gen && ai_cfg_kbd_active) {
             ai_msgbox_countdown_active = false;
             s_ai_test_busy = false;
-            http_response_t resp = tr->resp;
-            if (resp.success && resp.status_code == 200) {
-                cJSON *root = cJSON_Parse(resp.body.c_str());
-                cJSON *data = root ? cJSON_GetObjectItem(root, "data") : NULL;
-                cJSON *first = (data && cJSON_IsArray(data))
-                                   ? cJSON_GetArrayItem(data, 0) : NULL;
-                cJSON *id = first ? cJSON_GetObjectItem(first, "id") : NULL;
-                if (id && cJSON_IsString(id) && id->valuestring) {
-                    char buf[96];
-                    snprintf(buf, sizeof(buf), "Test OK:\n%s", id->valuestring);
-                    ai_msgbox_show(buf);        /* replace content, fresh Close */
-                    lv_label_set_text_fmt(ai_status_lab, "Test OK: %s", id->valuestring);
-                    s_ai_test_passed = true;
-                    Serial.printf("[AICfg] test models[0].id = %s\n", id->valuestring);
-                } else {
-                    ai_msgbox_show("Test fail: bad JSON");
-                    lv_label_set_text(ai_status_lab, "Test fail: bad JSON");
-                    Serial.printf("[AICfg] test bad json: %s\n", resp.body.c_str());
-                }
-                if (root) cJSON_Delete(root);
-            } else {
+            if (tr->ok) {
+                /* the draft model answered: endpoint+key+model all work */
                 char buf[128];
-                snprintf(buf, sizeof(buf), "Test fail: HTTP %d\n%s",
-                         resp.status_code, resp.error.c_str());
-                ai_msgbox_show(buf);
-                lv_label_set_text_fmt(ai_status_lab, "Test fail: HTTP %d", resp.status_code);
-                Serial.printf("[AICfg] test failed code=%d err=%s\n",
-                              resp.status_code, resp.error.c_str());
+                snprintf(buf, sizeof(buf), "Test OK:\n%.70s...",
+                         tr->reply.c_str());
+                ai_msgbox_show(buf);            /* replace content, fresh Close */
+                s_ai_test_passed = true;
+                Serial.printf("[AICfg] test OK, reply len=%u\n",
+                              (unsigned)tr->reply.length());
+            } else {
+                ai_msgbox_show("Test fail:\nHTTP/API error\n(check config)");
+                Serial.printf("[AICfg] test failed, reply len=%u\n",
+                              (unsigned)tr->reply.length());
             }
+            ai_cfg_status_hint();
         } else {
             Serial.println("[AICfg] stale test result dropped");
         }
@@ -379,6 +392,7 @@ void ai_cfg_keyboard_poll(void)
         if (txt && txt[0] != '\0') {
             lv_textarea_del_char(ta);
             s_ai_test_passed = false;           /* edited: Test is stale */
+            ai_cfg_status_hint();               /* finding 1.4: show the reason */
         } else if (ai_cfg_field > 0) {
             ai_cfg_set_field(ai_cfg_field - 1);
         } else {
@@ -388,6 +402,7 @@ void ai_cfg_keyboard_poll(void)
     } else {
         lv_textarea_add_char(ta, c);
         s_ai_test_passed = false;               /* edited: Test is stale */
+        ai_cfg_status_hint();                   /* finding 1.4: show the reason */
     }
 }
 
@@ -497,6 +512,7 @@ static void ai_cfg_create(lv_obj_t *parent)
     ai_cfg_field = 0;
     s_ai_test_passed = false;
     ai_cfg_refresh_labels();
+    ai_cfg_status_hint();                       /* "Run Test to enable Save" */
     ai_cfg_kbd_active = true;
 }
 
@@ -506,7 +522,6 @@ static void ai_cfg_destroy(void)
 {
     ai_cfg_kbd_active = false;
     ai_msgbox_close_cb(NULL);                   /* no msgbox on other screens */
-    s_ai_cfg_page_gen++;                        /* invalidate in-flight requests */
     if (s_ai_test_busy) {
         s_ai_test_req_gen++;                    /* leaving: late results are dropped */
         s_ai_test_busy = false;
