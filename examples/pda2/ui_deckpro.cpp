@@ -3910,12 +3910,11 @@ static void create11(lv_obj_t *parent)
  * frame's OWN flush sequence reached the panel, then start the countdown.
  * entry() runs BEFORE lv_scr_load() in scr_mgr_push, so a synchronous
  * wait there would watch the previous screen's frame AND re-enter LVGL
- * from a lifecycle callback (copilot finding 1.2). 60 ticks = 3 s
- * backstop in case the flush path stalls. */
+ * from a lifecycle callback (copilot finding 1.2). */
 static void sleep_watch_timer_event(lv_timer_t *t)
 {
     if (sleep_watch_timer == NULL) return;      /* cancelled */
-    if (ui_disp_flush_done_seq() >= sleep_wait_seq || ++sleep_watch_ticks >= 60) {
+    if (ui_disp_flush_done_seq() >= sleep_wait_seq) {
         sleep_watch_timer = NULL;
         lv_timer_del(t);
         sleep_countdown = 2;                    /* 2 ticks -> sleep after ~3 s */
@@ -3923,6 +3922,15 @@ static void sleep_watch_timer_event(lv_timer_t *t)
         if (sleep_timer) {
             lv_timer_set_repeat_count(sleep_timer, 4);  /* backstop: never fires forever */
         }
+    } else if (++sleep_watch_ticks >= 60) {
+        /* 3 s without the frame reaching the panel: CANCEL the sleep
+         * (copilot finding 1.4) - never deep-sleep blind on an invisible
+         * prompt. */
+        sleep_watch_timer = NULL;
+        lv_timer_del(t);
+        lv_label_set_text(sleep_count_lab,
+                          "Display sync failed\nsleep cancelled\n\nPress back");
+        Serial.println("[Sleep] frame-wait timeout - sleep cancelled");
     }
 }
 
