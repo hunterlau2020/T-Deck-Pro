@@ -16,6 +16,11 @@
   - `06f9235` — `pda2: accumulate response usage into NVS ai_stats`（用户追加需求）
   - `23063b0` — `pda2: AI Chat - rename Hist button to New`（用户追加需求）
   - `5dd8e32` — `pda2: API key dev exception - compile-time warning (C1) + SECURITY.md (C2)`
+  - `9a89cdd` — `pda2: sleep countdown waits for ITS OWN frame via flush sequences`
+  - `ba31181` — `pda2: wifi scan - reads of shared state also go through the critical section`
+  - `35e9eae` — `pda2: AI Chat - atomic log + turn pairing + New confirmation`
+  - `74c24ff` — `pda2: AI usage stats - mutex-guarded single-blob accounting`
+  - `538e6d0` — `tests: align nvs atomic save spec with the dual-slot implementation`
 - **评审依据**：
   - [主评审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c.md)（部分接受，11 Findings）
   - [Copilot 复审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c-copilot.md)（退回修订，10 Findings）
@@ -121,6 +126,21 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 - **C1**：`openai_api.h` 在 `AI_KEY_DEFAULT_COMPILED` 定义时每次编译发出 `#warning "Dev-only API Key in source - rotate before pushing to a public remote"`；`[env:pda2]` build_flags 加 `-DAI_KEY_DEFAULT_COMPILED`。已实测警告触发
 - **C2**：仓库根 `SECURITY.md`：例外说明、推公网前必做 4 步（删 Key 字符串、去掉编译宏、OpenRouter 轮换、filter-repo）、当前控制状态
 
+### 2.13 第二轮整改（`9a89cdd..538e6d0`）— 对应 Copilot 复审 844a907..23063b0 全部非 Key Findings
+
+| 评审项 | 处理（commit） |
+|---|---|
+| **Cop 1.2 High** Sleep 等待在 entry() | `9a89cdd`：改**帧序号**机制——`disp_full_refr()` 递增请求序号，FULL 刷完成时复制到完成序号；entry11 只记录本次序号并起 50ms watcher timer（LVGL 正常 tick 上下文），Sleep 帧真正上屏后才启动倒计时（3s 兜底）。删除阻塞式 `disp_full_refr_wait()`，不再重入 LVGL、不再等待旧屏帧 |
+| **Cop 1.3 High** 扫描临界区外读 | `ba31181`：新增 `scan_release_is_pending()` 在临界区内读；start/abort 的所有 if/while/终判全部走 helper，注释明示"读也要进临界区" |
+| **Cop 1.4 High** chat.log 原地整写+自动格式化 | `35e9eae`：临时文件 + 每笔 write 检查 + 字节和校验 + rename 原子换入；load 校验 magic+校验和，撕坏的日志整体丢弃；`SPIFFS.begin(false)` 永不自动格式化，挂载失败降级 RAM-only |
+| Cop 1.5 failed/pending 持久化 | `35e9eae`：pending 气泡**不进日志**；失败时草稿存 `/chat.draft`，重进恢复、成功/New 清除；上下文**剔除 UI 标记**（pending 跳过、`(truncated)` 截去、`(failed)` 永不选中） |
+| Cop 1.6 轮次配对 | `35e9eae`：快照按**整轮**（user+assistant 成对）选择，孤立 assistant 停止窗口，孤立 confirmed user 尾部允许；串口改报 `context msgs` |
+| Cop 1.7 New 确认 | `35e9eae`：New 先弹确认框（Cancel/OK），键盘可关（Enter=OK、任意其他键=Cancel）；Alt+Enter 键盘路径打开；申请与代码一致用 New |
+| Cop 1.8 规格矛盾 | `538e6d0`：修正首次保存（写 slot 1）与空 Base（isKey 判定槽已初始化则原样读回）两用例 |
+| Cop 1.9 统计并发 | `74c24ff`：8 项指标入单一 RAM 结构 + FreeRTOS mutex 串行累加 |
+| Cop 1.10 NVS 写放大 | `74c24ff`：每次响应**一次** putBytes blob 提交（magic 校验），持久化失败记日志且 RAM 总数不丢；顺带 load 回退改 isKey 槽初始化判定（同 Cop 1.8） |
+| Cop 1.11 申请未登记 | 本申请 §2.10-2.12 已登记 `06f9235`/`23063b0`/`5dd8e32`（`331c6f9` 完成，本扩展继续登记本轮 5 commit） |
+
 ## 3. 验证状态
 
 | 项目 | 状态 | 证据 |
@@ -148,7 +168,10 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 9. 长回答 >4KB → `(truncated)` 无乱码；中文/emoji 正常
 10. **多轮记忆**：连续两问（第二问引用第一问内容，如 "把上面那句翻译成英文"）→ AI 能正确引用上文；串口可见 `send: 1+ context turns`
 11. **usage 统计**：一次对话后串口出现 `[AI] usage +232/215 tok, cost +...`；重启后再对话，totals 在上次基础上累加
-12. **New 按钮**：点 New → 历史清空、状态行 `History cleared`；重启后仍为空；usage 计数不受影响
+12. **New 按钮**：点 New → **先弹确认框**；OK → 历史清空、状态行 `History cleared`；Cancel/任意键 → 无变化；重启后仍为空；usage 计数不受影响
+13. **Sleep 帧等待**：点 Sleep → 提示画面完整显示后倒计时才从 2 开始（旧固件会吃掉 1-2s 全刷时间）；倒计时内 Back 取消
+14. **重试草稿**：发送失败后重启 → 进 AI Text → 输入框恢复草稿、状态行 `Retry draft restored`；重试成功后草稿清除
+15. **轮次配对**：多轮对话后串口 `send: N context msgs` 恒为偶数（除尾部未回复的 user），上下文首条必为 user
 
 **P2 其他**
 10. WiFi Test/Time Sync 进行中离页 → 立即重进 → 可立即发起新请求（不再被 busy 拒绝）
@@ -158,16 +181,16 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 ## 5. 遗留项（明示）
 
 - **Key**：按用户 `api-key-dev-exception` 决策延后保留（非 blocking）；补偿控制 **C1/C2 已于 `5dd8e32` 落地**，C3（用户侧 free-tier 轮换）用户已承诺。推公网/重大 release 前重新升级为 Critical
-- **Copilot 复审 844a907..23063b0 的 11 项 Findings**：列入下轮整改（含 2 High：Sleep 同步等待发生在 `entry()`——`scr_mgr_push` 先 entry 后 `lv_scr_load`，等待的是旧帧且重入 LVGL；扫描共享状态在临界区外读取）。下轮申请逐条映射
 - **真机回归 §4**：已连续多轮 ⏸，P0 Sleep 三项必须在合并前完成；结果回填本申请
+- **主评审 844a907..e1b2d0f 的跟踪项**：SPIFFS 写放大（append+compact 或后台线程）、CJK 8KB 预算静默裁剪（状态行显示裁剪信息）——本扩展已通过"整轮不拆+校验和+临时文件"降低风险，但按整文件重写方案未改为 append-only，下轮评审继续跟踪
 
 ## 6. 回滚方案
 
 ```bash
-git revert 5dd8e32 23063b0 06f9235 e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
+git revert 538e6d0 74c24ff 35e9eae ba31181 9a89cdd 5dd8e32 23063b0 06f9235 e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
 ```
 
-12 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。
+17 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。
 
 ## 7. 申请审批事项
 
