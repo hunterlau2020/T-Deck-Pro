@@ -10,11 +10,20 @@ Usage: python ca_bundle_check.py
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 
 NL = chr(10)   # avoids backslash-escaping pitfalls across shells
+
+# Fail fast with an actionable message instead of a bare traceback
+# (copilot finding 1.10): the check needs openssl on PATH, e.g.
+#   Windows: install Git for Windows / OpenSSL, or `winget install OpenSSL.Light`
+if shutil.which("openssl") is None:
+    print("FAIL: openssl not found on PATH - install it (e.g. Git for Windows\n"
+          "      or winget install OpenSSL.Light) and re-run this check.")
+    sys.exit(1)
 
 SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "http_utils.cpp")
 
