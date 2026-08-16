@@ -9,6 +9,33 @@
 
 using namespace std;
 
+/** One message of a chat transcript (multi-turn context). */
+typedef struct {
+    const char *role;       /* "user" or "assistant" */
+    const char *content;    /* message text; must stay valid for the call */
+} ai_message_t;
+
+/**
+ * @brief Multi-turn chat completion: messages = [system] + history +
+ *        current prompt. openai_chat() is the single-turn wrapper
+ *        (history_count = 0).
+ * @param history       Prior turns in CHRONOLOGICAL order (oldest first).
+ * @param history_count Number of entries in history (0 = single turn).
+ * @param prompt        Current user message text.
+ * @param base_url Full endpoint URL, e.g. "https://openrouter.ai/api/v1/chat/completions".
+ * @param model   Model id (e.g. "deepseek/deepseek-chat", "openai/gpt-4o").
+ * @param api_key API key (sent as "Authorization: Bearer <api_key>").
+ * @param out     Filled with assistant reply on success.
+ * @param timeout_ms HTTP timeout; covers connect + response read only.
+ *        NOTE: TLS cert validation may first wait up to 5 s for NTP, so the
+ *        caller's absolute deadline must be timeout_ms + 5000.
+ * @return true on HTTP 200 + valid reply.
+ */
+bool openai_chat_multi(const ai_message_t *history, int history_count,
+                       const char *prompt, const char *base_url,
+                       const char *model, const char *api_key, string &out,
+                       uint32_t timeout_ms = 30000);
+
 /**
  * @brief Send one user turn to an OpenAI-compatible chat/completions endpoint.
  * @param prompt  User message text.

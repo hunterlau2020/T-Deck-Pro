@@ -25,6 +25,10 @@
  *   - the send task works on its own snapshot (finding 1.6); the prompt is
  *     copied as a full std::string, never cut at 255 bytes (copilot 1.8)
  *   - only a result matching the CURRENT page generation may clear busy
+ *   - multi-turn context (round 21): the API request's messages array
+ *     carries system + the most recent turns up to CHAT_CTX_BUDGET bytes
+ *     (whole turns, oldest cut first, pending bubble excluded) + the
+ *     current prompt, so the assistant actually remembers the session
  *
  * Layout pixel budget (240x320 EPD, 14 px font, review finding 1.6):
  *   back bar y=0..32 | container y=32..306 (232x274):
@@ -46,10 +50,12 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
+#include <vector>
 
 #define CHAT_HIST_MAX    40
 #define CHAT_MSG_MAX     4096    /* per-message cap; the ONLY truncation point */
 #define CHAT_HIST_BUDGET 16384   /* total bytes across all messages */
+#define CHAT_CTX_BUDGET  8192    /* history bytes sent as API context per request */
 #define CHAT_BUBBLE_W    178     /* bubble width incl. border; label 170 inside */
 #define CHAT_TRUNC_MARK  "(truncated)"
 #define CHAT_LOG_PATH    "/chat.log"
@@ -60,10 +66,13 @@ typedef struct {
 } chat_msg_t;
 
 /* Per-task request snapshot (finding 1.6): the task never reads UI-owned
- * state, so leaving/re-entering the screen mid-flight is harmless. */
+ * state, so leaving/re-entering the screen mid-flight is harmless.
+ * history: (role, content) pairs in chronological order - OWN copies, so
+ * the task never dereferences UI-owned strings. */
 typedef struct {
     uint32_t gen;                   /* page generation captured at send time */
     string prompt;                  /* full copy - never cut mid UTF-8 (copilot 1.8) */
+    vector<pair<string, string>> history;   /* multi-turn context (round 21) */
     string base;
     string model;
     string key;
@@ -236,8 +245,20 @@ static void chat_send_task_func(void *param)
     chat_send_req_t *rq = (chat_send_req_t *)param; /* task-owned snapshot */
     chat_reply_t *res = new chat_reply_t;
     res->gen = rq->gen;
-    res->ok = openai_chat(rq->prompt.c_str(), rq->base.c_str(), rq->model.c_str(),
-                          rq->key.c_str(), res->reply, 30000);
+    /* ai_message_t entries point INTO the snapshot-owned strings, so the
+     * multi-turn array stays valid for the whole call (finding 1.6) */
+    vector<ai_message_t> msgs;
+    msgs.reserve(rq->history.size());
+    for (size_t i = 0; i < rq->history.size(); i++) {
+        ai_message_t m;
+        m.role = rq->history[i].first.c_str();
+        m.content = rq->history[i].second.c_str();
+        msgs.push_back(m);
+    }
+    res->ok = openai_chat_multi(msgs.data(), (int)msgs.size(),
+                                rq->prompt.c_str(), rq->base.c_str(),
+                                rq->model.c_str(), rq->key.c_str(),
+                                res->reply, 30000);
     delete rq;
     if (s_chat_q) {
         xQueueSend(s_chat_q, &res, portMAX_DELAY);
@@ -245,6 +266,30 @@ static void chat_send_task_func(void *param)
         delete res;
     }
     vTaskDelete(NULL);
+}
+
+/* Multi-turn context (round 21): pack the most recent turns into the
+ * request snapshot - newest-first until CHAT_CTX_BUDGET bytes, stored
+ * chronologically. Whole turns only: a turn exceeding the remaining
+ * budget ends the window. The pending bubble is skipped because its
+ * content is exactly the prompt being sent now. */
+static void chat_history_snapshot(chat_send_req_t *rq)
+{
+    vector<int> picked;
+    int budget = CHAT_CTX_BUDGET;
+    for (int i = chat_hist_cnt - 1; i >= 0 && budget > 0; i--) {
+        if (i == chat_pending_idx) continue;
+        int len = (int)chat_history[i].text.length();
+        if (len > budget) break;
+        budget -= len;
+        picked.push_back(i);
+    }
+    for (size_t k = picked.size(); k > 0; k--) {
+        int i = picked[k - 1];
+        rq->history.push_back(make_pair(
+            chat_history[i].from_user ? string("user") : string("assistant"),
+            chat_history[i].text));
+    }
 }
 
 static void chat_send(void)
@@ -277,6 +322,8 @@ static void chat_send(void)
         lv_label_set_text(chat_status_lab, "No API key - set it in AI Config");
         return;
     }
+    chat_history_snapshot(rq);      /* multi-turn context, capped at 8 KB */
+    Serial.printf("[AIChat] send: %u context turns\n", (unsigned)rq->history.size());
 
     TaskHandle_t h = NULL;
     if (xTaskCreate(chat_send_task_func, "chat_send", 1024 * 8,

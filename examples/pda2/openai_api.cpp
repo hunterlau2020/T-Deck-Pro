@@ -84,18 +84,30 @@ bool openai_save_config(const char *base, const char *model, const char *key,
     return true;
 }
 
-bool openai_chat(const char *prompt, const char *base_url,
-                 const char *model, const char *api_key, string &out,
-                 uint32_t timeout_ms)
+static cJSON *ai_msg_add(cJSON *msgs, const char *role, const char *content)
+{
+    cJSON *m = cJSON_CreateObject();
+    if (!m) return NULL;
+    cJSON_AddStringToObject(m, "role", role);
+    cJSON_AddStringToObject(m, "content", content);
+    cJSON_AddItemToArray(msgs, m);
+    return m;
+}
+
+bool openai_chat_multi(const ai_message_t *history, int history_count,
+                       const char *prompt, const char *base_url,
+                       const char *model, const char *api_key, string &out,
+                       uint32_t timeout_ms)
 {
     if (!prompt || !base_url || !model || !api_key) return false;
     if (!http_require_wifi("AI")) return false;
 
     /* Request shape mirrors the OpenRouter curl reference:
      * {"model":..., "temperature":0.7, "reasoning":{"exclude":true},
-     *  "messages":[{"role":"system",...},{"role":"user","content":<prompt>}]}
+     *  "messages":[{"role":"system",...},<history turns>,
+     *              {"role":"user","content":<prompt>}]}
      * cJSON_AddStringToObject performs proper JSON string escaping, so
-     * quotes/backslashes/newlines in the user prompt cannot break the body. */
+     * quotes/backslashes/newlines in any message cannot break the body. */
     cJSON *root = cJSON_CreateObject();
     if (!root) return false;
     cJSON_AddStringToObject(root, "model", model);
@@ -108,23 +120,23 @@ bool openai_chat(const char *prompt, const char *base_url,
         cJSON_Delete(root);
         return false;
     }
-    cJSON *sys = cJSON_CreateObject();
-    if (!sys) {
+    if (!ai_msg_add(msgs, "system", AI_SYSTEM_PROMPT)) {
         cJSON_Delete(root);
         return false;
     }
-    cJSON_AddStringToObject(sys, "role", "system");
-    cJSON_AddStringToObject(sys, "content", AI_SYSTEM_PROMPT);
-    cJSON_AddItemToArray(msgs, sys);
-
-    cJSON *msg = cJSON_CreateObject();
-    if (!msg) {
+    if (history) {
+        for (int i = 0; i < history_count; i++) {
+            if (!history[i].role || !history[i].content) continue;
+            if (!ai_msg_add(msgs, history[i].role, history[i].content)) {
+                cJSON_Delete(root);
+                return false;
+            }
+        }
+    }
+    if (!ai_msg_add(msgs, "user", prompt)) {
         cJSON_Delete(root);
         return false;
     }
-    cJSON_AddStringToObject(msg, "role", "user");
-    cJSON_AddStringToObject(msg, "content", prompt);
-    cJSON_AddItemToArray(msgs, msg);
     char *body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!body) return false;
@@ -152,4 +164,13 @@ bool openai_chat(const char *prompt, const char *base_url,
     if (ok) out = content->valuestring;
     cJSON_Delete(j);
     return ok;
+}
+
+bool openai_chat(const char *prompt, const char *base_url,
+                 const char *model, const char *api_key, string &out,
+                 uint32_t timeout_ms)
+{
+    /* single-turn wrapper (e.g. the AI Config Test ping) */
+    return openai_chat_multi(NULL, 0, prompt, base_url, model, api_key,
+                             out, timeout_ms);
 }
