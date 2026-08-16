@@ -1,8 +1,12 @@
 # 异步 IPC 契约（pda2）
 
-> 本文档是 WiFi 页（WiFi Test / Time Sync）、AI Config、AI Chat 三处异步任务的统一合同。
+> 本文档是 WiFi 页（WiFi Test / Time Sync）、AI Config、AI Chat 四处异步任务的统一合同。
 > 评审要求来源：`wifi-config-keyboard-review-result-01f8eac..8b96656.md` 主评审 §1.3。
 > 任何新增异步任务必须遵守本契约；违反时以本文件为准。
+>
+> **适用范围**（主评审 §1.8 补充）：本契约只约束**发起异步 HTTP 请求的屏**。
+> Sleep 屏、Keys 屏、GPS 屏、计算器、字典等纯本地屏不创建任务，不适用本契约；
+> 它们仍遵守各自的销毁前清理原则（如 Sleep 屏的 timer 句柄保存 + NULL 守卫）。
 
 ## 1. 适用范围
 
