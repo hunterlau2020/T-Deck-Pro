@@ -62,6 +62,10 @@ http_response_t http_get(const char *url, uint32_t timeout_ms = 10000);
  * @brief Perform an HTTPS GET with an explicit User-Agent header.
  *        Some endpoints (e.g. ifconfig.me) return HTML to unknown/browser
  *        agents and plain text to curl-like agents.
+ *
+ *        UA policy: a User-Agent is ONLY injected through this function,
+ *        for endpoints known to switch on it. All other http_* calls send
+ *        the HTTPClient default headers - there is no global curl UA.
  * @param url Full URL to fetch.
  * @param user_agent User-Agent value (NULL/empty = default).
  * @param timeout_ms Request timeout in milliseconds (default 10000).
