@@ -333,3 +333,10 @@ pio run -e allinone --jobs 8
 - [x] SPIFFS → 已确认：保留挂载。
 
 设计评审通过（2026-08-08）。后续工作在 `TODO.md` 阶段 0 跟踪。
+
+## 11. 工作笔记（自 CLAUDE.md 合并）
+
+- **E-paper 渲染慢**：~0.3s 局部刷新，~1-2s 全刷。不要做动画、不要实时滚动内容 —— 用分页（`LV_OBJ_FLAG_HIDDEN` + Enter/Space 切换），见 `pda2/README.md` 的 Use pagination, not scrolling 说明。`LV_COLOR_DEPTH=1`，所有图片必须单色。
+- **触摸已配置，但当前代码路径均由键盘驱动导航**。不要假设只改外观后 pointer 事件仍可靠触发。
+- **无自动化测试** —— 项目依赖真机手动回归。每个新 commit 都应在 review request 的 §验证状态 中记录验证缺口；反复出现的 待用户实测 ⏸ 升级记录见 review results。
+- **当前正在整合的最新评审轮次**（按 review files）：NVS 双槽原子保存（`844a907`）、WiFi 扫描临界区 + busy generation（`9c075c5`/`e31cd06`）、Sleep 倒计时由屏幕自身 EPD flush 序列门控（`9a89cdd`，此前 `7fec0e5` 因等待 pre-load frame 被否）、AI Chat 动态 body + SPIFFS 原子日志 + 按轮配对的 8KB 多轮上下文 + New 确认（`9b376da`/`e1b2d0f`/`35e9eae`）、usage 统计为 mutex 保护的单 NVS blob（`74c24ff`）、AI Config 保存失败 msgbox + Test 计费透明（`e60b2e8`）、API-key 补偿控制 C1/C2（`5dd8e32` + `SECURITY.md`）。扩展对应区域前先读这些 commit message。

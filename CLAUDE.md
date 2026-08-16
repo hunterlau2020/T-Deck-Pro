@@ -18,44 +18,15 @@ These come from prior session memory and review rounds; treat them as hard rules
    - `examples/pda2/openai_api.h::AI_KEY_DEFAULT` currently holds a real OpenRouter key. Per user decision, **dev-phase retention is acceptable** to iterate quickly on AI features. Compensating controls (compile-time `#warning`, `SECURITY.md`, dev-tier key rotation) are recommended but **not blocking**. Before any push to a public remote, the key string must be removed from the file.
 3. **Documentation vs hardware discrepancies**: `docs/issue_list.md` is the **canonical fix log** (each entry: status, committish fixing it). When you spot a doc/assumption vs HD-V2 reality mismatch, add an entry there — don't argue from first principles. Many "this can't work" comments predate commits that already resolved the issue.
 
-## Build & dev environment
-
-Local machine: Windows 11, PlatformIO Core 6.1.19 installed via pip, **not on PATH**. Use:
-
-```bash
-python -m platformio run -e pda2          # build pda2
-python -m platformio run -e factory       # build factory
-python -m platformio run -e <env>         # one env per examples/<name>
-python -m platformio run -e pda2 -t upload --upload-port COM5
-python -m platformio device monitor -p COM5 -b 115200
-```
-
-Each `[env:xxx]` in `platformio.ini` maps to `examples/xxx` via `script/set_srcdir.py` (env name == folder name; `T-Deck-Pro` env → `examples/test_GPS`). `default_envs = T-Deck-Pro`.
-
-**Prerequisites**:
-- `examples/pda2/config_keys.h` must exist (copy from `config_keys.h.example`; gitignored). Empty values compile fine.
-- Stop any background `device monitor` before `-t upload`, otherwise COM5 is held and upload silently fails.
-
-Full build details, including PlatformIO `src_dir` global-only trap (the reason `set_srcdir.py` exists), are in `docs/build-and-code-structure.md`. Do **not** trust the path `C:\Users\asdfo\.platformio\...\pio.exe` quoted in that file — it's from another machine.
-
-## Architecture (the minimum to be productive)
-
-Three load-bearing subsystems; read these files before changing anything in their area:
-
-1. **Screen manager (`scr_mgr`)** — `examples/pda2/ui_scr_mrg.{h,c}`. Each app exposes a `scr_lifecycle_t { create, entry, exit, destroy }` registered via `scr_mgr_register(SCREEN_ID, ...)`. Navigation uses push/pop/switch. Page transitions call `keypad_clear_chars()` to drain the keypad FIFO (prevents residual Backspace across screens).
-2. **Keypad driver** — `examples/pda2/peri_keypad.cpp`. TCA8418 4×10 matrix with 3 layers (lowercase / Shift uppercase / Sym locked). Modifier state (double Shift OR-ed, Alt momentary sym, Sym toggle) is maintained per-driver. Hardware FIFO → 16-deep software character FIFO consumed by `keypad_get_val()`. **`INT_STAT` is W1C** — write-to-clear, not read-to-clear (the old code got this wrong and broke modifier state on overflow; see issue_list §1.5).
-3. **Async IPC contract** — `docs/async_ipc_contract.md` defines the canonical pattern for all screens that issue HTTP requests (WiFi Test / Time Sync / AI Test / AI Chat Send). Hard rules: result structs `new`-ed by the worker task and `delete`-d by the UI thread after `xQueueReceive`; busy flags are UI-thread-only and carry a generation counter; tasks own **copies** of all UI buffers (no `volatile`/`std::string` shared-state). Local-only screens (Sleep, Keys, GPS) do **not** apply this contract.
-
-Adding a new app: see `examples/pda2/README.md` §Architecture (four-line checklist: write `ui_myapp.cpp` with `scr_lifecycle_t`, add enum to `ui_deckpro.h`, register in `ui_deckpro.cpp`, add a `menu_btn`).
-
 ## Where to find things
 
 | Need | Look in |
 |---|---|
 | HD-V2-specific bug fixes / doc-vs-hardware diffs | `docs/issue_list.md` |
-| Build pipeline, env mapping, PlatformIO traps | `docs/build-and-code-structure.md` |
+| Build/dev environment, env mapping, PlatformIO traps, architecture minimum | `docs/build-and-code-structure.md` |
 | Async task model (queues / busy generation / ownership) | `docs/async_ipc_contract.md` |
 | allinone consolidated firmware design (not yet implemented) | `docs/allinone-design.md` |
+| Working notes (EPD/touch/manual regression/latest review integration) | `docs/allinone-design.md` §11 |
 | Code review history (each round = paired request + result file under commit id) | `docs/reviews/wifi-config-keyboard-review-*` |
 | Pin definitions and shared utilities | `examples/pda2/utilities.h`, `examples/factory/utilities.h` |
 | Menu / button grid / screen ID enum | `examples/pda2/ui_deckpro.{h,cpp}` |

@@ -197,3 +197,33 @@ $PIO = "C:\Users\asdfo\.platformio\penv\Scripts\pio.exe"
 - **烧录坑（重要）**：后台运行 `pio device monitor` 时 COM 口被占用，`-t upload` 会失败——**烧录前先停监视器，烧完重启**；设备端口通常为 COM5（Espressif 303A:1001）
 - **编译前准备**：pda2 需要 `examples/pda2/config_keys.h`（从 `.example` 复制留空即可，gitignored）；分支切换后注意检查
 - 首次构建会下载/解包平台与工具链；本机已缓存，之后构建很快
+
+## 9. Build & dev environment（CLAUDE.md 合并）
+
+当前开发机：Windows 11，PlatformIO Core 6.1.19 经 pip 安装，**未加入 PATH**，统一用：
+
+```bash
+python -m platformio run -e pda2          # build pda2
+python -m platformio run -e factory       # build factory
+python -m platformio run -e <env>         # one env per examples/<name>
+python -m platformio run -e pda2 -t upload --upload-port COM5
+python -m platformio device monitor -p COM5 -b 115200
+```
+
+每个 `[env:xxx]` 映射到 `examples/xxx`（经 `script/set_srcdir.py`，env 名 == 目录名；`T-Deck-Pro` → `examples/test_GPS`），`default_envs = T-Deck-Pro`。
+
+**Prerequisites**：
+- `examples/pda2/config_keys.h` 必须存在（从 `config_keys.h.example` 复制；gitignored）。空值也可编译。
+- `-t upload` 前先停掉后台 `device monitor`，否则 COM5 被占用会导致上传静默失败。
+
+> 注意：前文 §4/§7 里引用的 `C:\Users\asdfo\.platformio\...\pio.exe` 是另一台机器的路径，当前机器不要使用；统一使用上面的 `python -m platformio`。
+
+## 10. 架构（最少需要了解的子系统）
+
+改动下列区域前先读对应文件：
+
+1. **屏幕管理器（`scr_mgr`）** — `examples/pda2/ui_scr_mrg.{h,c}`。每个 app 暴露 `scr_lifecycle_t { create, entry, exit, destroy }`，通过 `scr_mgr_register(SCREEN_ID, ...)` 注册；导航使用 push/pop/switch。页面切换会调用 `keypad_clear_chars()` 清空键盘 FIFO（防止跨屏残留 Backspace）。
+2. **键盘驱动** — `examples/pda2/peri_keypad.cpp`。TCA8418 4×10 矩阵，3 层（小写 / Shift 大写 / Sym 锁定）。修饰键状态（双 Shift 逻辑 OR、Alt 临时符号层、Sym 开关）在驱动内部维护。硬件 FIFO → 16 深软件字符 FIFO，由 `keypad_get_val()` 消费。**`INT_STAT` 是 W1C**（写 1 清除，不是读清除；旧代码曾搞反并在溢出时破坏修饰键状态，见 `docs/issue_list.md` §1.5）。
+3. **异步 IPC 契约** — `docs/async_ipc_contract.md` 是所有发起 HTTP 请求屏（WiFi Test / Time Sync / AI Test / AI Chat Send）的规范模式。硬规则：结果结构由 worker task `new`，UI 线程 `xQueueReceive` 后 `delete`；busy 标志仅 UI 线程持有并带代次计数；task 拥有所有 UI buffer 的**副本**（不共享 `volatile`/`std::string`）。纯本地屏（Sleep、Keys、GPS）**不适用**该契约。
+
+新增 app 四步清单（`examples/pda2/README.md` §Architecture）：写 `ui_myapp.cpp` 并实现 `scr_lifecycle_t` → 在 `ui_deckpro.h` 加枚举 → 在 `ui_deckpro.cpp` 注册 → 增加一个 `menu_btn`。
