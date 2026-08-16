@@ -4,22 +4,33 @@
  *              - top 2/3: read-only, scrollable conversation history
  *                (AI replies left-aligned, user messages right-aligned)
  *              - bottom 1/3: multi-line input box for the current draft
- *              - small Send / Clear buttons on the side of the input box
+ *              - small Send / Clear / Hist buttons on the side of the input
  *
  * Sending is asynchronous (FreeRTOS task + result queue with page
  * generation). The draft stays in the input box until a reply arrives;
- * on failure it is kept for direct retry. History is in-RAM only.
+ * on failure it is kept for direct retry.
  *
- * Review findings incorporated:
- *   - the task works on its OWN snapshot of the prompt + AI config
- *     (finding 1.6): a re-entry while a send is in flight can no longer
- *     corrupt the in-flight request, and only a result matching the
- *     CURRENT page generation may clear the busy flag
- *   - chat_history_add backs off to a UTF-8 code point boundary before
- *     truncating and marks the cut explicitly (finding 1.10)
- *   - the result queue is created and CHECKED before busy is set
- *     (finding 1.5)
- *   - contract: docs/async_ipc_contract.md
+ * History storage (review round 20 findings 1.2/1.5/1.9, copilot 1.6-1.9):
+ *   - message bodies are std::string on the heap (no fixed 256 B cut);
+ *     a total byte budget (CHAT_HIST_BUDGET) evicts the oldest messages,
+ *     a per-message cap (CHAT_MSG_MAX) is the ONLY truncation mechanism
+ *     and appends "(truncated)" at a UTF-8 code point boundary
+ *   - the ring is persisted to SPIFFS /chat.log (binary records, rewritten
+ *     on every change, 16 KB budget); restored on screen create. If SPIFFS
+ *     is unavailable the chat degrades to RAM-only (logged once)
+ *   - re-entering the screen re-renders the restored history (copilot 1.6)
+ *   - the user bubble is added only AFTER the task really started, and a
+ *     retry REUSES the pending bubble (drop-last + re-add), marking it
+ *     "(failed)" while it awaits a retry (copilot 1.7)
+ *   - the send task works on its own snapshot (finding 1.6); the prompt is
+ *     copied as a full std::string, never cut at 255 bytes (copilot 1.8)
+ *   - only a result matching the CURRENT page generation may clear busy
+ *
+ * Layout pixel budget (240x320 EPD, 14 px font, review finding 1.6):
+ *   back bar y=0..32 | container y=32..306 (232x274):
+ *     history 160 + gap 4 + status 16 + gap 4 + input row 86 = 270 <= 274
+ *   input row: textarea 176x86 | button column 44x86 (3 x 26 + 2 x 4 gaps)
+ *   textarea max length: 200 chars (<= 800 UTF-8 bytes, heap-allocated)
  *
  * Keypad map:
  *   \n : send                     \b : delete; empty -> back to menu
@@ -31,28 +42,31 @@
 #include "ui_deckpro_port.h"
 #include "openai_api.h"
 #include "ui_scr_mrg.h"
+#include <SPIFFS.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
 
 #define CHAT_HIST_MAX    40
-#define CHAT_MSG_MAX     256
+#define CHAT_MSG_MAX     4096    /* per-message cap; the ONLY truncation point */
+#define CHAT_HIST_BUDGET 16384   /* total bytes across all messages */
 #define CHAT_BUBBLE_W    178     /* bubble width incl. border; label 170 inside */
 #define CHAT_TRUNC_MARK  "(truncated)"
+#define CHAT_LOG_PATH    "/chat.log"
 
 typedef struct {
     bool from_user;
-    char text[CHAT_MSG_MAX];
+    string text;                    /* dynamic: no fixed 256 B cut */
 } chat_msg_t;
 
 /* Per-task request snapshot (finding 1.6): the task never reads UI-owned
  * state, so leaving/re-entering the screen mid-flight is harmless. */
 typedef struct {
     uint32_t gen;                   /* page generation captured at send time */
-    char prompt[CHAT_MSG_MAX];
-    char base[160];
-    char model[80];
-    char key[80];
+    string prompt;                  /* full copy - never cut mid UTF-8 (copilot 1.8) */
+    string base;
+    string model;
+    string key;
 } chat_send_req_t;
 
 typedef struct {
@@ -68,37 +82,115 @@ static bool chat_kbd_active = false;
 
 static chat_msg_t chat_history[CHAT_HIST_MAX];
 static int chat_hist_cnt = 0;
+static int chat_hist_bytes = 0;             /* sum of body lengths */
+static int chat_pending_idx = -1;           /* bubble awaiting a reply; retried in place */
+static bool chat_spiffs_ok = false;         /* SPIFFS mounted; log enabled */
 
 static QueueHandle_t s_chat_q = NULL;
 static volatile uint32_t s_chat_page_gen = 0;   /* bumped on entry/destroy */
 static volatile bool s_chat_send_busy = false;  /* UI-owned */
 
-/* Append a message (rolls: oldest entry is dropped when full). Overlong
- * text is truncated at a UTF-8 code point boundary - the cut never lands
- * inside a multi-byte sequence - and marked with CHAT_TRUNC_MARK
- * (finding 1.10). */
+/* ---- history storage -------------------------------------------------- */
+
+/* Drop the LAST entry (the pending bubble is always last while it exists). */
+static void chat_history_drop_last(void)
+{
+    if (chat_hist_cnt <= 0) return;
+    chat_hist_cnt--;
+    chat_hist_bytes -= chat_history[chat_hist_cnt].text.length();
+    chat_history[chat_hist_cnt].text.clear();
+}
+
+/* The single truncation mechanism (main finding 1.5): cut at a UTF-8 code
+ * point boundary - the cut never lands inside a multi-byte sequence - and
+ * mark it explicitly. Returns the (possibly truncated) body. */
+static string chat_text_trunc(const char *text)
+{
+    string body(text);
+    size_t limit = CHAT_MSG_MAX - strlen(CHAT_TRUNC_MARK);
+    if (body.length() <= limit) return body;
+    body.resize(limit);
+    while (!body.empty() && ((uint8_t)body.back() & 0xC0) == 0x80) {
+        body.pop_back();            /* back off over trailing continuation bytes */
+    }
+    body += CHAT_TRUNC_MARK;
+    return body;
+}
+
+/* Append a message: count limit first, then byte-budget eviction from the
+ * FRONT (the newest message always survives). */
 static void chat_history_add(bool from_user, const char *text)
 {
     if (chat_hist_cnt >= CHAT_HIST_MAX) {
-        memmove(&chat_history[0], &chat_history[1],
-                sizeof(chat_msg_t) * (CHAT_HIST_MAX - 1));
-        chat_hist_cnt = CHAT_HIST_MAX - 1;
+        /* drop oldest with proper string assignment (memmove would be
+         * invalid for std::string members) */
+        chat_hist_bytes -= chat_history[0].text.length();
+        for (int i = 0; i < chat_hist_cnt - 1; i++) {
+            chat_history[i] = chat_history[i + 1];
+        }
+        chat_hist_cnt--;
     }
-    chat_msg_t *m = &chat_history[chat_hist_cnt++];
-    m->from_user = from_user;
+    string body = chat_text_trunc(text);
+    chat_history[chat_hist_cnt].from_user = from_user;
+    chat_history[chat_hist_cnt].text = body;
+    chat_hist_cnt++;
+    chat_hist_bytes += body.length();
+    while (chat_hist_cnt > 1 && chat_hist_bytes > CHAT_HIST_BUDGET) {
+        chat_hist_bytes -= chat_history[0].text.length();
+        for (int i = 0; i < chat_hist_cnt - 1; i++) {
+            chat_history[i] = chat_history[i + 1];
+        }
+        chat_hist_cnt--;
+    }
+}
 
-    size_t n = strlen(text);
-    size_t limit = CHAT_MSG_MAX - 1 - sizeof(CHAT_TRUNC_MARK);
-    if (n > limit) {
-        n = limit;
-        /* back off over trailing continuation bytes (10xxxxxx) so the cut
-         * lands on a lead byte; a lead byte never starts with 10 */
-        while (n > 0 && ((uint8_t)text[n] & 0xC0) == 0x80) n--;
-        memcpy(m->text, text, n);
-        strcpy(m->text + n, CHAT_TRUNC_MARK);
-    } else {
-        memcpy(m->text, text, n + 1);
+/* Rewrite /chat.log from the in-memory ring (binary: 1 B flag, 2 B len,
+ * body). Small file + rare writes, so a full rewrite is fine. */
+static void chat_log_save(void)
+{
+    if (!chat_spiffs_ok) return;
+    File f = SPIFFS.open(CHAT_LOG_PATH, FILE_WRITE);
+    if (!f) {
+        Serial.println("[AIChat] log save: open failed");
+        return;
     }
+    for (int i = 0; i < chat_hist_cnt; i++) {
+        uint8_t fl = chat_history[i].from_user ? 1 : 0;
+        uint16_t len = (uint16_t)chat_history[i].text.length();
+        f.write(&fl, 1);
+        f.write((uint8_t *)&len, 2);
+        f.write((const uint8_t *)chat_history[i].text.c_str(), len);
+    }
+    f.close();
+}
+
+/* Restore the ring from /chat.log on screen create. */
+static void chat_log_load(void)
+{
+    chat_spiffs_ok = SPIFFS.begin(true);
+    if (!chat_spiffs_ok) {
+        Serial.println("[AIChat] SPIFFS unavailable - history RAM-only");
+        return;
+    }
+    if (!SPIFFS.exists(CHAT_LOG_PATH)) return;
+    File f = SPIFFS.open(CHAT_LOG_PATH, FILE_READ);
+    if (!f) return;
+    char buf[CHAT_MSG_MAX + 1];
+    while (f.available() >= 3 && chat_hist_cnt < CHAT_HIST_MAX) {
+        uint8_t fl = 0;
+        uint16_t len = 0;
+        f.read(&fl, 1);
+        f.read((uint8_t *)&len, 2);
+        if (len == 0 || len > CHAT_MSG_MAX || f.available() < len) {
+            break;                  /* corrupt tail: stop, keep the valid prefix */
+        }
+        f.read((uint8_t *)buf, len);
+        buf[len] = '\0';
+        chat_history_add(fl == 1, buf);
+    }
+    f.close();
+    Serial.printf("[AIChat] history restored: %d msgs, %d bytes\n",
+                  chat_hist_cnt, chat_hist_bytes);
 }
 
 /* Rebuild the bubbles: AI left-aligned, user right-aligned; jump to the
@@ -123,7 +215,7 @@ static void chat_history_render(void)
         lv_obj_t *lab = lv_label_create(box);
         lv_obj_set_width(lab, CHAT_BUBBLE_W - 8);
         lv_label_set_long_mode(lab, LV_LABEL_LONG_WRAP);
-        lv_label_set_text(lab, m->text);
+        lv_label_set_text(lab, m->text.c_str());
         lv_obj_set_style_text_font(lab, &lv_font_montserrat_14, 0);
 
         lv_obj_update_layout(chat_hist_cont);
@@ -132,6 +224,8 @@ static void chat_history_render(void)
     lv_obj_update_layout(chat_hist_cont);
     lv_obj_scroll_to_y(chat_hist_cont, LV_COORD_MAX, LV_ANIM_OFF);
 }
+
+/* ---- async send ------------------------------------------------------- */
 
 /* Async send (review: sync HTTP would freeze the UI for up to 30s).
  * Results travel over a FreeRTOS queue as heap-allocated structs
@@ -142,8 +236,8 @@ static void chat_send_task_func(void *param)
     chat_send_req_t *rq = (chat_send_req_t *)param; /* task-owned snapshot */
     chat_reply_t *res = new chat_reply_t;
     res->gen = rq->gen;
-    res->ok = openai_chat(rq->prompt, rq->base, rq->model, rq->key,
-                          res->reply, 30000);
+    res->ok = openai_chat(rq->prompt.c_str(), rq->base.c_str(), rq->model.c_str(),
+                          rq->key.c_str(), res->reply, 30000);
     delete rq;
     if (s_chat_q) {
         xQueueSend(s_chat_q, &res, portMAX_DELAY);
@@ -167,35 +261,60 @@ static void chat_send(void)
         return;
     }
 
-    /* snapshot prompt + AI config into a task-owned request (finding 1.6):
-     * the task never reads UI-owned state again */
+    /* snapshot prompt + AI config into a task-owned request (finding 1.6);
+     * the prompt is copied as a full string - the textarea allows 200
+     * chars (up to 800 UTF-8 bytes) and nothing may cut it mid-sequence */
     chat_send_req_t *rq = new chat_send_req_t;
     rq->gen = s_chat_page_gen;
-    strncpy(rq->prompt, prompt, sizeof(rq->prompt) - 1);
-    rq->prompt[sizeof(rq->prompt) - 1] = '\0';
-    openai_load_config(rq->base, sizeof(rq->base),
-                       rq->model, sizeof(rq->model),
-                       rq->key, sizeof(rq->key));
-    if (rq->key[0] == '\0') {
+    rq->prompt = prompt;
+    char base[160], model[80], key[80];
+    openai_load_config(base, sizeof(base), model, sizeof(model), key, sizeof(key));
+    rq->base = base;
+    rq->model = model;
+    rq->key = key;
+    if (rq->key.empty()) {
         delete rq;
         lv_label_set_text(chat_status_lab, "No API key - set it in AI Config");
         return;
     }
 
-    /* the message goes into the history immediately (chat semantics); the
-     * draft STAYS in the input box until success, so failures can retry */
-    chat_history_add(true, prompt);
-    chat_history_render();
-    lv_label_set_text(chat_status_lab, "Thinking...");
-
-    s_chat_send_busy = true;
     TaskHandle_t h = NULL;
     if (xTaskCreate(chat_send_task_func, "chat_send", 1024 * 8,
                     rq, 1, &h) != pdPASS) {
         delete rq;
-        s_chat_send_busy = false;
         lv_label_set_text(chat_status_lab, "Cannot start task");
+        return;
     }
+    s_chat_send_busy = true;
+
+    /* copilot 1.7: the bubble is added only AFTER the task really started;
+     * a retry REUSES the pending bubble (drop-last + re-add) instead of
+     * appending a duplicate. The draft STAYS in the input box until
+     * success, so failures can retry with the same bubble. */
+    if (chat_pending_idx >= 0) {
+        chat_history_drop_last();
+        chat_pending_idx = -1;
+    }
+    chat_history_add(true, prompt);
+    chat_pending_idx = chat_hist_cnt - 1;
+    chat_history_render();
+    chat_log_save();
+    lv_label_set_text(chat_status_lab, "Thinking...");
+}
+
+/* Mark the pending bubble failed without touching the input draft
+ * (copilot 1.7: "mark failed instead of duplicating"). */
+static void chat_mark_pending_failed(void)
+{
+    if (chat_pending_idx < 0) return;
+    string marked = chat_history[chat_pending_idx].text;
+    marked += " (failed)";
+    chat_history_drop_last();
+    chat_pending_idx = -1;
+    chat_history_add(true, marked.c_str());
+    chat_pending_idx = chat_hist_cnt - 1;
+    chat_history_render();
+    chat_log_save();
 }
 
 void ai_chat_keyboard_poll(void)
@@ -211,12 +330,16 @@ void ai_chat_keyboard_poll(void)
             s_chat_send_busy = false;
             if (cr->ok) {
                 Serial.printf("[AIChat] reply len=%u\n", (unsigned)cr->reply.length());
+                chat_pending_idx = -1;          /* user message confirmed */
                 lv_textarea_set_text(chat_input_ta, "");    /* success: draft consumed */
                 chat_history_add(false, cr->reply.c_str());
                 chat_history_render();
+                chat_log_save();
                 lv_label_set_text(chat_status_lab, "");
             } else {
-                /* failure: the draft stays in the box for retry */
+                /* failure: the draft stays in the box for retry, the pending
+                 * bubble is marked so the retry visibly reuses it */
+                chat_mark_pending_failed();
                 lv_label_set_text(chat_status_lab, "AI error - check cfg / WiFi");
             }
         } else {
@@ -265,6 +388,30 @@ static void chat_clear_btn_cb(lv_event_t *e)
     lv_textarea_set_text(chat_input_ta, "");
 }
 
+/* Clear the whole history (review finding 1.2 asks for a dedicated entry). */
+static void chat_clear_history(void)
+{
+    if (s_chat_send_busy) {
+        lv_label_set_text(chat_status_lab, "Busy - retry after reply");
+        return;
+    }
+    for (int i = 0; i < chat_hist_cnt; i++) {
+        chat_history[i].text.clear();
+    }
+    chat_hist_cnt = 0;
+    chat_hist_bytes = 0;
+    chat_pending_idx = -1;
+    chat_history_render();
+    chat_log_save();                            /* truncates /chat.log to empty */
+    lv_label_set_text(chat_status_lab, "History cleared");
+}
+
+static void chat_hist_btn_cb(lv_event_t *e)
+{
+    Serial.println("[AIChat] Hist button clicked");
+    chat_clear_history();
+}
+
 static void chat_back_cb(lv_event_t *e)
 {
     chat_kbd_active = false;
@@ -286,10 +433,10 @@ static void chat_create(lv_obj_t *parent)
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* --- history: read-only, scrollable, top 2/3 --- */
+    /* --- history: read-only, scrollable, top 2/3 (160 px of 274) --- */
     chat_hist_cont = lv_obj_create(cont);
     lv_obj_set_width(chat_hist_cont, lv_pct(100));
-    lv_obj_set_height(chat_hist_cont, 164);
+    lv_obj_set_height(chat_hist_cont, 160);
     lv_obj_set_style_bg_color(chat_hist_cont, lv_color_white(), 0);
     lv_obj_set_style_border_width(chat_hist_cont, 1, 0);
     lv_obj_set_style_border_color(chat_hist_cont, lv_color_black(), 0);
@@ -308,7 +455,7 @@ static void chat_create(lv_obj_t *parent)
     /* --- input row: multi-line box (1/3) + small side buttons --- */
     lv_obj_t *input_row = lv_obj_create(cont);
     lv_obj_set_width(input_row, lv_pct(100));
-    lv_obj_set_height(input_row, 82);
+    lv_obj_set_height(input_row, 86);
     lv_obj_set_style_bg_opa(input_row, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(input_row, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(input_row, 0, LV_PART_MAIN);
@@ -317,15 +464,15 @@ static void chat_create(lv_obj_t *parent)
 
     chat_input_ta = lv_textarea_create(input_row);
     lv_obj_set_width(chat_input_ta, 176);
-    lv_obj_set_height(chat_input_ta, 82);
+    lv_obj_set_height(chat_input_ta, 86);
     lv_textarea_set_max_length(chat_input_ta, 200);
     lv_textarea_set_placeholder_text(chat_input_ta, "Type here...");
     lv_obj_set_style_text_font(chat_input_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
-    /* small Send / Clear buttons stacked on the side */
+    /* small Send / Clear / Hist buttons stacked on the side (3 x 26 px) */
     lv_obj_t *btn_col = lv_obj_create(input_row);
     lv_obj_set_width(btn_col, 44);
-    lv_obj_set_height(btn_col, 82);
+    lv_obj_set_height(btn_col, 86);
     lv_obj_set_style_bg_opa(btn_col, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(btn_col, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(btn_col, 0, LV_PART_MAIN);
@@ -334,7 +481,7 @@ static void chat_create(lv_obj_t *parent)
 
     lv_obj_t *send_btn = lv_btn_create(btn_col);
     lv_obj_set_width(send_btn, 44);
-    lv_obj_set_height(send_btn, 38);
+    lv_obj_set_height(send_btn, 26);
     lv_obj_t *send_lab = lv_label_create(send_btn);
     lv_label_set_text(send_lab, "Send");
     lv_obj_center(send_lab);
@@ -342,13 +489,29 @@ static void chat_create(lv_obj_t *parent)
 
     lv_obj_t *clear_btn = lv_btn_create(btn_col);
     lv_obj_set_width(clear_btn, 44);
-    lv_obj_set_height(clear_btn, 38);
+    lv_obj_set_height(clear_btn, 26);
     lv_obj_t *clear_lab = lv_label_create(clear_btn);
     lv_label_set_text(clear_lab, "Clear");
     lv_obj_center(clear_lab);
     lv_obj_add_event_cb(clear_btn, chat_clear_btn_cb, LV_EVENT_CLICKED, NULL);
 
+    lv_obj_t *hist_btn = lv_btn_create(btn_col);
+    lv_obj_set_width(hist_btn, 44);
+    lv_obj_set_height(hist_btn, 26);
+    lv_obj_t *hist_lab = lv_label_create(hist_btn);
+    lv_label_set_text(hist_lab, "Hist");
+    lv_obj_center(hist_lab);
+    lv_obj_add_event_cb(hist_btn, chat_hist_btn_cb, LV_EVENT_CLICKED, NULL);
+
     chat_kbd_active = true;
+
+    /* restore persisted history only when the RAM ring is empty (the ring
+     * survives screen switches), then render it (copilot 1.6: re-entering
+     * the screen must show the existing history, not a blank area) */
+    if (chat_hist_cnt == 0) {
+        chat_log_load();
+    }
+    chat_history_render();
 }
 
 static void chat_entry(void)
@@ -364,6 +527,8 @@ static void chat_destroy(void)
     /* safe to clear busy here: the in-flight task owns its own request
      * snapshot (finding 1.6), and its reply will be dropped by gen */
     s_chat_send_busy = false;
+    /* the pending bubble stays in history and is persisted, so a retry
+     * after re-entering the screen still reuses it */
 }
 
 scr_lifecycle_t screen_ai_chat = {
