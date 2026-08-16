@@ -1753,6 +1753,15 @@ static void destroy4(void) {
         lv_timer_del(wifi_test_timer);
         wifi_test_timer = NULL;
     }
+    /* async IPC contract rule 8 (copilot finding 1.5): leaving the page
+     * invalidates the old generation and clears both busy flags - without
+     * this, re-entering within the request window gets silently rejected.
+     * The in-flight tasks keep their own snapshots; their late results are
+     * dropped by the generation check, and busy_gen prevents a stale
+     * result from unlocking a newer request. */
+    s_wifi_page_gen++;
+    s_wifi_test_busy = false;
+    s_time_sync_busy = false;
 }
 
 static scr_lifecycle_t screen4 = {
