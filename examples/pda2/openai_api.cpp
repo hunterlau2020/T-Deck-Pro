@@ -130,7 +130,8 @@ static cJSON *ai_msg_add(cJSON *msgs, const char *role, const char *content)
  * RAM totals are always current.
  * The counters are NEVER reset by the chat "New" button - they are usage
  * accounting, not conversation data. */
-#define AI_STATS_MAGIC 0x53544154u  /* "STAT" */
+#define AI_STATS_MAGIC_V1 0x53544154u  /* "STAT": 74c24ff single-group blob */
+#define AI_STATS_MAGIC_V2 0x53544156u  /* "STAV": dual-group blob (0328cd2+) */
 
 typedef struct {
     uint32_t magic;
@@ -141,6 +142,14 @@ typedef struct {
     uint64_t t_p_tok, t_c_tok, t_tot_tok, t_cached, t_cwrite, t_audio, t_reasoning;
     double   t_cost;
 } ai_stats_t;
+
+/* pre-split layout written by 74c24ff (same magic family, no test group) */
+typedef struct {
+    uint32_t magic;
+    uint64_t p_tok, c_tok, tot_tok;
+    double   cost;
+    uint64_t cached, cwrite, audio, reasoning;
+} ai_stats_v1_t;
 
 static StaticSemaphore_t s_ai_stats_mux_buf;
 static SemaphoreHandle_t s_ai_stats_mux =
@@ -162,7 +171,8 @@ static double ai_json_dbl(cJSON *obj, const char *key)
     return (it && cJSON_IsNumber(it)) ? it->valuedouble : 0.0;
 }
 
-/* Call with the mutex held. */
+/* Call with the mutex held. Migrates the pre-split V1 blob into the
+ * chat group instead of silently zeroing it (copilot finding 1.4). */
 static void ai_stats_load_locked(void)
 {
     if (s_ai_stats_loaded) return;
@@ -171,12 +181,64 @@ static void ai_stats_load_locked(void)
     if (p.begin("ai_stats", false)) {
         size_t n = p.getBytes("stats", &s_ai_stats, sizeof(s_ai_stats));
         p.end();
-        if (n != sizeof(s_ai_stats) || s_ai_stats.magic != AI_STATS_MAGIC) {
-            memset(&s_ai_stats, 0, sizeof(s_ai_stats));
+        if (n == sizeof(s_ai_stats) && s_ai_stats.magic == AI_STATS_MAGIC_V2) {
+            /* current format - nothing to do */
+        } else if (n == sizeof(ai_stats_v1_t)) {
+            ai_stats_v1_t v1;
+            if (p.begin("ai_stats", false)) {
+                n = p.getBytes("stats", &v1, sizeof(v1));
+                p.end();
+            }
+            if (n == sizeof(v1) && v1.magic == AI_STATS_MAGIC_V1) {
+                /* migrate: the old single group becomes the chat group */
+                s_ai_stats.p_tok = v1.p_tok;
+                s_ai_stats.c_tok = v1.c_tok;
+                s_ai_stats.tot_tok = v1.tot_tok;
+                s_ai_stats.cost = v1.cost;
+                s_ai_stats.cached = v1.cached;
+                s_ai_stats.cwrite = v1.cwrite;
+                s_ai_stats.audio = v1.audio;
+                s_ai_stats.reasoning = v1.reasoning;
+                Serial.println("[AI] stats blob migrated from V1 to V2");
+            }
+        } else {
+            Serial.println("[AI] stats blob unrecognized - starting fresh");
         }
     }
-    s_ai_stats.magic = AI_STATS_MAGIC;
+    s_ai_stats.magic = AI_STATS_MAGIC_V2;
     s_ai_stats_loaded = true;
+}
+
+/* Call with the mutex held. Returns true when the blob reached NVS. */
+static bool ai_stats_persist_locked(void)
+{
+    bool saved = false;
+    Preferences p;
+    if (p.begin("ai_stats", false)) {
+        saved = p.putBytes("stats", &s_ai_stats, sizeof(s_ai_stats)) == sizeof(s_ai_stats);
+        p.end();
+    }
+    if (!saved) {
+        Serial.println("[AI] stats persist failed - totals stay in RAM");
+    }
+    return saved;
+}
+
+/* Explicit flush for lifecycle checkpoints (copilot finding 1.1): the
+ * throttle only commits on the next response, so low-frequency use
+ * would otherwise never hit NVS. Call before deep sleep, on chat screen
+ * destroy and on New. */
+void openai_stats_flush(void)
+{
+    if (xSemaphoreTake(s_ai_stats_mux, portMAX_DELAY) != pdTRUE) return;
+    ai_stats_load_locked();
+    if (s_stats_since_persist > 0) {
+        if (ai_stats_persist_locked()) {
+            s_stats_since_persist = 0;
+            s_stats_last_persist_ms = millis();
+        }
+    }
+    xSemaphoreGive(s_ai_stats_mux);
 }
 
 static void ai_usage_accumulate(cJSON *root, bool is_test)
@@ -221,23 +283,23 @@ static void ai_usage_accumulate(cJSON *root, bool is_test)
 
     /* THROTTLED blob commit (main review 1.3): every 20 responses or
      * every 60 s, not on every response - a Test-ping burst must not
-     * wear the NVS. RAM totals are always current. */
+     * wear the NVS. RAM totals are always current. On a failed commit
+     * the dirty counters are KEPT and retried with a 10 s backoff
+     * (copilot finding 1.2). */
     s_stats_since_persist++;
     const uint32_t now = millis();
     const bool due = (s_stats_since_persist >= 20) ||
                      (now - s_stats_last_persist_ms >= 60000);
     bool saved = false;
     if (due) {
-        Preferences p;
-        if (p.begin("ai_stats", false)) {
-            saved = p.putBytes("stats", &s_ai_stats, sizeof(s_ai_stats)) == sizeof(s_ai_stats);
-            p.end();
+        saved = ai_stats_persist_locked();
+        if (saved) {
+            s_stats_since_persist = 0;
+            s_stats_last_persist_ms = now;
+        } else {
+            /* finite backoff: the next response retries after ~10 s */
+            s_stats_last_persist_ms = now - 60000 + 10000;
         }
-        if (!saved) {
-            Serial.println("[AI] stats persist failed - totals stay in RAM");
-        }
-        s_stats_since_persist = 0;
-        s_stats_last_persist_ms = now;
     }
 
     Serial.printf("[AI] usage%s +%llu/%llu tok, cost +%.8f | chat %llu/%llu %.6f | test %llu/%llu %.6f%s\n",

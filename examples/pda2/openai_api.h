@@ -77,6 +77,12 @@ bool openai_chat(const char *prompt, const char *base_url,
 void openai_load_config(char *base, int base_len, char *model, int model_len,
                         char *key, int key_len);
 
+/** @brief Flush dirty usage statistics to NVS immediately.
+ *  The regular accumulate path throttles commits (60 s / 20 responses);
+ *  lifecycle checkpoints must call this before deep sleep, on screen
+ *  destroy and on New so low-frequency sessions still persist. */
+void openai_stats_flush(void);
+
 /** @brief Write AI config to NVS namespace "ai".
  *
  *  Dual-slot + single active-version key (copilot finding 1.2): all three

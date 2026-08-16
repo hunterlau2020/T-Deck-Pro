@@ -65,7 +65,8 @@
 #define CHAT_LOG_TMP     "/chat.log.tmp"
 #define CHAT_LOG_BAK     "/chat.log.bak"
 #define CHAT_DRAFT_PATH  "/chat.draft"
-#define CHAT_LOG_MAGIC   0x314C4843u    /* "CHL1" little-endian */
+#define CHAT_LOG_MAGIC   0x324C4843u    /* "CHL2": v2 adds the record count (c90307f) */
+#define CHAT_LOG_MAGIC_V1 0x314C4843u   /* "CHL1": pre-count format, not parseable */
 
 typedef struct {
     bool from_user;
@@ -101,6 +102,7 @@ static int chat_hist_cnt = 0;
 static int chat_hist_bytes = 0;             /* sum of body lengths */
 static int chat_pending_idx = -1;           /* bubble awaiting a reply; retried in place */
 static bool chat_spiffs_ok = false;         /* SPIFFS mounted; log enabled */
+static bool chat_ctx_trimmed = false;       /* older turns were cut from the last context */
 
 static QueueHandle_t s_chat_q = NULL;
 static volatile uint32_t s_chat_page_gen = 0;   /* bumped on entry/destroy */
@@ -257,7 +259,19 @@ static void chat_log_load(void)
                   (unsigned)f.size());
 
     uint32_t magic = 0;
-    if (f.available() < 8 || f.read((uint8_t *)&magic, 4) != 4 || magic != CHAT_LOG_MAGIC) {
+    if (f.available() < 4 || f.read((uint8_t *)&magic, 4) != 4) {
+        f.close();
+        Serial.println("[AIChat] log corrupt: unreadable header - ignored");
+        return;
+    }
+    if (magic == CHAT_LOG_MAGIC_V1) {
+        /* pre-record-count format: cannot be parsed reliably, say so
+         * instead of blaming corruption (copilot finding 1.3) */
+        f.close();
+        Serial.println("[AIChat] old-format log (CHL1) ignored - history starts fresh");
+        return;
+    }
+    if (magic != CHAT_LOG_MAGIC) {
         f.close();
         Serial.println("[AIChat] log corrupt: bad magic - ignored");
         return;
@@ -460,6 +474,15 @@ static void chat_history_snapshot(chat_send_req_t *rq)
                                             chat_ctx_body(&chat_history[t.a])));
         }
     }
+    /* visibility (copilot finding 1.8): tell the UI when older confirmed
+     * turns were silently cut from the window */
+    chat_ctx_trimmed = false;
+    for (int j = i; j >= 0; j--) {
+        if (j != chat_pending_idx && !chat_history[j].text.empty()) {
+            chat_ctx_trimmed = true;
+            break;
+        }
+    }
 }
 
 static void chat_send(void)
@@ -516,7 +539,12 @@ static void chat_send(void)
     chat_pending_idx = chat_hist_cnt - 1;
     chat_history_render();
     chat_log_save();
-    lv_label_set_text(chat_status_lab, "Thinking...");
+    /* context visibility (copilot finding 1.8): show how much history
+     * travels with the request and whether older turns were trimmed */
+    char st[64];
+    snprintf(st, sizeof(st), "Thinking · %u ctx msgs%s",
+             (unsigned)rq->history.size(), chat_ctx_trimmed ? " · trimmed" : "");
+    lv_label_set_text(chat_status_lab, st);
 }
 
 /* Mark the pending bubble failed without touching the input draft
@@ -729,6 +757,7 @@ static void chat_clear_history(void)
     chat_history_render();
     chat_log_save();                            /* truncates /chat.log to empty */
     chat_draft_clear();                         /* the retry draft dies with the session */
+    openai_stats_flush();                       /* lifecycle checkpoint (copilot 1.1) */
     lv_label_set_text(chat_status_lab, "History cleared");
 }
 
@@ -877,6 +906,7 @@ static void chat_destroy(void)
 {
     chat_kbd_active = false;
     chat_confirm_close();                       /* no overlay on other screens */
+    openai_stats_flush();                       /* lifecycle checkpoint (copilot 1.1) */
     s_chat_page_gen++;                          /* late replies of this visit are dropped */
     /* safe to clear busy here: the in-flight task owns its own request
      * snapshot (finding 1.6), and its reply will be dropped by gen */

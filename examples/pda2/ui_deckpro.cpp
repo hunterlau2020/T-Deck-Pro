@@ -4,6 +4,7 @@
 #include "stdio.h"
 #include "ui_deckpro_port.h"
 #include "Arduino.h"
+#include "openai_api.h"     /* openai_stats_flush() at the deep-sleep checkpoint */
 
 #define SETTING_PAGE_MAX_ITEM 7
 #define GET_BUFF_LEN(a) sizeof(a)/sizeof(a[0])
@@ -3874,6 +3875,7 @@ static void sleep_do_enter(void)
     gpio_deep_sleep_hold_en();
 
     esp_sleep_enable_ext1_wakeup((1UL << BOARD_BOOT_PIN), ESP_EXT1_WAKEUP_ANY_LOW);
+    openai_stats_flush();                       /* lifecycle checkpoint (copilot 1.1) */
     esp_deep_sleep_start();
 }
 

@@ -124,13 +124,17 @@ ok, err = save_config(kv, "B1", "M1", "K1")
 check("3 put fail -> abort", not ok and err == "NVS write failed" and
       kv.get("active") == 1 and load_config(kv) == ("B0", "M0", "K0"))
 
-# 4. fail on third put
+# 4. fail on the THIRD put of the save (base/model staged, key fails):
+#    the inactive slot holds a partial state but active never flips
 kv = KV()
-save_config(kv, "B0", "M0", "K0")
-kv.fail_next_puts = 3
+save_config(kv, "B0", "M0", "K0")              # consumes global puts 1-4
+kv.fail_at = kv.put_calls + 3                  # 3rd put of the next save
 ok, err = save_config(kv, "B1", "M1", "K1")
 check("4 third put fail", not ok and err == "NVS write failed" and
-      load_config(kv) == ("B0", "M0", "K0"))   # active never flipped
+      kv.get("active") == 1 and                # active never flipped
+      kv.get("base.0") == "B1" and kv.get("model.0") == "M1" and
+      kv.get("key.0") is None and              # partial slot: key missing
+      load_config(kv) == ("B0", "M0", "K0"))   # load still sees the old slot
 
 # 5. truncated write -> read-back mismatch
 kv = KV()
