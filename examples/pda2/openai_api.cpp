@@ -25,17 +25,55 @@ void openai_load_config(char *base, int base_len, char *model, int model_len,
 
 bool openai_save_config(const char *base, const char *model, const char *key)
 {
+    /* Atomic-ish write (review finding 1.8): NVS has no multi-key
+     * transaction, so the new values are first staged under *.tmp keys and
+     * verified, then swapped into place. If any step fails the previous
+     * config is restored - a failed save never leaves a mixed config. */
     Preferences p;
     p.begin("ai", false);
-    size_t b = p.putString("base",  base  ? base  : "");
-    size_t m = p.putString("model", model ? model : "");
-    size_t k = p.putString("key",   key   ? key   : "");
+
+    const String ob = p.getString("base",  "");
+    const String om = p.getString("model", "");
+    const String ok = p.getString("key",   "");
+    const String nb = base  ? String(base)  : String("");
+    const String nm = model ? String(model) : String("");
+    const String nk = key   ? String(key)   : String("");
+
+    /* stage + verify: a truncated write is detected before anything moves */
+    if (p.putString("base.tmp",  nb) == 0 ||
+        p.putString("model.tmp", nm) == 0 ||
+        p.putString("key.tmp",   nk) == 0 ||
+        p.getString("base.tmp",  "") != nb ||
+        p.getString("model.tmp", "") != nm ||
+        p.getString("key.tmp",   "") != nk) {
+        p.remove("base.tmp"); p.remove("model.tmp"); p.remove("key.tmp");
+        p.end();
+        Serial.println("[AI] save aborted: staging failed");
+        return false;
+    }
+
+    /* swap: putString on an existing key overwrites atomically per key */
+    if (p.putString("base",  nb) == 0 ||
+        p.putString("model", nm) == 0 ||
+        p.putString("key",   nk) == 0) {
+        /* rollback to the previous values (best effort) */
+        p.putString("base",  ob);
+        p.putString("model", om);
+        p.putString("key",   ok);
+        p.remove("base.tmp"); p.remove("model.tmp"); p.remove("key.tmp");
+        p.end();
+        Serial.println("[AI] save failed: previous config restored");
+        return false;
+    }
+
+    p.remove("base.tmp"); p.remove("model.tmp"); p.remove("key.tmp");
     p.end();
-    return b > 0 && m > 0 && k > 0;
+    return true;
 }
 
 bool openai_chat(const char *prompt, const char *base_url,
-                 const char *model, const char *api_key, string &out)
+                 const char *model, const char *api_key, string &out,
+                 uint32_t timeout_ms)
 {
     if (!prompt || !base_url || !model || !api_key) return false;
     if (!http_require_wifi("AI")) return false;
@@ -82,7 +120,7 @@ bool openai_chat(const char *prompt, const char *base_url,
     snprintf(auth, sizeof(auth), "Bearer %s", api_key);
 
     http_response_t resp = http_post(base_url, string(body),
-                                     "application/json", auth, 30000);
+                                     "application/json", auth, timeout_ms);
     free(body);
 
     if (!resp.success || resp.status_code != 200) {
