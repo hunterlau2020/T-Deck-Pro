@@ -117,30 +117,38 @@ static cJSON *ai_msg_add(cJSON *msgs, const char *role, const char *content)
  * The response's "usage" block is accumulated for a future statistics
  * screen. Fields are provider-specific (user requirement 2): EVERY field
  * is optional and read as 0 when absent, unknown extra fields ignored.
- * Storage: ONE NVS blob "stats" in namespace "ai_stats" - a single
- * putBytes commit per response instead of eight separate NVS writes
- * (copilot finding 1.10: write amplification). The RAM copy is guarded
- * by a mutex because chat-send and config-Test tasks may complete
- * concurrently (copilot finding 1.9: read-modify-write race).
+ * CHAT and TEST usage are kept SEPARATE (main review 1.4: Test pings
+ * also bill the account, users must not see them mixed into chat totals).
+ * Storage: ONE NVS blob "stats" in namespace "ai_stats". The RAM copy is
+ * guarded by a mutex because chat-send and config-Test tasks may complete
+ * concurrently (copilot finding 1.9: read-modify-write race). The mutex
+ * is created STATICALLY at load time - a lazily created handle has its
+ * own first-use race when two tasks both see NULL (copilot finding 1.3).
+ * Persistence is THROTTLED (main review 1.3): at most one blob commit
+ * per 60 s or per 20 responses, so a burst of Test pings does not wear
+ * NVS; up to the throttle window of deltas may be lost on power loss,
+ * RAM totals are always current.
  * The counters are NEVER reset by the chat "New" button - they are usage
  * accounting, not conversation data. */
 #define AI_STATS_MAGIC 0x53544154u  /* "STAT" */
 
 typedef struct {
     uint32_t magic;
-    uint64_t p_tok;         /* usage.prompt_tokens */
-    uint64_t c_tok;         /* usage.completion_tokens */
-    uint64_t tot_tok;       /* usage.total_tokens */
-    double   cost;          /* usage.cost */
-    uint64_t cached;        /* prompt_tokens_details.cached_tokens */
-    uint64_t cwrite;        /* prompt_tokens_details.cache_write_tokens */
-    uint64_t audio;         /* prompt_tokens_details.audio_tokens */
-    uint64_t reasoning;     /* completion_tokens_details.reasoning_tokens */
+    /* chat */
+    uint64_t p_tok, c_tok, tot_tok, cached, cwrite, audio, reasoning;
+    double   cost;
+    /* test (config screen pings) */
+    uint64_t t_p_tok, t_c_tok, t_tot_tok, t_cached, t_cwrite, t_audio, t_reasoning;
+    double   t_cost;
 } ai_stats_t;
 
-static SemaphoreHandle_t s_ai_stats_mux = NULL;
+static StaticSemaphore_t s_ai_stats_mux_buf;
+static SemaphoreHandle_t s_ai_stats_mux =
+    xSemaphoreCreateMutexStatic(&s_ai_stats_mux_buf);  /* static init: no lazy-creation race */
 static ai_stats_t s_ai_stats;
 static bool s_ai_stats_loaded = false;
+static uint32_t s_stats_since_persist = 0;      /* responses since last blob commit */
+static uint32_t s_stats_last_persist_ms = 0;
 
 static uint64_t ai_json_u64(cJSON *obj, const char *key)
 {
@@ -171,7 +179,7 @@ static void ai_stats_load_locked(void)
     s_ai_stats_loaded = true;
 }
 
-static void ai_usage_accumulate(cJSON *root)
+static void ai_usage_accumulate(cJSON *root, bool is_test)
 {
     cJSON *usage = cJSON_GetObjectItem(root, "usage");
     if (!usage) return;                 /* absent: nothing to count */
@@ -188,43 +196,65 @@ static void ai_usage_accumulate(cJSON *root)
     const uint64_t audio  = pd ? ai_json_u64(pd, "audio_tokens") : 0;
     const uint64_t reason = cd ? ai_json_u64(cd, "reasoning_tokens") : 0;
 
-    if (!s_ai_stats_mux) s_ai_stats_mux = xSemaphoreCreateMutex();
-    if (!s_ai_stats_mux) return;
     if (xSemaphoreTake(s_ai_stats_mux, portMAX_DELAY) != pdTRUE) return;
 
     ai_stats_load_locked();
-    s_ai_stats.p_tok     += p_tok;
-    s_ai_stats.c_tok     += c_tok;
-    s_ai_stats.tot_tok   += tot;
-    s_ai_stats.cost      += cost;
-    s_ai_stats.cached    += cached;
-    s_ai_stats.cwrite    += cwrite;
-    s_ai_stats.audio     += audio;
-    s_ai_stats.reasoning += reason;
+    if (is_test) {
+        s_ai_stats.t_p_tok     += p_tok;
+        s_ai_stats.t_c_tok     += c_tok;
+        s_ai_stats.t_tot_tok   += tot;
+        s_ai_stats.t_cost      += cost;
+        s_ai_stats.t_cached    += cached;
+        s_ai_stats.t_cwrite    += cwrite;
+        s_ai_stats.t_audio     += audio;
+        s_ai_stats.t_reasoning += reason;
+    } else {
+        s_ai_stats.p_tok     += p_tok;
+        s_ai_stats.c_tok     += c_tok;
+        s_ai_stats.tot_tok   += tot;
+        s_ai_stats.cost      += cost;
+        s_ai_stats.cached    += cached;
+        s_ai_stats.cwrite    += cwrite;
+        s_ai_stats.audio     += audio;
+        s_ai_stats.reasoning += reason;
+    }
 
-    /* ONE blob commit per response; a failed begin/write is logged and
-     * the RAM totals stay correct for the next flush */
+    /* THROTTLED blob commit (main review 1.3): every 20 responses or
+     * every 60 s, not on every response - a Test-ping burst must not
+     * wear the NVS. RAM totals are always current. */
+    s_stats_since_persist++;
+    const uint32_t now = millis();
+    const bool due = (s_stats_since_persist >= 20) ||
+                     (now - s_stats_last_persist_ms >= 60000);
     bool saved = false;
-    Preferences p;
-    if (p.begin("ai_stats", false)) {
-        saved = p.putBytes("stats", &s_ai_stats, sizeof(s_ai_stats)) == sizeof(s_ai_stats);
-        p.end();
-    }
-    if (!saved) {
-        Serial.println("[AI] stats persist failed - totals stay in RAM");
+    if (due) {
+        Preferences p;
+        if (p.begin("ai_stats", false)) {
+            saved = p.putBytes("stats", &s_ai_stats, sizeof(s_ai_stats)) == sizeof(s_ai_stats);
+            p.end();
+        }
+        if (!saved) {
+            Serial.println("[AI] stats persist failed - totals stay in RAM");
+        }
+        s_stats_since_persist = 0;
+        s_stats_last_persist_ms = now;
     }
 
-    Serial.printf("[AI] usage +%llu/%llu tok, cost +%.8f | totals %llu/%llu, %.6f%s\n",
+    Serial.printf("[AI] usage%s +%llu/%llu tok, cost +%.8f | chat %llu/%llu %.6f | test %llu/%llu %.6f%s\n",
+                  is_test ? "(test)" : "",
                   (unsigned long long)p_tok, (unsigned long long)c_tok, cost,
                   (unsigned long long)s_ai_stats.p_tok, (unsigned long long)s_ai_stats.c_tok,
-                  s_ai_stats.cost, saved ? "" : " (unsaved)");
+                  s_ai_stats.cost,
+                  (unsigned long long)s_ai_stats.t_p_tok, (unsigned long long)s_ai_stats.t_c_tok,
+                  s_ai_stats.t_cost,
+                  saved ? "" : (due ? " (unsaved)" : " (ram)"));
     xSemaphoreGive(s_ai_stats_mux);
 }
 
-bool openai_chat_multi(const ai_message_t *history, int history_count,
-                       const char *prompt, const char *base_url,
-                       const char *model, const char *api_key, string &out,
-                       uint32_t timeout_ms)
+static bool openai_chat_impl(const ai_message_t *history, int history_count,
+                             const char *prompt, const char *base_url,
+                             const char *model, const char *api_key, string &out,
+                             uint32_t timeout_ms, bool is_test)
 {
     if (!prompt || !base_url || !model || !api_key) return false;
     if (!http_require_wifi("AI")) return false;
@@ -283,7 +313,7 @@ bool openai_chat_multi(const ai_message_t *history, int history_count,
     /* Parse choices[0].message.content */
     cJSON *j = cJSON_Parse(resp.body.c_str());
     if (!j) return false;
-    ai_usage_accumulate(j);             /* count usage whenever it is present */
+    ai_usage_accumulate(j, is_test);    /* count usage whenever it is present */
     cJSON *choices = cJSON_GetObjectItem(j, "choices");
     cJSON *c0 = choices ? cJSON_GetArrayItem(choices, 0) : NULL;
     cJSON *msg0 = c0 ? cJSON_GetObjectItem(c0, "message") : NULL;
@@ -294,11 +324,22 @@ bool openai_chat_multi(const ai_message_t *history, int history_count,
     return ok;
 }
 
+bool openai_chat_multi(const ai_message_t *history, int history_count,
+                       const char *prompt, const char *base_url,
+                       const char *model, const char *api_key, string &out,
+                       uint32_t timeout_ms)
+{
+    /* chat path: usage goes into the CHAT counters */
+    return openai_chat_impl(history, history_count, prompt, base_url, model,
+                            api_key, out, timeout_ms, false);
+}
+
 bool openai_chat(const char *prompt, const char *base_url,
                  const char *model, const char *api_key, string &out,
                  uint32_t timeout_ms)
 {
-    /* single-turn wrapper (e.g. the AI Config Test ping) */
-    return openai_chat_multi(NULL, 0, prompt, base_url, model, api_key,
-                             out, timeout_ms);
+    /* single-turn wrapper (AI Config Test ping): usage goes into the
+     * separate TEST counters (main review 1.4) */
+    return openai_chat_impl(NULL, 0, prompt, base_url, model, api_key,
+                            out, timeout_ms, true);
 }
