@@ -1783,6 +1783,11 @@ static volatile uint32_t s_scan_done_cnt = 0;     // increments on every SCAN_DO
 static bool s_scan_event_registered = false;
 static bool s_scan_release_pending = false;       // aborted scan's SCAN_DONE still missing
 static uint32_t s_scan_release_target = 0;        // cnt at abort; an event past it clears pending
+/* The callback runs on the WiFi event task, the UI polls from the main
+ * loop: cnt/pending/target are shared state and must be touched inside
+ * this critical section (copilot finding 1.3: unsynchronized reads can
+ * miss a publish/callback race). Serial is NOT used inside the section. */
+static portMUX_TYPE s_scan_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /* Framework event order (WiFiGenericClass::_eventCallback): the internal
  * WiFiScanClass::_scanDone() runs FIRST (allocates + fills the results),
@@ -1793,9 +1798,15 @@ static uint32_t s_scan_release_target = 0;        // cnt at abort; an event past
  * (copilot finding 1.3: retry must not re-baseline the wait). */
 static void wifi_scan_done_cb(arduino_event_id_t event, arduino_event_info_t info)
 {
+    bool release = false;
+    portENTER_CRITICAL(&s_scan_mux);
     s_scan_done_cnt++;
     if (s_scan_release_pending && s_scan_done_cnt > s_scan_release_target) {
         s_scan_release_pending = false;
+        release = true;
+    }
+    portEXIT_CRITICAL(&s_scan_mux);
+    if (release) {
         Serial.println("[WiFi] deferred release satisfied");
     }
 }
@@ -2293,17 +2304,28 @@ static void exit4_1(void) { ui_disp_full_refr(); }
 static void wifi_cfg_scan_abort(void)
 {
     if (wifi_scan_state != WIFI_SCAN_RUNNING) return;
-    uint32_t prev = s_scan_done_cnt;
+
+    /* Copilot 1.3: publish the release target BEFORE stopping the scan,
+     * then re-check the counter. An event landing between the previous
+     * judgement and the publish either passes the re-check or arrives
+     * after the publish and is cleared by the callback - the pending
+     * state can no longer be wedged by an already-past event. */
+    portENTER_CRITICAL(&s_scan_mux);
+    s_scan_release_target = s_scan_done_cnt;
+    s_scan_release_pending = true;
+    if (s_scan_done_cnt > s_scan_release_target) {
+        s_scan_release_pending = false;         /* event beat us to the publish */
+    }
+    portEXIT_CRITICAL(&s_scan_mux);
+
     esp_wifi_scan_stop();
     uint32_t t0 = millis();
-    while (s_scan_done_cnt == prev && millis() - t0 < 3000) {
+    while (s_scan_release_pending && millis() - t0 < 3000) {
         delay(1);
     }
-    if (s_scan_done_cnt != prev) {
-        WiFi.scanDelete();
+    if (!s_scan_release_pending) {
+        WiFi.scanDelete();                      /* SCAN_DONE observed; safe to release */
     } else {
-        s_scan_release_pending = true;
-        s_scan_release_target = prev;          /* the event we are waiting for */
         Serial.println("[WiFi] scan abort timeout - release deferred");
     }
     wifi_scan_state = WIFI_SCAN_FAILED;
