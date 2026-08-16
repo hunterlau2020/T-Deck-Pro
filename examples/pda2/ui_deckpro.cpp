@@ -3815,7 +3815,10 @@ static scr_lifecycle_t screen10 = {
 //************************************[ screen 11 ]****************************************** Sleep
 #if 1
 #include <TouchDrvCSTXXX.hpp>
-static lv_timer_t *sleep_timer = NULL;      /* handle saved so exit11 can cancel */
+static lv_timer_t *sleep_timer = NULL;      /* countdown; handle saved so exit11 can cancel */
+static lv_timer_t *sleep_watch_timer = NULL;/* waits for THIS frame's flush, then starts countdown */
+static uint32_t sleep_wait_seq = 0;         /* flush sequence bound to this Sleep frame */
+static int sleep_watch_ticks = 0;           /* 50 ms ticks; 60 = 3 s backstop */
 static lv_obj_t *sleep_count_lab = NULL;
 static int sleep_countdown = 0;
 
@@ -3891,34 +3894,62 @@ static void create11(lv_obj_t *parent)
     // back (cancels the pending sleep)
     scr_back_btn_create(parent, "Sleep", scr11_btn_event_cb);
 }
+/* 50 ms ticks from the NORMAL LVGL timer loop: wait until the Sleep
+ * frame's OWN flush sequence reached the panel, then start the countdown.
+ * entry() runs BEFORE lv_scr_load() in scr_mgr_push, so a synchronous
+ * wait there would watch the previous screen's frame AND re-enter LVGL
+ * from a lifecycle callback (copilot finding 1.2). 60 ticks = 3 s
+ * backstop in case the flush path stalls. */
+static void sleep_watch_timer_event(lv_timer_t *t)
+{
+    if (sleep_watch_timer == NULL) return;      /* cancelled */
+    if (ui_disp_flush_done_seq() >= sleep_wait_seq || ++sleep_watch_ticks >= 60) {
+        sleep_watch_timer = NULL;
+        lv_timer_del(t);
+        sleep_countdown = 2;                    /* 2 ticks -> sleep after ~3 s */
+        sleep_timer = lv_timer_create(sleep_timer_event, 1000, NULL);
+        if (sleep_timer) {
+            lv_timer_set_repeat_count(sleep_timer, 4);  /* backstop: never fires forever */
+        }
+    }
+}
+
 static void entry11(void)
 {
-    /* Wait until the prompt frame actually REACHED the panel: the EPD full
-     * refresh takes 1-2 s, so starting the countdown from "refresh
-     * requested" would shorten the visible time (copilot finding 1.4). */
-    ui_disp_full_refr_sync();
-    sleep_countdown = 2;                        /* 2 ticks -> sleep after ~3s */
+    /* request the full refresh and BIND the wait to this frame's sequence:
+     * only the flush of the Sleep screen itself satisfies the watcher */
+    sleep_wait_seq = ui_disp_full_refr_seq();
+    sleep_watch_ticks = 0;
     /* defensive order (main review 1.7): del + NULL before create, so a
      * re-entry can never hold a stale handle; no nested Sleep screen is
      * possible, but the cleanup must stay double-free-safe */
+    if (sleep_watch_timer) {
+        lv_timer_del(sleep_watch_timer);
+        sleep_watch_timer = NULL;
+    }
     if (sleep_timer) {
         lv_timer_del(sleep_timer);
         sleep_timer = NULL;
     }
-    sleep_timer = lv_timer_create(sleep_timer_event, 1000, NULL);
-    if (sleep_timer) {
-        lv_timer_set_repeat_count(sleep_timer, 4);  /* backstop: never fires forever */
-    }
+    sleep_watch_timer = lv_timer_create(sleep_watch_timer_event, 50, NULL);
 }
 static void exit11(void) {
     ui_disp_full_refr();
+    if (sleep_watch_timer) {
+        lv_timer_del(sleep_watch_timer);        /* back pressed: cancel sleep */
+        sleep_watch_timer = NULL;
+    }
     if (sleep_timer) {
-        lv_timer_del(sleep_timer);              /* back pressed: cancel sleep */
+        lv_timer_del(sleep_timer);
         sleep_timer = NULL;
     }
 }
 static void destroy11(void)
 {
+    if (sleep_watch_timer) {
+        lv_timer_del(sleep_watch_timer);
+        sleep_watch_timer = NULL;
+    }
     if (sleep_timer) {
         lv_timer_del(sleep_timer);
         sleep_timer = NULL;

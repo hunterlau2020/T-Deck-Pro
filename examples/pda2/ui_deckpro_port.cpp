@@ -33,13 +33,20 @@ void ui_disp_full_refr(void)
     disp_full_refr();
 }
 
-/* Full refresh that BLOCKS until the frame has actually reached the EPD
- * panel (full waveform refresh takes 1-2 s). Use where timing must start
- * from "display complete" rather than "refresh requested", e.g. the Sleep
- * countdown (copilot finding 1.4). Not for use inside LVGL callbacks. */
-void ui_disp_full_refr_sync(void)
+/* Frame-bound full refresh (copilot finding 1.2): returns the sequence
+ * of THIS request; the caller compares it against ui_disp_flush_done_seq()
+ * from a normal LVGL timer tick. Never pump lv_task_handler() from a
+ * screen lifecycle callback - in scr_mgr_push the entry() runs BEFORE
+ * lv_scr_load(), so a synchronous wait would watch the previous screen's
+ * frame and re-enter LVGL. */
+uint32_t ui_disp_full_refr_seq(void)
 {
-    disp_full_refr_wait(5000);
+    return disp_full_refr_seq();
+}
+
+uint32_t ui_disp_flush_done_seq(void)
+{
+    return disp_flush_seq_done();
 }
 //************************************[ screen 0 ]****************************************** menu
 //************************************[ screen 1 ]****************************************** lora

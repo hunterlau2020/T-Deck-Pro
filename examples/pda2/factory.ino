@@ -58,11 +58,14 @@ InkDisplay *display = &display_v1_1;
 uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
 int disp_refr_mode = DISP_REFR_MODE_PART;
-/* Set by disp_full_refr(), cleared when a FULL-mode flush has actually
- * reached the panel (either via the LVGL flush cb or the flush timer).
- * Lets callers wait for "display complete" instead of "refresh requested"
- * (copilot finding 1.4: the EPD full refresh takes 1-2 s). */
-static volatile bool disp_flush_pending = false;
+/* Full-refresh SEQUENCING (copilot finding 1.2): disp_full_refr() bumps
+ * the request sequence; flush_epd_bitmap() copies it to the done sequence
+ * when a FULL-mode flush actually reaches the panel (EPD full refresh
+ * takes 1-2 s). A waiter compares the sequence it requested against the
+ * done sequence - it can only be satisfied by ITS OWN frame, never by a
+ * leftover flush of a previous screen. */
+static volatile uint32_t disp_flush_req_seq = 0;
+static volatile uint32_t disp_flush_done_seq = 0;
 
 uint8_t isT_Deck_Pro_v1_1 = 0;
 const char Version_str1[] = "T-Deck-Pro V1.0";
@@ -222,7 +225,7 @@ static void flush_epd_bitmap(const lv_area_t *area)
     display->powerOff();
     shared_spi_unlock();
     if (full) {
-        disp_flush_pending = false;     /* the full refresh reached the panel */
+        disp_flush_done_seq = disp_flush_req_seq;   /* THIS frame reached the panel */
     }
 }
 
@@ -771,20 +774,24 @@ void loop()
 void disp_full_refr(void)
 {
     disp_refr_mode = DISP_REFR_MODE_FULL;
-    disp_flush_pending = true;
+    disp_flush_req_seq++;
 }
 
-/* Request a full refresh and wait until it has actually reached the panel
- * (bounded). Pumps lv_task_handler so the flush timer can run; callers
- * must NOT be inside an LVGL timer callback when using this. */
-void disp_full_refr_wait(uint32_t timeout_ms)
+/* Request a full refresh and return the sequence of THIS request. The
+ * caller later compares it against disp_flush_seq_done() from a normal
+ * LVGL timer tick - never by pumping lv_task_handler() from a lifecycle
+ * callback (that would re-enter LVGL and watch the WRONG screen: in
+ * scr_mgr_push the entry() runs before lv_scr_load()). */
+uint32_t disp_full_refr_seq(void)
 {
     disp_full_refr();
-    uint32_t t0 = millis();
-    while (disp_flush_pending && millis() - t0 < timeout_ms) {
-        lv_task_handler();
-        delay(5);
-    }
+    return disp_flush_req_seq;
+}
+
+/* Sequence of the last FULL-mode flush that reached the panel. */
+uint32_t disp_flush_seq_done(void)
+{
+    return disp_flush_done_seq;
 }
 
 
