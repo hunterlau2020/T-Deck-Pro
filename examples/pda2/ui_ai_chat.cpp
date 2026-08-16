@@ -63,6 +63,7 @@
 #define CHAT_TRUNC_MARK  "(truncated)"
 #define CHAT_LOG_PATH    "/chat.log"
 #define CHAT_LOG_TMP     "/chat.log.tmp"
+#define CHAT_LOG_BAK     "/chat.log.bak"
 #define CHAT_DRAFT_PATH  "/chat.draft"
 #define CHAT_LOG_MAGIC   0x314C4843u    /* "CHL1" little-endian */
 
@@ -168,7 +169,10 @@ static void chat_history_add(bool from_user, const char *text)
  * after a reboot. */
 static void chat_log_save(void)
 {
-    if (!chat_spiffs_ok) return;
+    if (!chat_spiffs_ok) {
+        Serial.println("[AIChat] log save skipped: SPIFFS not ok");
+        return;
+    }
     File f = SPIFFS.open(CHAT_LOG_TMP, FILE_WRITE);
     if (!f) {
         Serial.println("[AIChat] log save: tmp open failed");
@@ -199,11 +203,29 @@ static void chat_log_save(void)
     }
     ok = ok && (f.write((uint8_t *)&sum, 4) == 4);
     f.close();
-    if (!ok || !SPIFFS.rename(CHAT_LOG_TMP, CHAT_LOG_PATH)) {
+    if (!ok) {
         SPIFFS.remove(CHAT_LOG_TMP);
-        Serial.println("[AIChat] log save failed - previous log kept");
+        Serial.println("[AIChat] log save failed (write) - previous log kept");
         return;
     }
+    /* swap-in: SPIFFS's rename FAILS when the destination exists, so the
+     * old log moves to .bak first, then the tmp becomes official, then
+     * the backup is dropped. A crash between the two renames leaves the
+     * backup intact and the loader recovers it. */
+    SPIFFS.remove(CHAT_LOG_BAK);
+    if (SPIFFS.exists(CHAT_LOG_PATH) &&
+        !SPIFFS.rename(CHAT_LOG_PATH, CHAT_LOG_BAK)) {
+        SPIFFS.remove(CHAT_LOG_TMP);
+        Serial.println("[AIChat] log save failed (bak) - previous log kept");
+        return;
+    }
+    if (!SPIFFS.rename(CHAT_LOG_TMP, CHAT_LOG_PATH)) {
+        if (SPIFFS.exists(CHAT_LOG_BAK)) SPIFFS.rename(CHAT_LOG_BAK, CHAT_LOG_PATH);
+        SPIFFS.remove(CHAT_LOG_TMP);
+        Serial.println("[AIChat] log save failed (rename) - previous log kept");
+        return;
+    }
+    SPIFFS.remove(CHAT_LOG_BAK);
     Serial.printf("[AIChat] log saved: %lu msgs\n", (unsigned long)count);
 }
 
@@ -217,9 +239,22 @@ static void chat_log_load(void)
         Serial.println("[AIChat] SPIFFS unavailable - history RAM-only");
         return;
     }
-    if (!SPIFFS.exists(CHAT_LOG_PATH)) return;
+    /* crash recovery: a swap-in interrupted between the two renames
+     * leaves the log only under .bak - promote it back */
+    if (!SPIFFS.exists(CHAT_LOG_PATH) && SPIFFS.exists(CHAT_LOG_BAK)) {
+        SPIFFS.rename(CHAT_LOG_BAK, CHAT_LOG_PATH);
+    }
+    if (!SPIFFS.exists(CHAT_LOG_PATH)) {
+        Serial.println("[AIChat] chat.log absent - fresh history");
+        return;
+    }
     File f = SPIFFS.open(CHAT_LOG_PATH, FILE_READ);
-    if (!f) return;
+    if (!f) {
+        Serial.println("[AIChat] chat.log open failed");
+        return;
+    }
+    Serial.printf("[AIChat] chat.log present, %u bytes\n",
+                  (unsigned)f.size());
 
     uint32_t magic = 0;
     if (f.available() < 8 || f.read((uint8_t *)&magic, 4) != 4 || magic != CHAT_LOG_MAGIC) {
