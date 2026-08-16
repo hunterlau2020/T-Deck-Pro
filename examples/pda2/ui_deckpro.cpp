@@ -1463,7 +1463,9 @@ static QueueHandle_t s_wifi_test_q = NULL;
 static QueueHandle_t s_time_sync_q = NULL;
 static volatile uint32_t s_wifi_page_gen = 0;   /* bumped on every page entry */
 static volatile bool s_wifi_test_busy = false;  /* UI-owned busy state */
+static uint32_t s_wifi_test_busy_gen = 0;       /* gen of the in-flight request */
 static volatile bool s_time_sync_busy = false;
+static uint32_t s_time_sync_busy_gen = 0;
 static lv_timer_t *wifi_test_timer = NULL;
 
 static bool wifi_test_ip_valid(const char *s)
@@ -1494,8 +1496,10 @@ static void wifi_page_timer_cb(lv_timer_t *t)
     time_sync_result_t *ts = NULL;
     while (s_time_sync_q && xQueueReceive(s_time_sync_q, &ts, 0) == pdTRUE) {
         if (!ts) continue;
+        /* release busy only when THIS request finished (review: a stale
+         * result must not unlock a newer in-flight request) */
+        if (ts->gen == s_time_sync_busy_gen) s_time_sync_busy = false;
         if (ts->gen == s_wifi_page_gen && wifi_test_active) {
-            s_time_sync_busy = false;
             struct tm tmb, tma;
             localtime_r(&ts->before, &tmb);
             localtime_r(&ts->after, &tma);
@@ -1527,8 +1531,8 @@ static void wifi_page_timer_cb(lv_timer_t *t)
     wifi_test_result_t *wr = NULL;
     while (s_wifi_test_q && xQueueReceive(s_wifi_test_q, &wr, 0) == pdTRUE) {
         if (!wr) continue;
+        if (wr->gen == s_wifi_test_busy_gen) s_wifi_test_busy = false;
         if (wr->gen == s_wifi_page_gen && wifi_test_active) {
-            s_wifi_test_busy = false;
             http_response_t resp = wr->resp;
             if (resp.success && resp.status_code == 200) {
                 char ip[80];
@@ -1577,9 +1581,14 @@ static void wifi_test_run(void)
     }
     if (s_wifi_test_busy) return;               /* already running */
     if (!s_wifi_test_q) s_wifi_test_q = xQueueCreate(4, sizeof(void *));
+    if (!s_wifi_test_q) {                       /* must not start without a queue */
+        wifi_test_show_result("WiFi Test", "Cannot start task");
+        return;
+    }
 
     wifi_test_show_result("WiFi Test", "Testing...");
     s_wifi_test_busy = true;
+    s_wifi_test_busy_gen = s_wifi_page_gen;
     TaskHandle_t h = NULL;
     if (xTaskCreate(wifi_test_task_func, "wifi_test", 1024 * 8,
                     (void *)(uintptr_t)s_wifi_page_gen, 1, &h) != pdPASS) {
@@ -1618,9 +1627,14 @@ static void time_sync_run(void)
     }
     if (s_time_sync_busy) return;               /* already running */
     if (!s_time_sync_q) s_time_sync_q = xQueueCreate(4, sizeof(void *));
+    if (!s_time_sync_q) {
+        wifi_test_show_result("Time Sync", "Cannot start task");
+        return;
+    }
 
     wifi_test_show_result("Time Sync", "Syncing...");
     s_time_sync_busy = true;
+    s_time_sync_busy_gen = s_wifi_page_gen;
     TaskHandle_t h = NULL;
     if (xTaskCreate(time_sync_task_func, "time_sync", 1024 * 4,
                     (void *)(uintptr_t)s_wifi_page_gen, 1, &h) != pdPASS) {
@@ -1768,15 +1782,22 @@ static uint8_t wifi_scan_pending_gen = 0;         // generation of the scan in f
 static volatile uint32_t s_scan_done_cnt = 0;     // increments on every SCAN_DONE event
 static bool s_scan_event_registered = false;
 static bool s_scan_release_pending = false;       // aborted scan's SCAN_DONE still missing
+static uint32_t s_scan_release_target = 0;        // cnt at abort; an event past it clears pending
 
 /* Framework event order (WiFiGenericClass::_eventCallback): the internal
  * WiFiScanClass::_scanDone() runs FIRST (allocates + fills the results),
  * user onEvent callbacks dispatch AFTER it. So once this fires, it is safe
  * to scanDelete() the results (review round 4 finding 1.2). The counter
- * binds waits to a specific event instead of a flag (review finding 1.3). */
+ * binds waits to a specific event instead of a flag (review finding 1.3);
+ * a late event arriving before the retry clears the pending state itself
+ * (copilot finding 1.3: retry must not re-baseline the wait). */
 static void wifi_scan_done_cb(arduino_event_id_t event, arduino_event_info_t info)
 {
     s_scan_done_cnt++;
+    if (s_scan_release_pending && s_scan_done_cnt > s_scan_release_target) {
+        s_scan_release_pending = false;
+        Serial.println("[WiFi] deferred release satisfied");
+    }
 }
 static char wifi_scan_ssids[UI_WIFI_SCAN_ITEM_MAX][33];
 static int  wifi_scan_cnt = 0;                  // visible SSIDs from last scan
@@ -1845,20 +1866,20 @@ static bool wifi_cfg_scan_start(void)
     if (s_scan_release_pending) {
         /* A previous aborted scan has not delivered its SCAN_DONE yet;
          * wait (bounded) for it before touching the framework results,
-         * otherwise scanDelete() races the late _scanDone() (review 1.3). */
-        uint32_t prev = s_scan_done_cnt;
+         * otherwise scanDelete() races the late _scanDone() (review 1.3).
+         * The event callback clears the pending state itself as soon as
+         * the target count is exceeded. */
         uint32_t t0 = millis();
-        while (s_scan_done_cnt == prev && millis() - t0 < 3000) {
+        while (s_scan_release_pending && millis() - t0 < 3000) {
             delay(1);
         }
-        if (s_scan_done_cnt == prev) {
+        if (s_scan_release_pending) {
             snprintf(wifi_status, sizeof(wifi_status), "Scan busy - retry");
             lv_label_set_text(wifi_status_lab, wifi_status);
             Serial.println("[WiFi] scan start blocked: previous SCAN_DONE pending");
             return false;
         }
-        WiFi.scanDelete();
-        s_scan_release_pending = false;
+        WiFi.scanDelete();                      /* event arrived; safe to release now */
     }
 
     wifi_scan_gen++;
@@ -2282,6 +2303,7 @@ static void wifi_cfg_scan_abort(void)
         WiFi.scanDelete();
     } else {
         s_scan_release_pending = true;
+        s_scan_release_target = prev;          /* the event we are waiting for */
         Serial.println("[WiFi] scan abort timeout - release deferred");
     }
     wifi_scan_state = WIFI_SCAN_FAILED;
