@@ -148,6 +148,12 @@
 - **现象**：`pio run -t upload` 在监视器后台运行时失败（端口被占），错误信息不明显
 - **规范**：烧录前先停掉 `pio device monitor` 后台任务，烧完再重启监视器（已记入 build-and-code-structure.md §8 与本清单）
 
+### 5.7 AI 语义与存储布局：设计稿落后于预研实现 ✅
+
+- **差异**：`allinone-design.md` §1/§4/§10 原定 "v1 单轮问答、多轮上下文列 v2"（体验评审 §1.7 决策）；pda2 预研随后落地多轮上下文（整轮配对 8KB）、聊天历史 SPIFFS 持久化（`/chat.log` 原子换入 + `/chat.draft` 草稿）、New 会话按钮、usage 统计（NVS `ai_stats` 单 blob）、AI 配置双槽原子保存、Test 改最小 chat-completion + 计费提示——设计稿与实现脱节
+- **修复（docs，2026-08-17）**：allinone-design 第三轮修订同步 §1 决策 / §4 AI 两节 / §2.3 CA（实装 5 根 + `ca_bundle_check.py`）/ §5.3 移植清单 / §10；CLAUDE.md 存储布局表更新（NVS `ai` 双槽 + `ai_stats` + `wifi`；SPIFFS `/chat.log` + `/chat.draft`）
+- **经验**：设计稿"AI 形态"类产品语义必须随预研每轮评审回写，否则 allinone 实施时按旧决策移植会退回到单轮
+
 ## 6. Shutdown 关机后的开机行为（2026-08-16 观察，⏳ 待继续观察）
 
 - **机制**：菜单 Shutdown = XPowersLib `shutdown()` = `BATFET_DIS`（BQ25896 强制断开电池供电通路，整机断电）；库注释声明"只能通过按 PWR 键或接入电源开机"

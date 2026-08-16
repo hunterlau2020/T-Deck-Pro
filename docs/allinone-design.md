@@ -3,6 +3,7 @@
 > 状态：**评审未通过**（2026-08-09）— 7 项新 finding 待修订（见 [评审结果](allinone-design-review-result.md)）
 > 原评审：2026-08-08 通过；2026-08-09 二次评审：5 项通过 / 4 项不通过 / 2 项缺证据；新增 2 High + 5 Medium
 > 日期：2026-08-07；**2026-08-16 两轮修订**：① 按 pda2 预研最新结论修订（键盘修饰键模型、WiFi 配置屏设计、扫描生命周期、WiFi Test、AI 输入体验——预研经 11 轮评审 + 真机验证，记录见 `docs/reviews/`）；② **AI 对话/配置交互按两份专项评审重写**（[技术评审](reviews/allinone-ai-interaction-review-result.md) 9 项 + [产品体验评审](reviews/allinone-design-ai-ux-flow-review-result.md) 10 项 + 状态机，§4 AI 两节）
+> **2026-08-17 第三轮修订**：按 pda2 预研最终实现（第 17-22 轮评审整改后）同步 AI 章节——**多轮上下文已在预研落地（不再是 v2）**、聊天历史 SPIFFS 持久化 + 原子写、New 会话按钮 + 确认框、usage 用量统计（NVS blob）、AI 配置双槽原子保存、Test 改最小 chat-completion + 计费提示；CA bundle 实装 5 根 + Python 检查脚本。allinone 实施时直接移植这些成熟实现，不再另行设计。
 > 相关文档：[代码结构与编译方法](build-and-code-structure.md)、[评审申请书](allinone-design-review-request.md)、[评审结果](allinone-design-review-result.md)
 
 ## 1. 背景与目标
@@ -23,7 +24,7 @@
 - **MP3 来源**：SD 卡本地文件（非 SPIFFS、非网络流）。
 - **网络功能形态**：调用在线词典接口 `api.dictionaryapi.dev/api/v2/entries/en/<word>`。
 - **组织方式**：新建独立示例 `examples/allinone`（不动现有 `pda2`/`factory`）。
-- **AI 形态**：仅**文本对话**，不做语音（国内大模型聊天接口不收音频，ASR 成本高）。**v1 为单轮问答**（发送只带当前问题，无多轮上下文，页面明示；多轮上下文列为 v2——体验评审 §1.7 决策）。
+- **AI 形态**：仅**文本对话**，不做语音（国内大模型聊天接口不收音频，ASR 成本高）。~~v1 为单轮问答~~ → **2026-08-17 修订**：多轮上下文已在 pda2 预研实现并上机（messages = system + 最近历史轮次 + 当前问题），allinone 直接移植；上下文窗口 = 最近 8KB 按整轮配对（user+assistant 成对，最旧先裁，孤立 assistant 不入选，UI 标记剔除）——体验评审 §1.7 的"多轮 v2"决策作废。
 - **配置方式**：WiFi 与 AI 端点（URL/模型/Key）全部**运行时 NVS 可配置**（`Preferences`），不再依赖编译期 `config_keys.h`。
 - **AI 平台**：对接 **OpenRouter**（`https://openrouter.ai/api/v1/chat/completions`，OpenAI 兼容），**模型手动输入**（如 `deepseek/deepseek-chat`、`openai/gpt-4o`），不做厂商预置快捷项；端点保留可改（兼容国内厂商自建端点）。
 - **keypad 修饰键（预研结论，2026-08-16 修订）**：HD-V2 硬件实测（串口矩阵解码）——**无 Ctrl 键**；Z 行最左键丝印为 **Alt(2,0)**，底行有两个 **Shift**（(3,5)/(3,9)），Sym(3,8)。语义（产品决策 B，评审采纳）：
@@ -63,15 +64,14 @@
 > - Let's Encrypt 端点（如自建 reverse proxy、Cloudflare 部分边缘节点）：**ISRG Root X1** + **IdenTrust Commercial Root CA 1**（ISRG X1 的 cross-sign，2024-09 之前是大多数 LE 中间链 root）。
 > - GlobalSign：保留 **GlobalSign Root R3**（R1 cross-signed by GTS，R5/R6 较新但签发链短）。实际抓链时若发现 cert 用 GTS 中间签发，验证 GTS Root R1/R3/R4 即可。
 >
-> 最终 `CA_BUNDLE` 必须包含（顺序无关，mbedtls 会逐一尝试）：
-> 1. `GTS Root R1`（pem）
-> 2. `GTS Root R3`（pem）
-> 3. `GTS Root R4`（pem，**#2.1 修订新增**）
-> 4. `ISRG Root X1`（pem）
-> 5. `IdenTrust Commercial Root CA 1`（pem，ISRG cross-sign）
-> 6. `GlobalSign Root R3`（pem）
+> **pda2 实装 bundle（2026-08-17 修订，allinone 直接复制 `http_utils.cpp::CA_BUNDLE`）**——经真机调通验证的 5 根：
+> 1. `ISRG Root X1`（Let's Encrypt）
+> 2. `ISRG Root YR`（LE 2026 新层级，ifconfig.me 实际链）
+> 3. `DigiCert Global Root G2`
+> 4. `GlobalSign Root R3`
+> 5. `GTS Root R4`（openrouter.ai 现链）
 >
-> **bundle 维护流程**：每次更换默认端点前必须用 `openssl s_client -connect <host>:443 -showcerts </dev/null` 抓取完整链，对照 [ccadb](https://ccadb.my.salesforce.com/) 与 [chrome root store](https://chromium.googlesource.com/chromium/src/+/main/net/data/ssl/chrome_root_store/root_store.md) 确认每个 intermediate 的 root 在 bundle 内；抓取脚本与最后验证日期写入 `examples/pda2/scripts/ca_bundle_check.sh`（**实施时新建**），作为 CI smoke test。**当前抓链结果（评审 #2.1 验收）**：
+> **bundle 维护流程**：每次更换默认端点前必须用 `openssl s_client -connect <host>:443 -showcerts </dev/null` 抓取完整链，对照 [ccadb](https://ccadb.my.salesforce.com/) 与 [chrome root store](https://chromium.googlesource.com/chromium/src/+/main/net/data/ssl/chrome_root_store/root_store.md) 确认每个 intermediate 的 root 在 bundle 内。**检查脚本已实施**：`examples/pda2/scripts/ca_bundle_check.py`（shell 包装 `ca_bundle_check.sh`）——从源码字节级提取每张 PEM，`openssl x509` 逐张解析，任一失败即中止；启动时检查 openssl 依赖。运行 `python examples/pda2/scripts/ca_bundle_check.py` 应得 5×OK。**当前抓链结果（评审 #2.1 验收）**：
 > - `openssl s_client -connect openrouter.ai:443 -showcerts` 链路：`*.openrouter.ai ← GTS CA 1C3 ← GTS Root R3`（同时也常伴随 `GTS CA 1P5 ← GTS Root R4`），bundle 中 R3 + R4 必须有
 > - `openssl s_client -connect dictionaryapi.dev:443 -showcerts` 链路：`*.dictionaryapi.dev ← GTS CA 1C3 ← GTS Root R3`（或 `GTS Root R1` via cross-sign），R1 + R3 必须有
 > - 抓链命令与最后验证日期（**实施时填**）：`date -u "+%Y-%m-%d"`，写入 `ca_bundle_check.sh` 注释
@@ -157,11 +157,11 @@ keypad 三层——普通层小写 a-z + 空格 + `\n`/`\b`（`peri_keypad.cpp::
 - **焦点同步（pda2 有触摸）**：textarea `LV_EVENT_FOCUSED` 回调同步 `wifi_cfg_field`，触摸点框与键盘编辑目标一致；allinone 无触摸则无此需求。
 - 开机：读 NVS，有凭据则自动 `WiFi.begin` + `setAutoReconnect(true)`；无凭据则菜单 WiFi 按钮旁显示 `!`，词典/AI 请求时 `http_require_wifi` 失败提示"先配置 WiFi"。
 
-### AI 对话屏交互（2026-08-16 修订——依据 [技术评审](reviews/allinone-ai-interaction-review-result.md) 9 项 + [产品体验评审](reviews/allinone-design-ai-ux-flow-review-result.md) 10 项 Findings）
+### AI 对话屏交互（2026-08-16 修订——依据 [技术评审](reviews/allinone-ai-interaction-review-result.md) 9 项 + [产品体验评审](reviews/allinone-design-ai-ux-flow-review-result.md) 10 项 Findings；**2026-08-17 按 pda2 最终实现二次修订**）
 
-- **产品语义（明确决策）**：**v1 为单轮问答**——每次发送只携带当前问题（无多轮上下文）；页面标题与提示明示 "Single-shot Q&A"（体验评审 §1.7）。多轮上下文列为 v2。
+- **产品语义（2026-08-17 修订）**：~~v1 单轮问答~~ → **多轮对话**。每次发送携带最近 8KB 历史（整轮配对，见 §1 决策），AI 对会话有真实记忆；历史在设备端持久化（SPIFFS `/chat.log`，原子换入 + 校验和），重启后恢复并立即渲染；**New 按钮**（确认框：Enter=OK / 任意键=Cancel）清空会话（usage 统计不受影响）。
 - **状态条**（常显一行，超宽省略中间保留末尾）：`M: <model> · <host> · Key: ****<末4位>`——用户随时知道当前生效配置，多人共用设备不误发（体验评审 §1.1）。
-- **chat_draft 草稿契约**（体验评审 §1.2）：独立草稿缓存，**发送成功才清空**；任何失败、退屏、跳配置页均保留；下次进屏且输入框为空时自动恢复；超长草稿不得因缓冲限制静默截断（上限 2000 字节，超限提示）。
+- **chat_draft 草稿契约**（体验评审 §1.2；**2026-08-17 落地细节**）：独立草稿缓存，**发送成功才清空**；任何失败、退屏、跳配置页均保留；下次进屏时自动恢复（pda2：失败时草稿持久化到 SPIFFS `/chat.draft`，重启后恢复；成功/New 清除）。超长草稿不得因缓冲限制静默截断（上限 2000 字节，超限提示）。
 - **异步发送**（技术评审 §1.5）：`openai_chat` 在 **FreeRTOS 任务**中执行（HTTP 15-30s 不冻结 UI）；结果经消息队列送回 LVGL 线程；**发送代次校验**——取消/离页后的迟到结果丢弃；发送期间按键 FIFO **清空**（不批量注入输入框，体验评审 §1.6）；Enter 防抖（发送态重复 Enter 忽略）。
 - **状态机**（体验评审 §3.2）：
 
@@ -199,7 +199,7 @@ keypad 三层——普通层小写 a-z + 空格 + `\n`/`\b`（`peri_keypad.cpp::
 - **TLS 模式为第四字段**（技术评审 §1.4）：键盘可达枚举（CA Verify / Insecure）；切 Insecure 前显示风险确认行；页内持续显示 `⚠️ TLS bypass` 警告；**语义明确为会话级**（仅本次会话生效，不写 NVS——文档不再承诺持久化开关）。词典请求仍强制 CA 验证。
 - 保存：NVS namespace `ai`（`endpoint`/`model`/`key`），**仅 CONFIRM_SAVE 通过后写入**；Key 不打印到日志。
 
-> **pda2 预研实现状态（2026-08-16，供 allinone 移植对照）**：预研版实现了简化子集——三独立输入框（Base 多行 / Model / Key）、Save / Test 按钮（Test = GET `/models?limit=2` 显示 `data[0].id`，msgbox 倒计时 + Close）、异步 Test 与异步发送（FreeRTOS 任务 + 轮询，UI 不冻结）、草稿保留 + 触摸焦点同步、Base/Model/Key 固件默认值（NVS 优先）、请求体含 system 提示（KET English examiner）+ temperature 0.7 + reasoning.exclude。**未实现**：CONFIRM_SAVE 二次确认、CONFIRM_DISCARD、Key 掩码/Reveal、历史记录、错误分类表——allinone 实施时按本节状态机补齐。
+> **pda2 预研实现状态（2026-08-17 最终版，供 allinone 移植对照）**：三独立输入框（Base 多行 / Model / Key）+ Save / Test 按钮；**Test = 最小 chat-completion**（`openai_chat("ping")`，msgbox 明示 `costs ~1 token (network+auth only)`，15s 绝对 deadline = HTTP 10s + NTP 5s，Close/超时递增请求代次丢迟到结果）；**Save 门槛** = Test 通过 + 状态行明示原因（`Run Test to enable Save` / 编辑后失活）；**NVS 双槽原子保存**（暂存非活动槽 + 读回校验 + 单键 `active` 翻转提交，失败出参 err → msgbox 显示原因；isKey 判定槽初始化，空 Base 原样读回）；异步 IPC 契约（任务自有快照 + 队列 + 代次 + busy 代次）；请求体含 system 提示（KET English examiner）+ temperature 0.7 + reasoning.exclude；**usage 统计**：response.usage 8 项指标（容错解析，字段缺失计 0）经 mutex 串行累加，单 blob 写入 NVS `ai_stats`（计数不随 New 清空）。**未实现**：CONFIRM_SAVE 二次确认、CONFIRM_DISCARD、Key 掩码/Reveal、历史记录、错误分类表——allinone 实施时按本节状态机补齐。
 
 ## 5. 文件清单
 
@@ -250,9 +250,9 @@ src/img_GPS.c  src/img_dictionary.c  src/img_touch.c  src/img_SD.c   # 4 个菜�
 | `ui_mp3.cpp` | `ensure_sd()`（`shared_spi_lock` + `SD.begin(48)`）、`scan_files()`、分页列表渲染、播放/暂停/切歌/音量、`void audio_eof_mp3(const char *info)` 强定义（评审 #7 修复：ESP32-audioI2S 的 `audio_eof_mp3` 弱回调实际签名带 `const char *info` 参数，写成无参绑定不到符号）、`mp3_keyboard_poll`、`scr_lifecycle_t screen_mp3` |
 | `ui_keypad.cpp` | 返回按钮 + 提示 + 回显标签、`keypadtest_keyboard_poll`（`\b` 返回菜单）、`scr_lifecycle_t screen_keypad` |
 | `ui_wifi_config.cpp` | **SSID `lv_textarea` + 编辑/扫描选择双模式**（预研结论，交互细则见 §4 WiFi 配置屏）：Alt+Enter/空框 Enter 异步扫描（`scanNetworks(true)` + `scanComplete()` 轮询 + 扫描代次失效 + 置顶倒计时覆盖层屏蔽输入 + 结果横幅）、`+`/`-` 循环候选、`\n` 提交、`\b` 删字/取消/返回；**密码 `lv_textarea`**：`\n` = **连接成功才存 NVS**（`Preferences` namespace `wifi`）、`\b` 退格/回 SSID；草稿保留（`refresh_labels`/`sync_draft` 分离）；触摸按钮 Connect/Clear（allinone 无触摸需键盘等价：Connect=密码框 Enter、Clear=Alt+Backspace 待定）；`wifi_cfg_keyboard_poll`、`scr_lifecycle_t screen_wifi` |
-| `ui_ai_chat.cpp` | 问题输入 + `\n` 发送 → `openai_chat()` → 分页显示回答、`ai_chat_keyboard_poll`（浏览回答时 `\n` 下一页/`\b` 回上一页或退出；**无 `c` 快捷键**，AI 配置走菜单）、`scr_lifecycle_t screen_ai_chat`。**预研补充（pda2 已实现）**：发送成功后清空输入框（浏览态 `\b` 语义无歧义）；浏览回答时按任意可见字符自动回输入模式并追加该字符（不静默丢弃）；`\t`（Alt+Enter）/`\v`（音量码）控制码显式忽略。**评审 #1.6 修订 + #2.4 二次修订 — UTF-8 安全分页**：必须按 **UTF-8 码点边界**断行，禁止 `strlen()/memcpy()` 字节切。<br>① 输入：`openai_chat()` 返回的字节流按 UTF-8 解码为 codepoint 序列；连续 ASCII 视为单列，连续 CJK/全角视为双列，emoji 按 `wcwidth()` 视为 2 列。<br>② 断行：从行首累计显示列数；下一个 codepoint 会让累计列数 **> 30 列**时，在该 codepoint 之前断行（即只切到 codepoint 边界，绝不在 continuation byte `0x80-0xBF` 中间断开）。<br>③ **LVGL 8.3.11 API 选型（评审 #2.4 修订）**：评审 #1.6 提到的 `lv_txt_get_next_line()` 在 LVGL 8.3.11 中**不存在**（实际是 private `_lv_txt_get_next_line()`，需 `#include "../src/misc/lv_txt.h"` 才能用）；`LV_LABEL_LONG_BREAK` 也是错记——**正确宏名是 `LV_LABEL_LONG_WRAP`**。<br>　　**推荐实现**：直接用 LVGL 公开 API：<br>　　```cpp<br>　　lv_obj_t *lbl = lv_label_create(parent);<br>　　lv_obj_set_width(lbl, LV_PCT(100));                    // 让 label 自适应父容器宽度<br>　　lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);        // 内部按字符宽度自动换行（含 CJK）<br>　　lv_label_set_text(lbl, full_answer);                    // 直接喂全文，LVGL 处理 wrap + UTF-8 码点边界<br>　　lv_label_set_recolor(lbl, false);                       // 关闭 recolor 避免 '$' 字符冲突<br>　　```<br>　　`LV_LABEL_LONG_WRAP` 在 LVGL 8.3.11 是稳定的 public API（声明于 `lvgl/src/widgets/lv_label.h`），不依赖任何私有符号；换行基于实际渲染字体像素宽度，中文/英文混合自动正确断行。<br>④ 显示宽度基准：EPD 240px ÷ 14pt 字体 ≈ 30 列（ASCII）/ 15 列（CJK），由 LVGL 根据 `lv_obj_set_width()` 自动决定每行字符数。<br>⑤ `(truncated)` 标记仍按字节截断位置放在末尾（4096B 缓冲满时）：检测 `body.size() >= CHAT_ANSWER_MAX` 时 `chat_truncated=true`，`chat_render` 末尾追加 `\n(truncated)`。 |
+| `ui_ai_chat.cpp` | **2026-08-17 修订（pda2 最终实现，照此移植）**：WeChat 式聊天界面——上 2/3 只读可滚动历史（气泡：AI 左对齐/用户右对齐，`LV_LABEL_LONG_WRAP` 按码点自动换行，渲染后滚底）+ 状态行 + 下 1/3 多行输入框（200 字符）+ 侧栏 Send/Clear/**New** 小按钮（New = 确认框后清空会话，键盘 Enter=OK/任意键=Cancel，Alt+Enter 打开）。消息正文 `std::string`（16KB 总预算从最旧淘汰；单条 4KB 上限为**唯一**截断点：UTF-8 码点回退 + `(truncated)` 标记）；SPIFFS `/chat.log` 持久化（临时文件 + 逐笔 write 检查 + 字节和校验 + rename 原子换入，load 校验 magic+checksum 整体接受/丢弃，`SPIFFS.begin(false)` 不自动格式化）+ `/chat.draft` 失败草稿持久化（重启恢复，成功/New 清除）；发送 = FreeRTOS 任务 + 队列 + 页面代次（任务持有 prompt/历史/配置**自有快照**）；失败重试**复用** pending 气泡（drop-last+re-add，标 `(failed)`，草稿保留）；多轮上下文按 §4 AI 对话屏语义（整轮配对 8KB）；`ai_chat_keyboard_poll`（`\n` 发送 / `\b` 删字或退屏 / `+`/`-` 滚历史 / `\t` New / `\v` 忽略）。 |
 | `ui_ai_cfg.cpp` | **四字段显式状态机**（端点/模型/Key/TLS，交互细则见 §4 AI 配置屏）：进入拍快照、Alt+方向键切字段、末字段 Enter 进 CONFIRM_SAVE 二次确认（Test 通过才允许保存，失败不写 NVS）、Backspace 退屏走 CONFIRM_DISCARD、Alt+T Test（`GET /models` 按错误分类表显示）、Alt+R Key 明文 Reveal（5s 自动掩码，离开字段强制全刷）、Key 掩码 `****<末4位>`、最近 3 次端点/模型历史、Alt+0 Reset defaults；校验（https 前缀/非空/Key≥16）失败屏内明示不退出、`ai_cfg_keyboard_poll`、`scr_lifecycle_t screen_ai_cfg` |
-| `openai_api.h/.cpp` | **新写 OpenAI 兼容客户端** `openai_chat(prompt, base_url, model, api_key)`：POST `{"model":..., "messages":[{"role":"user","content":...}]}`，**直接复用 `http_post`**（`http_utils.h::http_post` 声明已支持 `auth_header` → `Authorization: Bearer <key>`，`content_type=application/json`），解析 `choices[0].message.content`；默认端点 OpenRouter；TLS 策略见 §2.3 注 |
+| `openai_api.h/.cpp` | **2026-08-17 修订（pda2 最终实现，照此移植）**：`openai_chat_multi(history, count, prompt, base_url, model, api_key, out, timeout_ms)` —— messages = system（KET examiner 提示）+ 历史轮次 + 当前 prompt；`openai_chat(...)` 单轮包装（Test ping 用）；复用 `http_post`（Bearer auth + application/json），解析 `choices[0].message.content`；**usage 统计**：容错解析 `usage` 8 项指标（mutex + 单 blob 写 NVS `ai_stats`）；**配置存取**：NVS namespace `ai` 双槽 + `active` 单键原子提交，load 回退链 = 活动槽（isKey 判定）→ 旧平键 → 编译期默认值。默认端点 OpenRouter；TLS 策略见 §2.3 注 |
 | `src/assets.h` | 仅 `LV_IMG_DECLARE` 4 个图标（`extern "C"` 包裹） |
 | ~~`config_keys.h`~~ | **不再需要**：WiFi/AI 全部运行时 NVS 配置，`allinone.ino` 删除对它的 include |
 
@@ -325,7 +325,7 @@ pio run -e allinone --jobs 8
 
 - [x] AI 平台 → 已确认：**OpenRouter**（OpenAI 兼容），模型手动输入。
 - [x] keypad 无大写 → 已改：pda2 预研实现完整修饰键模型（双 Shift 大写 / Alt 临时符号层 / Sym 锁定 / Alt+Enter 扫描），经 11 轮评审 + 真机验证（记录见 `docs/reviews/`）。
-- [x] AI v1 语义 → 已确认：**单轮问答**（页面明示；多轮上下文 v2，体验评审 §1.7）。
+- [x] AI v1 语义 → **2026-08-17 修订**：多轮对话（最近 8KB 整轮配对上下文，pda2 预研已实现；体验评审 §1.7 的"单轮 v1"决策作废）。
 - [x] AI 配置交互 → 已按两份专项评审修订：显式状态机（EDITING/CONFIRM_SAVE/TESTING/CONFIRM_DISCARD）、Test 先行、错误分类表 + 可执行入口、Key 掩码/Reveal、草稿跨屏保留、异步发送（§4 AI 两节）。
 - [x] 实现顺序 → 已确认：先在 **pda2 预研** WiFi/AI 配置并真机验证，成熟后移植 allinone（见 `TODO.md` 阶段 0）。
 - [x] MP3 扫描目录 → 已确认：优先 `/music`，不存在回退根目录。

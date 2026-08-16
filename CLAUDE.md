@@ -59,7 +59,7 @@ Adding a new app: see `examples/pda2/README.md` §Architecture (four-line checkl
 | Code review history (each round = paired request + result file under commit id) | `docs/reviews/wifi-config-keyboard-review-*` |
 | Pin definitions and shared utilities | `examples/pda2/utilities.h`, `examples/factory/utilities.h` |
 | Menu / button grid / screen ID enum | `examples/pda2/ui_deckpro.{h,cpp}` |
-| NVS layout (AI config + chat log) | `examples/pda2/openai_api.{h,cpp}` for ai namespace; `/chat.log` (SPIFFS) ring buffer in `ui_ai_chat.cpp` |
+| NVS/SPIFFS storage layout | NVS `ai` (dual-slot `base.0/1`, `model.0/1`, `key.0/1` + `active` flip) and `ai_stats` (single usage blob) in `examples/pda2/openai_api.cpp`; NVS `wifi` (ssid/pass); SPIFFS `/chat.log` (+`.tmp`) and `/chat.draft` in `examples/pda2/ui_ai_chat.cpp` |
 | Vendored 3rd-party libraries | `lib/` (offline; LDF links by `#include`) |
 
 ## Working notes
@@ -67,4 +67,4 @@ Adding a new app: see `examples/pda2/README.md` §Architecture (four-line checkl
 - **E-paper rendering is slow**: ~0.3s partial refresh, ~1-2s full refresh. Don't animate, don't scroll live content — use pagination (`LV_OBJ_FLAG_HIDDEN` swap with Enter/Space) per the `pda2/README.md` "Use pagination, not scrolling" note. `LV_COLOR_DEPTH=1` so all images must be monochrome.
 - **Touch is configured but keypad drives all navigation** in current code paths. Don't assume pointer events reliably fire after cosmetic-only changes.
 - **No live tests** — the project relies on real-hardware manual regression. Each new commit is expected to document its verification gaps in the review request's §验证状态. Repeated rounds of "待用户实测 ⏸" escalate — see review results for how that's tracked.
-- **Latest review rounds** the project is currently integrating (per review files): dual-slot NVS atomic save (`844a907`), WiFi scan critical-section + busy generation (`9c075c5`/`e31cd06`), Sleep countdown gated by EPD frame-complete (`7fec0e5`), AI Chat dynamic bodies + SPIFFS ring + multi-turn 8KB context (`9b376da`/`e1b2d0f`), AI Config save-failure msgbox + Test billing transparency (`e60b2e8`). Read those commit messages before extending the corresponding area.
+- **Latest review rounds** the project is currently integrating (per review files): dual-slot NVS atomic save (`844a907`), WiFi scan critical-section + busy generation (`9c075c5`/`e31cd06`), Sleep countdown gated by the screen's OWN EPD flush sequence (`9a89cdd`, after `7fec0e5` was rejected for waiting on the pre-load frame), AI Chat dynamic bodies + SPIFFS atomic log + turn-paired 8KB multi-turn context + New confirmation (`9b376da`/`e1b2d0f`/`35e9eae`), usage stats as a mutex-guarded single NVS blob (`74c24ff`), AI Config save-failure msgbox + Test billing transparency (`e60b2e8`), API-key compensating controls C1/C2 (`5dd8e32` + `SECURITY.md`). Read those commit messages before extending the corresponding area.
