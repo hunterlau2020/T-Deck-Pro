@@ -1798,6 +1798,18 @@ static uint32_t s_scan_release_target = 0;        // cnt at abort; an event past
  * miss a publish/callback race). Serial is NOT used inside the section. */
 static portMUX_TYPE s_scan_mux = portMUX_INITIALIZER_UNLOCKED;
 
+/* All shared-state READS also go through the critical section (copilot
+ * finding 1.3): the callback runs on the WiFi event task, so a plain
+ * read on the UI core is a C++ data race even if it looks atomic. */
+static bool scan_release_is_pending(void)
+{
+    bool v;
+    portENTER_CRITICAL(&s_scan_mux);
+    v = s_scan_release_pending;
+    portEXIT_CRITICAL(&s_scan_mux);
+    return v;
+}
+
 /* Framework event order (WiFiGenericClass::_eventCallback): the internal
  * WiFiScanClass::_scanDone() runs FIRST (allocates + fills the results),
  * user onEvent callbacks dispatch AFTER it. So once this fires, it is safe
@@ -1883,17 +1895,17 @@ static void wifi_banner_hide(void);
 
 static bool wifi_cfg_scan_start(void)
 {
-    if (s_scan_release_pending) {
+    if (scan_release_is_pending()) {
         /* A previous aborted scan has not delivered its SCAN_DONE yet;
          * wait (bounded) for it before touching the framework results,
          * otherwise scanDelete() races the late _scanDone() (review 1.3).
          * The event callback clears the pending state itself as soon as
          * the target count is exceeded. */
         uint32_t t0 = millis();
-        while (s_scan_release_pending && millis() - t0 < 3000) {
+        while (scan_release_is_pending() && millis() - t0 < 3000) {
             delay(1);
         }
-        if (s_scan_release_pending) {
+        if (scan_release_is_pending()) {
             snprintf(wifi_status, sizeof(wifi_status), "Scan busy - retry");
             lv_label_set_text(wifi_status_lab, wifi_status);
             Serial.println("[WiFi] scan start blocked: previous SCAN_DONE pending");
@@ -2329,10 +2341,10 @@ static void wifi_cfg_scan_abort(void)
 
     esp_wifi_scan_stop();
     uint32_t t0 = millis();
-    while (s_scan_release_pending && millis() - t0 < 3000) {
+    while (scan_release_is_pending() && millis() - t0 < 3000) {
         delay(1);
     }
-    if (!s_scan_release_pending) {
+    if (!scan_release_is_pending()) {
         WiFi.scanDelete();                      /* SCAN_DONE observed; safe to release */
     } else {
         Serial.println("[WiFi] scan abort timeout - release deferred");
