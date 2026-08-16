@@ -40,7 +40,9 @@
  * Keypad map:
  *   \n : send                     \b : delete; empty -> back to menu
  *   + / - (Sym/Alt layer): scroll the history
- *   '\t' (Alt+Enter) / '\v' (volume): ignored
+ *   '\t' (Alt+Enter): New chat confirm
+ *   '\v' (volume): ignored
+ *   confirmation open: \n = OK, any other key = Cancel
  */
 #include "Arduino.h"
 #include "ui_deckpro.h"
@@ -60,6 +62,9 @@
 #define CHAT_BUBBLE_W    178     /* bubble width incl. border; label 170 inside */
 #define CHAT_TRUNC_MARK  "(truncated)"
 #define CHAT_LOG_PATH    "/chat.log"
+#define CHAT_LOG_TMP     "/chat.log.tmp"
+#define CHAT_DRAFT_PATH  "/chat.draft"
+#define CHAT_LOG_MAGIC   0x314C4843u    /* "CHL1" little-endian */
 
 typedef struct {
     bool from_user;
@@ -154,30 +159,55 @@ static void chat_history_add(bool from_user, const char *text)
     }
 }
 
-/* Rewrite /chat.log from the in-memory ring (binary: 1 B flag, 2 B len,
- * body). Small file + rare writes, so a full rewrite is fine. */
+/* Persist the ring to /chat.log via an atomic replace (copilot finding
+ * 1.4): write everything to a TEMP file checking every write, append a
+ * byte-sum checksum, then rename over the official path - the visible
+ * log is always either the complete previous version or the complete new
+ * one, never a torn half. The pending (unconfirmed) bubble is NOT
+ * persisted (copilot finding 1.5): it would be replayed as a real turn
+ * after a reboot. */
 static void chat_log_save(void)
 {
     if (!chat_spiffs_ok) return;
-    File f = SPIFFS.open(CHAT_LOG_PATH, FILE_WRITE);
+    File f = SPIFFS.open(CHAT_LOG_TMP, FILE_WRITE);
     if (!f) {
-        Serial.println("[AIChat] log save: open failed");
+        Serial.println("[AIChat] log save: tmp open failed");
         return;
     }
-    for (int i = 0; i < chat_hist_cnt; i++) {
+    uint32_t magic = CHAT_LOG_MAGIC;
+    uint32_t sum = 0;
+    int n = 0;
+    bool ok = (f.write((const uint8_t *)&magic, 4) == 4);
+    for (int i = 0; i < chat_hist_cnt && ok; i++) {
+        if (i == chat_pending_idx) continue;    /* unconfirmed: skip */
         uint8_t fl = chat_history[i].from_user ? 1 : 0;
         uint16_t len = (uint16_t)chat_history[i].text.length();
-        f.write(&fl, 1);
-        f.write((uint8_t *)&len, 2);
-        f.write((const uint8_t *)chat_history[i].text.c_str(), len);
+        const uint8_t *data = (const uint8_t *)chat_history[i].text.c_str();
+        ok = (f.write(&fl, 1) == 1) &&
+             (f.write((uint8_t *)&len, 2) == 2) &&
+             (f.write(data, len) == len);
+        if (!ok) break;
+        sum += fl;
+        sum += len;
+        for (uint16_t k = 0; k < len; k++) sum += data[k];
+        n++;
     }
+    ok = ok && (f.write((uint8_t *)&sum, 4) == 4);
     f.close();
+    if (!ok || !SPIFFS.rename(CHAT_LOG_TMP, CHAT_LOG_PATH)) {
+        SPIFFS.remove(CHAT_LOG_TMP);
+        Serial.println("[AIChat] log save failed - previous log kept");
+        return;
+    }
+    Serial.printf("[AIChat] log saved: %d msgs\n", n);
 }
 
-/* Restore the ring from /chat.log on screen create. */
+/* Restore the ring from /chat.log on screen create. A log is accepted
+ * ONLY when magic and checksum both match - a torn write from a power
+ * loss is discarded whole, never partially replayed (copilot 1.4). */
 static void chat_log_load(void)
 {
-    chat_spiffs_ok = SPIFFS.begin(true);
+    chat_spiffs_ok = SPIFFS.begin(false);   /* NEVER auto-format on mount trouble (copilot 1.4) */
     if (!chat_spiffs_ok) {
         Serial.println("[AIChat] SPIFFS unavailable - history RAM-only");
         return;
@@ -185,22 +215,73 @@ static void chat_log_load(void)
     if (!SPIFFS.exists(CHAT_LOG_PATH)) return;
     File f = SPIFFS.open(CHAT_LOG_PATH, FILE_READ);
     if (!f) return;
+
+    uint32_t magic = 0;
+    if (f.available() < 4 || f.read((uint8_t *)&magic, 4) != 4 || magic != CHAT_LOG_MAGIC) {
+        f.close();
+        Serial.println("[AIChat] log corrupt: bad magic - ignored");
+        return;
+    }
     char buf[CHAT_MSG_MAX + 1];
+    uint32_t sum = 0;
+    int loaded = 0;
     while (f.available() >= 3 && chat_hist_cnt < CHAT_HIST_MAX) {
         uint8_t fl = 0;
         uint16_t len = 0;
         f.read(&fl, 1);
         f.read((uint8_t *)&len, 2);
         if (len == 0 || len > CHAT_MSG_MAX || f.available() < len) {
-            break;                  /* corrupt tail: stop, keep the valid prefix */
+            break;                  /* corrupt tail */
         }
         f.read((uint8_t *)buf, len);
         buf[len] = '\0';
         chat_history_add(fl == 1, buf);
+        sum += fl;
+        sum += len;
+        for (uint16_t k = 0; k < len; k++) sum += (uint8_t)buf[k];
+        loaded++;
+    }
+    uint32_t stored = 0;
+    if (f.available() < 4 || f.read((uint8_t *)&stored, 4) != 4 || stored != sum) {
+        f.close();
+        for (int i = 0; i < chat_hist_cnt; i++) chat_history[i].text.clear();
+        chat_hist_cnt = 0;
+        chat_hist_bytes = 0;
+        Serial.println("[AIChat] log corrupt: checksum mismatch - ignored");
+        return;
     }
     f.close();
     Serial.printf("[AIChat] history restored: %d msgs, %d bytes\n",
-                  chat_hist_cnt, chat_hist_bytes);
+                  loaded, chat_hist_bytes);
+}
+
+/* ---- retry draft persistence (copilot finding 1.5) ---------------------
+ * The input draft survives a reboot so a failed message can be retried
+ * after power loss; it is cleared on success, on New, and never sent as
+ * part of the persisted log. */
+static void chat_draft_save(const char *text)
+{
+    if (!chat_spiffs_ok) return;
+    File f = SPIFFS.open(CHAT_DRAFT_PATH, FILE_WRITE);
+    if (!f) return;
+    f.print(text);
+    f.close();
+}
+
+static void chat_draft_clear(void)
+{
+    if (!chat_spiffs_ok) return;
+    SPIFFS.remove(CHAT_DRAFT_PATH);
+}
+
+static String chat_draft_load(void)
+{
+    if (!chat_spiffs_ok || !SPIFFS.exists(CHAT_DRAFT_PATH)) return String("");
+    File f = SPIFFS.open(CHAT_DRAFT_PATH, FILE_READ);
+    if (!f) return String("");
+    String s = f.readString();
+    f.close();
+    return s;
 }
 
 /* Rebuild the bubbles: AI left-aligned, user right-aligned; jump to the
@@ -269,27 +350,62 @@ static void chat_send_task_func(void *param)
     vTaskDelete(NULL);
 }
 
-/* Multi-turn context (round 21): pack the most recent turns into the
- * request snapshot - newest-first until CHAT_CTX_BUDGET bytes, stored
- * chronologically. Whole turns only: a turn exceeding the remaining
- * budget ends the window. The pending bubble is skipped because its
- * content is exactly the prompt being sent now. */
+/* Context copy of a message: UI markers never reach the API (copilot
+ * finding 1.5) - the "(truncated)" suffix is stripped here; "(failed)"
+ * messages are never selected at all (the pending bubble is skipped). */
+static string chat_ctx_body(const chat_msg_t *m)
+{
+    string s = m->text;
+    const size_t mark_len = strlen(CHAT_TRUNC_MARK);
+    if (s.length() >= mark_len &&
+        s.compare(s.length() - mark_len, mark_len, CHAT_TRUNC_MARK) == 0) {
+        s.resize(s.length() - mark_len);
+    }
+    return s;
+}
+
+/* Multi-turn context (round 21, reworked per copilot finding 1.6):
+ * messages are selected in whole TURNS - each assistant reply travels
+ * with its user question - so the window never starts with an orphan
+ * assistant message. A lone CONFIRMED user message at the tail (its
+ * reply never arrived) is allowed. Newest-first until CHAT_CTX_BUDGET
+ * bytes; stored chronologically. The pending bubble is skipped because
+ * its content is exactly the prompt being sent now. */
 static void chat_history_snapshot(chat_send_req_t *rq)
 {
-    vector<int> picked;
+    struct turn_t { int u; int a; };
+    vector<turn_t> turns;
     int budget = CHAT_CTX_BUDGET;
-    for (int i = chat_hist_cnt - 1; i >= 0 && budget > 0; i--) {
-        if (i == chat_pending_idx) continue;
-        int len = (int)chat_history[i].text.length();
-        if (len > budget) break;
-        budget -= len;
-        picked.push_back(i);
+    int i = chat_hist_cnt - 1;
+    while (i >= 0 && budget > 0) {
+        if (i == chat_pending_idx) { i--; continue; }
+        turn_t t = { -1, -1 };
+        if (!chat_history[i].from_user) {
+            /* assistant: requires its user partner right before it */
+            if (i - 1 < 0 || chat_history[i - 1].from_user ||
+                i - 1 == chat_pending_idx) {
+                break;                  /* orphan assistant - stop the window */
+            }
+            t.u = i - 1;
+            t.a = i;
+        } else {
+            t.u = i;                    /* lone confirmed user tail */
+        }
+        int need = (int)chat_history[t.u].text.length() +
+                   (t.a >= 0 ? (int)chat_history[t.a].text.length() : 0);
+        if (need > budget) break;       /* whole turns only */
+        budget -= need;
+        turns.push_back(t);
+        i = (t.a >= 0 ? t.a : t.u) - 1;
     }
-    for (size_t k = picked.size(); k > 0; k--) {
-        int i = picked[k - 1];
-        rq->history.push_back(make_pair(
-            chat_history[i].from_user ? string("user") : string("assistant"),
-            chat_history[i].text));
+    for (size_t k = turns.size(); k > 0; k--) {
+        turn_t &t = turns[k - 1];
+        rq->history.push_back(make_pair(string("user"),
+                                        chat_ctx_body(&chat_history[t.u])));
+        if (t.a >= 0) {
+            rq->history.push_back(make_pair(string("assistant"),
+                                            chat_ctx_body(&chat_history[t.a])));
+        }
     }
 }
 
@@ -324,7 +440,7 @@ static void chat_send(void)
         return;
     }
     chat_history_snapshot(rq);      /* multi-turn context, capped at 8 KB */
-    Serial.printf("[AIChat] send: %u context turns\n", (unsigned)rq->history.size());
+    Serial.printf("[AIChat] send: %u context msgs\n", (unsigned)rq->history.size());
 
     TaskHandle_t h = NULL;
     if (xTaskCreate(chat_send_task_func, "chat_send", 1024 * 8,
@@ -351,7 +467,8 @@ static void chat_send(void)
 }
 
 /* Mark the pending bubble failed without touching the input draft
- * (copilot 1.7: "mark failed instead of duplicating"). */
+ * (copilot 1.7: "mark failed instead of duplicating"). The draft is
+ * persisted so the retry survives a reboot (copilot finding 1.5). */
 static void chat_mark_pending_failed(void)
 {
     if (chat_pending_idx < 0) return;
@@ -362,8 +479,15 @@ static void chat_mark_pending_failed(void)
     chat_history_add(true, marked.c_str());
     chat_pending_idx = chat_hist_cnt - 1;
     chat_history_render();
-    chat_log_save();
+    chat_log_save();                            /* pending bubble is skipped inside */
+    chat_draft_save(lv_textarea_get_text(chat_input_ta));
 }
+
+/* New-confirm overlay (defined below, after the poll that drives it) */
+static lv_obj_t *chat_confirm = NULL;
+static void chat_confirm_show(void);
+static void chat_confirm_accept(void);
+static void chat_confirm_cancel(void);
 
 void ai_chat_keyboard_poll(void)
 {
@@ -380,6 +504,7 @@ void ai_chat_keyboard_poll(void)
                 Serial.printf("[AIChat] reply len=%u\n", (unsigned)cr->reply.length());
                 chat_pending_idx = -1;          /* user message confirmed */
                 lv_textarea_set_text(chat_input_ta, "");    /* success: draft consumed */
+                chat_draft_clear();             /* retry draft no longer needed */
                 chat_history_add(false, cr->reply.c_str());
                 chat_history_render();
                 chat_log_save();
@@ -402,9 +527,25 @@ void ai_chat_keyboard_poll(void)
     if (!keypad_get_val(&c)) return;
     keypad_set_flag();
 
-    if (c == '\t' || c == '\v') return;         /* Alt+Enter scan combo / volume key */
+    /* New-confirmation open: Enter = OK, any other key = Cancel
+     * (copilot finding 1.7: the overlay must be keyboard-dismissable) */
+    if (chat_confirm != NULL) {
+        if (c == '\n') {
+            chat_confirm_accept();
+        } else {
+            chat_confirm_cancel();
+        }
+        return;
+    }
+
+    if (c == '\v') return;                      /* volume key */
 
     if (s_chat_send_busy) return;               /* sending: swallow input */
+
+    if (c == '\t') {                            /* Alt+Enter: New chat (keyboard path) */
+        chat_confirm_show();
+        return;
+    }
 
     if (c == '\n') {
         chat_send();
@@ -436,6 +577,87 @@ static void chat_clear_btn_cb(lv_event_t *e)
     lv_textarea_set_text(chat_input_ta, "");
 }
 
+/* ---- New-chat confirmation overlay (copilot finding 1.7) ----------------
+ * New irreversibly destroys the whole history, so it must ask first. The
+ * overlay is keyboard-dismissable: Enter = OK, any other key = Cancel.
+ * (chat_confirm and the three prototypes live above the poll function.) */
+static void chat_clear_history(void);
+
+static void chat_confirm_close(void)
+{
+    if (chat_confirm) {
+        lv_obj_del(chat_confirm);
+        chat_confirm = NULL;
+    }
+}
+
+static void chat_confirm_cancel(void)
+{
+    chat_confirm_close();
+    lv_label_set_text(chat_status_lab, "");
+}
+
+static void chat_confirm_accept(void)
+{
+    chat_confirm_close();
+    chat_clear_history();
+}
+
+static void chat_confirm_cancel_cb(lv_event_t *e) { chat_confirm_cancel(); }
+static void chat_confirm_accept_cb(lv_event_t *e) { chat_confirm_accept(); }
+
+static void chat_confirm_show(void)
+{
+    if (s_chat_send_busy) {
+        lv_label_set_text(chat_status_lab, "Busy - retry after reply");
+        return;
+    }
+    chat_confirm_close();
+    chat_confirm = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(chat_confirm, 220, 130);
+    lv_obj_align(chat_confirm, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(chat_confirm, lv_color_white(), 0);
+    lv_obj_set_style_border_width(chat_confirm, 1, 0);
+    lv_obj_set_style_border_color(chat_confirm, lv_color_black(), 0);
+    lv_obj_set_style_radius(chat_confirm, 6, 0);
+    lv_obj_set_style_pad_all(chat_confirm, 8, 0);
+    lv_obj_set_flex_flow(chat_confirm, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(chat_confirm, 6, 0);
+    lv_obj_clear_flag(chat_confirm, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *body = lv_label_create(chat_confirm);
+    lv_obj_set_width(body, lv_pct(100));
+    lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(body, "Start new chat?\nAll history cleared");
+    lv_obj_set_style_text_font(body, &lv_font_montserrat_14, 0);
+    lv_obj_set_flex_grow(body, 1);
+
+    lv_obj_t *row = lv_obj_create(chat_confirm);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, 32);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(row, 4, LV_PART_MAIN);
+
+    lv_obj_t *cancel_btn = lv_btn_create(row);
+    lv_obj_set_flex_grow(cancel_btn, 1);
+    lv_obj_set_height(cancel_btn, 32);
+    lv_obj_t *cancel_lab = lv_label_create(cancel_btn);
+    lv_label_set_text(cancel_lab, "Cancel");
+    lv_obj_center(cancel_lab);
+    lv_obj_add_event_cb(cancel_btn, chat_confirm_cancel_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *ok_btn = lv_btn_create(row);
+    lv_obj_set_flex_grow(ok_btn, 1);
+    lv_obj_set_height(ok_btn, 32);
+    lv_obj_t *ok_lab = lv_label_create(ok_btn);
+    lv_label_set_text(ok_lab, "OK");
+    lv_obj_center(ok_lab);
+    lv_obj_add_event_cb(ok_btn, chat_confirm_accept_cb, LV_EVENT_CLICKED, NULL);
+}
+
 /* Clear the whole history (review finding 1.2 asks for a dedicated entry). */
 static void chat_clear_history(void)
 {
@@ -451,13 +673,14 @@ static void chat_clear_history(void)
     chat_pending_idx = -1;
     chat_history_render();
     chat_log_save();                            /* truncates /chat.log to empty */
+    chat_draft_clear();                         /* the retry draft dies with the session */
     lv_label_set_text(chat_status_lab, "History cleared");
 }
 
-static void chat_hist_btn_cb(lv_event_t *e)
+static void chat_new_btn_cb(lv_event_t *e)
 {
-    Serial.println("[AIChat] Hist button clicked");
-    chat_clear_history();
+    Serial.println("[AIChat] New button clicked");
+    chat_confirm_show();
 }
 
 static void chat_back_cb(lv_event_t *e)
@@ -544,22 +767,30 @@ static void chat_create(lv_obj_t *parent)
     lv_obj_add_event_cb(clear_btn, chat_clear_btn_cb, LV_EVENT_CLICKED, NULL);
 
     /* "New" starts a fresh conversation (user request): clears the visible
-     * history AND the persisted log; usage counters in ai_stats survive */
+     * history AND the persisted log; usage counters in ai_stats survive.
+     * The click opens a confirmation overlay (copilot finding 1.7). */
     lv_obj_t *new_btn = lv_btn_create(btn_col);
     lv_obj_set_width(new_btn, 44);
     lv_obj_set_height(new_btn, 26);
     lv_obj_t *new_lab = lv_label_create(new_btn);
     lv_label_set_text(new_lab, "New");
     lv_obj_center(new_lab);
-    lv_obj_add_event_cb(new_btn, chat_hist_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(new_btn, chat_new_btn_cb, LV_EVENT_CLICKED, NULL);
 
     chat_kbd_active = true;
 
     /* restore persisted history only when the RAM ring is empty (the ring
      * survives screen switches), then render it (copilot 1.6: re-entering
-     * the screen must show the existing history, not a blank area) */
+     * the screen must show the existing history, not a blank area).
+     * The retry draft is restored into the input box as well (copilot
+     * finding 1.5). */
     if (chat_hist_cnt == 0) {
         chat_log_load();
+    }
+    String draft = chat_draft_load();
+    if (draft.length() > 0) {
+        lv_textarea_set_text(chat_input_ta, draft.c_str());
+        lv_label_set_text(chat_status_lab, "Retry draft restored");
     }
     chat_history_render();
 }
@@ -573,6 +804,7 @@ static void chat_exit(void)  { ui_disp_full_refr(); }
 static void chat_destroy(void)
 {
     chat_kbd_active = false;
+    chat_confirm_close();                       /* no overlay on other screens */
     s_chat_page_gen++;                          /* late replies of this visit are dropped */
     /* safe to clear busy here: the in-flight task owns its own request
      * snapshot (finding 1.6), and its reply will be dropped by gen */
