@@ -23,14 +23,15 @@ void openai_load_config(char *base, int base_len, char *model, int model_len,
     base[base_len-1] = model[model_len-1] = key[key_len-1] = '\0';
 }
 
-void openai_save_config(const char *base, const char *model, const char *key)
+bool openai_save_config(const char *base, const char *model, const char *key)
 {
     Preferences p;
     p.begin("ai", false);
-    p.putString("base",  base  ? base  : "");
-    p.putString("model", model ? model : "");
-    p.putString("key",   key   ? key   : "");
+    size_t b = p.putString("base",  base  ? base  : "");
+    size_t m = p.putString("model", model ? model : "");
+    size_t k = p.putString("key",   key   ? key   : "");
     p.end();
+    return b > 0 && m > 0 && k > 0;
 }
 
 bool openai_chat(const char *prompt, const char *base_url,
