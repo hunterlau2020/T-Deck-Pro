@@ -10,6 +10,17 @@
  * generation). The draft stays in the input box until a reply arrives;
  * on failure it is kept for direct retry. History is in-RAM only.
  *
+ * Review findings incorporated:
+ *   - the task works on its OWN snapshot of the prompt + AI config
+ *     (finding 1.6): a re-entry while a send is in flight can no longer
+ *     corrupt the in-flight request, and only a result matching the
+ *     CURRENT page generation may clear the busy flag
+ *   - chat_history_add backs off to a UTF-8 code point boundary before
+ *     truncating and marks the cut explicitly (finding 1.10)
+ *   - the result queue is created and CHECKED before busy is set
+ *     (finding 1.5)
+ *   - contract: docs/async_ipc_contract.md
+ *
  * Keypad map:
  *   \n : send                     \b : delete; empty -> back to menu
  *   + / - (Sym/Alt layer): scroll the history
@@ -27,11 +38,22 @@
 #define CHAT_HIST_MAX    40
 #define CHAT_MSG_MAX     256
 #define CHAT_BUBBLE_W    178     /* bubble width incl. border; label 170 inside */
+#define CHAT_TRUNC_MARK  "(truncated)"
 
 typedef struct {
     bool from_user;
     char text[CHAT_MSG_MAX];
 } chat_msg_t;
+
+/* Per-task request snapshot (finding 1.6): the task never reads UI-owned
+ * state, so leaving/re-entering the screen mid-flight is harmless. */
+typedef struct {
+    uint32_t gen;                   /* page generation captured at send time */
+    char prompt[CHAT_MSG_MAX];
+    char base[160];
+    char model[80];
+    char key[80];
+} chat_send_req_t;
 
 typedef struct {
     uint32_t gen;
@@ -50,9 +72,11 @@ static int chat_hist_cnt = 0;
 static QueueHandle_t s_chat_q = NULL;
 static volatile uint32_t s_chat_page_gen = 0;   /* bumped on entry/destroy */
 static volatile bool s_chat_send_busy = false;  /* UI-owned */
-static char chat_prompt_buf[CHAT_MSG_MAX] = {0};
 
-/* Append a message (rolls: oldest entry is dropped when full). */
+/* Append a message (rolls: oldest entry is dropped when full). Overlong
+ * text is truncated at a UTF-8 code point boundary - the cut never lands
+ * inside a multi-byte sequence - and marked with CHAT_TRUNC_MARK
+ * (finding 1.10). */
 static void chat_history_add(bool from_user, const char *text)
 {
     if (chat_hist_cnt >= CHAT_HIST_MAX) {
@@ -62,8 +86,19 @@ static void chat_history_add(bool from_user, const char *text)
     }
     chat_msg_t *m = &chat_history[chat_hist_cnt++];
     m->from_user = from_user;
-    strncpy(m->text, text, CHAT_MSG_MAX - 1);
-    m->text[CHAT_MSG_MAX - 1] = '\0';
+
+    size_t n = strlen(text);
+    size_t limit = CHAT_MSG_MAX - 1 - sizeof(CHAT_TRUNC_MARK);
+    if (n > limit) {
+        n = limit;
+        /* back off over trailing continuation bytes (10xxxxxx) so the cut
+         * lands on a lead byte; a lead byte never starts with 10 */
+        while (n > 0 && ((uint8_t)text[n] & 0xC0) == 0x80) n--;
+        memcpy(m->text, text, n);
+        strcpy(m->text + n, CHAT_TRUNC_MARK);
+    } else {
+        memcpy(m->text, text, n + 1);
+    }
 }
 
 /* Rebuild the bubbles: AI left-aligned, user right-aligned; jump to the
@@ -104,12 +139,12 @@ static void chat_history_render(void)
  * cross-core access, stale replies of a previous visit are dropped. */
 static void chat_send_task_func(void *param)
 {
-    uint32_t gen = (uint32_t)(uintptr_t)param;
+    chat_send_req_t *rq = (chat_send_req_t *)param; /* task-owned snapshot */
     chat_reply_t *res = new chat_reply_t;
-    res->gen = gen;
-    char base[160], model[80], key[80];
-    openai_load_config(base, sizeof(base), model, sizeof(model), key, sizeof(key));
-    res->ok = openai_chat(chat_prompt_buf, base, model, key, res->reply);
+    res->gen = rq->gen;
+    res->ok = openai_chat(rq->prompt, rq->base, rq->model, rq->key,
+                          res->reply, 30000);
+    delete rq;
     if (s_chat_q) {
         xQueueSend(s_chat_q, &res, portMAX_DELAY);
     } else {
@@ -125,15 +160,27 @@ static void chat_send(void)
     const char *prompt = lv_textarea_get_text(chat_input_ta);
     if (!prompt || prompt[0] == '\0') return;
 
-    char base[160], model[80], key[80];
-    openai_load_config(base, sizeof(base), model, sizeof(model), key, sizeof(key));
-    if (key[0] == '\0') {
-        lv_label_set_text(chat_status_lab, "No API key - set it in AI Config");
+    /* finding 1.5: create and CHECK the queue before going busy */
+    if (!s_chat_q) s_chat_q = xQueueCreate(4, sizeof(void *));
+    if (!s_chat_q) {
+        lv_label_set_text(chat_status_lab, "Out of memory");
         return;
     }
 
-    strncpy(chat_prompt_buf, prompt, sizeof(chat_prompt_buf) - 1);
-    chat_prompt_buf[sizeof(chat_prompt_buf) - 1] = '\0';
+    /* snapshot prompt + AI config into a task-owned request (finding 1.6):
+     * the task never reads UI-owned state again */
+    chat_send_req_t *rq = new chat_send_req_t;
+    rq->gen = s_chat_page_gen;
+    strncpy(rq->prompt, prompt, sizeof(rq->prompt) - 1);
+    rq->prompt[sizeof(rq->prompt) - 1] = '\0';
+    openai_load_config(rq->base, sizeof(rq->base),
+                       rq->model, sizeof(rq->model),
+                       rq->key, sizeof(rq->key));
+    if (rq->key[0] == '\0') {
+        delete rq;
+        lv_label_set_text(chat_status_lab, "No API key - set it in AI Config");
+        return;
+    }
 
     /* the message goes into the history immediately (chat semantics); the
      * draft STAYS in the input box until success, so failures can retry */
@@ -142,10 +189,10 @@ static void chat_send(void)
     lv_label_set_text(chat_status_lab, "Thinking...");
 
     s_chat_send_busy = true;
-    if (!s_chat_q) s_chat_q = xQueueCreate(4, sizeof(void *));
     TaskHandle_t h = NULL;
     if (xTaskCreate(chat_send_task_func, "chat_send", 1024 * 8,
-                    (void *)(uintptr_t)s_chat_page_gen, 1, &h) != pdPASS) {
+                    rq, 1, &h) != pdPASS) {
+        delete rq;
         s_chat_send_busy = false;
         lv_label_set_text(chat_status_lab, "Cannot start task");
     }
@@ -153,12 +200,15 @@ static void chat_send(void)
 
 void ai_chat_keyboard_poll(void)
 {
-    /* Drain async replies (queue, ownership transfers to the UI). */
+    /* Drain async replies (queue, ownership transfers to the UI).
+     * Only a result matching the CURRENT page generation may clear busy
+     * (finding 1.6): a stale reply of an earlier visit must not release
+     * the busy flag of the request currently in flight. */
     chat_reply_t *cr = NULL;
     while (s_chat_q && xQueueReceive(s_chat_q, &cr, 0) == pdTRUE) {
         if (!cr) continue;
-        s_chat_send_busy = false;               /* the only in-flight request is done */
         if (cr->gen == s_chat_page_gen && chat_kbd_active) {
+            s_chat_send_busy = false;
             if (cr->ok) {
                 Serial.printf("[AIChat] reply len=%u\n", (unsigned)cr->reply.length());
                 lv_textarea_set_text(chat_input_ta, "");    /* success: draft consumed */
@@ -311,7 +361,9 @@ static void chat_destroy(void)
 {
     chat_kbd_active = false;
     s_chat_page_gen++;                          /* late replies of this visit are dropped */
-    s_chat_send_busy = false;                   /* the arriving reply will be dropped by gen */
+    /* safe to clear busy here: the in-flight task owns its own request
+     * snapshot (finding 1.6), and its reply will be dropped by gen */
+    s_chat_send_busy = false;
 }
 
 scr_lifecycle_t screen_ai_chat = {
