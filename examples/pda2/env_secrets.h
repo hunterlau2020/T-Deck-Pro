@@ -10,7 +10,7 @@
 /**
  * @brief Look up a value from SPIFFS /env.cfg.
  *        The file is parsed lazily on first call and cached in RAM.
- * @param key  Key name (e.g. "AI_KEY", "OWM_KEY", "WEATHER_COORDS").
+ * @param key  Key name (e.g. "OPENROUTER_KEY", "OWM_KEY", "WEATHER_COORDS").
  * @param out  Output buffer (unchanged when the key is absent).
  * @param outlen Buffer size.
  * @return true when the key was found and copied.

@@ -36,7 +36,7 @@ void openai_load_config(char *base, int base_len, char *model, int model_len,
      *    must be read back as empty, NOT silently replaced.
      * 2. Legacy flat keys from pre-dual-slot firmware (any of base/model/
      *    key present).
-     * 3. Device /env.cfg (AI_KEY=...), then the gitignored
+     * 3. Device /env.cfg (OPENROUTER_KEY=...), then the gitignored
      *    config_keys.h AI_KEY_DEFAULT_DEV - no real key in TRACKED
      *    source; the final default is empty.
      * The first save always lands in the INACTIVE slot (active defaults
@@ -61,7 +61,7 @@ void openai_load_config(char *base, int base_len, char *model, int model_len,
         b = AI_BASE_DEFAULT;
         m = AI_MODEL_DEFAULT;
         char env_key[96] = "";
-        if (!env_get("AI_KEY", env_key, sizeof(env_key))) {
+        if (!env_get("OPENROUTER_KEY", env_key, sizeof(env_key))) {
 #ifdef AI_KEY_DEFAULT_DEV
             strncpy(env_key, AI_KEY_DEFAULT_DEV, sizeof(env_key) - 1);
             env_key[sizeof(env_key) - 1] = '\0';
