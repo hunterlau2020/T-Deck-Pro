@@ -1124,6 +1124,8 @@ static void chat_entry(void)
 static void chat_exit(void)
 {
     ui_disp_full_refr();
+    chat_waitbox_hide();                        /* push-away leaves no waitbox on
+                                                 * other screens (codex 1.11) */
     /* sync the retry draft with the ACTUAL textarea state (copilot finding
      * 1.5): edits after a failure, an explicit Clear, or leaving mid-flight
      * must not let a stale persisted draft resurrect on re-entry */
