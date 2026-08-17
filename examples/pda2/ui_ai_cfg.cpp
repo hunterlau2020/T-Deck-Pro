@@ -530,6 +530,9 @@ static void ai_cfg_destroy(void)
 {
     ai_cfg_kbd_active = false;
     ai_msgbox_close_cb(NULL);                   /* no msgbox on other screens */
+    openai_stats_flush();                       /* Test pings may have dirtied the
+                                                 * stats; checkpoint here too
+                                                 * (copilot finding 1.4) */
     if (s_ai_test_busy) {
         s_ai_test_req_gen++;                    /* leaving: late results are dropped */
         s_ai_test_busy = false;

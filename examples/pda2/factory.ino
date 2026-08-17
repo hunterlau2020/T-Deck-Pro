@@ -732,6 +732,8 @@ void loop()
 {
     lv_task_handler();
     keypad_loop();
+    extern void openai_stats_poll();
+    openai_stats_poll();
     extern void calc_keyboard_poll();
     calc_keyboard_poll();
     extern void weather_keyboard_poll();

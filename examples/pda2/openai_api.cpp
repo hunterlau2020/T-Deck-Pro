@@ -199,6 +199,8 @@ static void ai_stats_load_locked(void)
                 s_ai_stats.cwrite = v1.cwrite;
                 s_ai_stats.audio = v1.audio;
                 s_ai_stats.reasoning = v1.reasoning;
+                s_stats_since_persist = 1;      /* dirty: the next flush commits
+                                                 * the V2 schema (copilot 1.5) */
                 Serial.println("[AI] stats blob migrated from V1 to V2");
             }
         } else {
@@ -236,6 +238,27 @@ void openai_stats_flush(void)
         if (ai_stats_persist_locked()) {
             s_stats_since_persist = 0;
             s_stats_last_persist_ms = millis();
+        }
+    }
+    xSemaphoreGive(s_ai_stats_mux);
+}
+
+/* Time-based throttle from the main loop (copilot finding 1.4): the
+ * 60 s window is now enforced by an actual periodic check, not only by
+ * the NEXT response. Call once per loop() from factory.ino - it is a
+ * no-op while nothing is dirty or the window has not elapsed. */
+void openai_stats_poll(void)
+{
+    if (xSemaphoreTake(s_ai_stats_mux, 0) != pdTRUE) return;  /* contended: skip */
+    ai_stats_load_locked();
+    if (s_stats_since_persist > 0 &&
+        millis() - s_stats_last_persist_ms >= 60000) {
+        if (ai_stats_persist_locked()) {
+            s_stats_since_persist = 0;
+            s_stats_last_persist_ms = millis();
+        } else {
+            /* finite backoff, same as the accumulate path */
+            s_stats_last_persist_ms = millis() - 60000 + 10000;
         }
     }
     xSemaphoreGive(s_ai_stats_mux);

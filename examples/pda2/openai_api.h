@@ -58,8 +58,8 @@ bool openai_chat(const char *prompt, const char *base_url,
  * ("ai.system") is planned together with the cfg_version migration. */
 #define AI_SYSTEM_PROMPT "You are a KET English examiner. Now you are going to talk to me with a special topic."
 /* Device default API key (user-provided); NVS always takes precedence.
- * DEV-EXCEPTION (user decision, see SECURITY.md + memory/api-key-dev-exception):
- * a real key stays in source during development for fast verification.
+ * DEV-EXCEPTION (user decision, see SECURITY.md): a real key stays in
+ * source during development for fast verification.
  * Compensating control C1: the build warns on every compile while the
  * key is compiled in (flag set in [env:pda2]). */
 #ifdef AI_KEY_DEFAULT_COMPILED
@@ -82,6 +82,11 @@ void openai_load_config(char *base, int base_len, char *model, int model_len,
  *  lifecycle checkpoints must call this before deep sleep, on screen
  *  destroy and on New so low-frequency sessions still persist. */
 void openai_stats_flush(void);
+
+/** @brief Time-based throttle tick; call once per loop().
+ *  Enforces the 60 s persist window even when no further responses
+ *  arrive (no-op when nothing is dirty or the window has not elapsed). */
+void openai_stats_poll(void);
 
 /** @brief Write AI config to NVS namespace "ai".
  *
