@@ -816,6 +816,11 @@ void ai_chat_keyboard_poll(void)
             scr_mgr_pop(false);
         } else if (c == '\n') {
             chat_set_tab(true);                 /* Enter: jump to the input page */
+        } else if (c == '\v') {
+            /* volume key: no-op on the Chat tab - New confirm is
+             * Input-tab only, and the control byte must never reach the
+             * textarea (codex finding 1.3) */
+            return;
         } else {
             /* typing jumps to the input page and appends the character */
             chat_set_tab(true);
