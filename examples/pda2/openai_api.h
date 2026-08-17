@@ -88,6 +88,10 @@ void openai_stats_flush(void);
  *  arrive (no-op when nothing is dirty or the window has not elapsed). */
 void openai_stats_poll(void);
 
+/** @brief Format the accumulated usage for display (two lines: chat and
+ *  test groups). Safe to call from the UI thread. */
+void openai_stats_text(char *buf, int buf_len);
+
 /** @brief Write AI config to NVS namespace "ai".
  *
  *  Dual-slot + single active-version key (copilot finding 1.2): all three

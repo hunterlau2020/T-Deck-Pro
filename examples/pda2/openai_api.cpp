@@ -243,6 +243,21 @@ void openai_stats_flush(void)
     xSemaphoreGive(s_ai_stats_mux);
 }
 
+void openai_stats_text(char *buf, int buf_len)
+{
+    if (!buf || buf_len <= 0) return;
+    if (xSemaphoreTake(s_ai_stats_mux, portMAX_DELAY) != pdTRUE) {
+        snprintf(buf, buf_len, "stats busy");
+        return;
+    }
+    ai_stats_load_locked();
+    snprintf(buf, buf_len,
+             "Chat: %llu tok, %.6f USD\nTest: %llu tok, %.6f USD",
+             (unsigned long long)s_ai_stats.tot_tok, s_ai_stats.cost,
+             (unsigned long long)s_ai_stats.t_tot_tok, s_ai_stats.t_cost);
+    xSemaphoreGive(s_ai_stats_mux);
+}
+
 /* Time-based throttle from the main loop (copilot finding 1.4): the
  * 60 s window is now enforced by an actual periodic check, not only by
  * the NEXT response. Call once per loop() from factory.ino - it is a

@@ -320,6 +320,14 @@ static void ai_save_btn_cb(lv_event_t *e)
     ai_cfg_save();
 }
 
+static void ai_usage_btn_cb(lv_event_t *e)
+{
+    Serial.println("[AICfg] Usage button clicked");
+    char buf[128];
+    openai_stats_text(buf, sizeof(buf));
+    ai_msgbox_show(buf);                        /* chat/test two-line totals */
+}
+
 void ai_cfg_keyboard_poll(void)
 {
     /* msgbox countdown: tick only on second changes (EPD-friendly).
@@ -505,6 +513,15 @@ static void ai_cfg_create(lv_obj_t *parent)
     lv_label_set_text(test_lab, "Test");
     lv_obj_center(test_lab);
     lv_obj_add_event_cb(test_btn, ai_test_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    /* Usage: show the accumulated chat/test statistics (user request) */
+    lv_obj_t *usage_btn = lv_btn_create(btn_row);
+    lv_obj_set_flex_grow(usage_btn, 1);
+    lv_obj_set_height(usage_btn, 34);
+    lv_obj_t *usage_lab = lv_label_create(usage_btn);
+    lv_label_set_text(usage_lab, "Usage");
+    lv_obj_center(usage_lab);
+    lv_obj_add_event_cb(usage_btn, ai_usage_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_move_foreground(btn_row);
 
     /* touch focus keeps the keypad editing the box the user sees */
