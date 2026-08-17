@@ -4,8 +4,13 @@
 
 - A real OpenRouter API key is temporarily committed as
   `AI_KEY_DEFAULT` in `examples/pda2/openai_api.h` to keep on-device AI
-  verification fast during development (deliberate exception, see
-  `memory/api-key-dev-exception.md`).
+  verification fast during development. This is a DELIBERATE user
+  decision (2026-08-16): the user weighed strict hygiene against
+  iteration speed and chose dev convenience; three consecutive review
+  rounds had flagged the key as a Critical blocker before this decision.
+  Reviewers must treat the retained key as a dev-phase exception with
+  compensating controls (below), NOT as a merge blocker; it must be
+  re-escalated to Critical before any public push or release.
 - The key is a free-tier key and has been rotated on OpenRouter before
   this decision was made; it will be rotated again before any release.
 - **Before pushing to a public remote / making a release you MUST:**
