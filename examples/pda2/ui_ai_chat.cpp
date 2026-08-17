@@ -37,11 +37,12 @@
  *   input row: textarea 176x86 | button column 44x86 (3 x 26 + 2 x 4 gaps)
  *   textarea max length: 200 chars (<= 800 UTF-8 bytes, heap-allocated)
  *
- * Keypad map:
- *   \n : send                     \b : delete; empty -> back to menu
- *   + / - (Sym/Alt layer): scroll the history
- *   '\t' (Alt+Enter): New chat confirm
- *   '\v' (volume): ignored
+ * Keypad map (two tabs, switch with '\t' = Alt+Enter):
+ *   Chat tab:  \n -> jump to Input   \b -> back to menu
+ *              + / - (Sym/Alt layer): scroll the history
+ *              any visible char -> jump to Input and append it
+ *   Input tab: \n -> send            \b -> delete; empty -> back to Chat
+ *              '\v' (volume): New chat confirm
  *   confirmation open: \n = OK, any other key = Cancel
  */
 #include "Arduino.h"
@@ -96,6 +97,14 @@ static lv_obj_t *chat_hist_cont = NULL;     /* scrollable read-only history */
 static lv_obj_t *chat_input_ta = NULL;      /* current draft */
 static lv_obj_t *chat_status_lab = NULL;
 static bool chat_kbd_active = false;
+
+/* two-tab layout (user request 2026-08-17): Chat page = full-screen
+ * history, Input page = big textarea + big buttons */
+static lv_obj_t *chat_page = NULL;
+static lv_obj_t *input_page = NULL;
+static lv_obj_t *chat_tab_btn = NULL;
+static lv_obj_t *input_tab_btn = NULL;
+static bool chat_tab_input = false;         /* false = Chat tab, true = Input tab */
 
 static chat_msg_t chat_history[CHAT_HIST_MAX];
 static int chat_hist_cnt = 0;
@@ -539,6 +548,33 @@ static void chat_history_snapshot(chat_send_req_t *rq)
 static void chat_waitbox_show(void);           /* defined below the poll */
 static void chat_waitbox_hide(void);
 
+/* Tab switch (user request): the Chat page shows the full-screen
+ * history, the Input page hosts the large textarea and buttons. */
+static void chat_set_tab(bool input_tab)
+{
+    if (!chat_page || !input_page) return;
+    chat_tab_input = input_tab;
+    if (input_tab) {
+        lv_obj_add_flag(chat_page, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(input_page, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(chat_tab_btn, lv_color_white(), 0);
+        lv_obj_set_style_bg_color(input_tab_btn, lv_color_black(), 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(chat_tab_btn, 0), lv_color_black(), 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(input_tab_btn, 0), lv_color_white(), 0);
+    } else {
+        lv_obj_add_flag(input_page, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(chat_page, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(chat_tab_btn, lv_color_black(), 0);
+        lv_obj_set_style_bg_color(input_tab_btn, lv_color_white(), 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(chat_tab_btn, 0), lv_color_white(), 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(input_tab_btn, 0), lv_color_black(), 0);
+        lv_obj_scroll_to_y(chat_hist_cont, LV_COORD_MAX, LV_ANIM_OFF);
+    }
+}
+
+static void chat_chat_tab_cb(lv_event_t *e)  { chat_set_tab(false); }
+static void chat_input_tab_cb(lv_event_t *e) { chat_set_tab(true); }
+
 static void chat_send(void)
 {
     if (s_chat_send_busy) return;               /* already sending */
@@ -603,6 +639,7 @@ static void chat_send(void)
     chat_history_render();
     chat_log_save();
     chat_waitbox_show();                        /* "Waiting server reply... 10s" */
+    chat_set_tab(false);                        /* user request: jump to the chat page */
     /* context visibility (copilot finding 1.8): show how much history
      * travels with the request and whether older turns were trimmed */
     char st[64];
@@ -760,30 +797,44 @@ void ai_chat_keyboard_poll(void)
         return;
     }
 
-    if (c == '\v') return;                      /* volume key */
-
     if (s_chat_send_busy) return;               /* sending: swallow input */
 
-    if (c == '\t') {                            /* Alt+Enter: New chat (keyboard path) */
-        chat_confirm_show();
+    if (c == '\t') {                            /* Alt+Enter: toggle tab */
+        chat_set_tab(!chat_tab_input);
         return;
     }
 
-    if (c == '\n') {
-        chat_send();
-    } else if (c == '+' || c == '-') {
-        /* scroll the history (Sym/Alt layer) */
-        lv_obj_scroll_by(chat_hist_cont, 0, c == '+' ? -120 : 120, LV_ANIM_OFF);
-    } else if (c == '\b') {
-        const char *txt = lv_textarea_get_text(chat_input_ta);
-        if (txt && txt[0] != '\0') {
-            lv_textarea_del_char(chat_input_ta);
-        } else {
+    if (!chat_tab_input) {
+        /* --- Chat tab --- */
+        if (c == '+' || c == '-') {
+            /* scroll the history (Sym/Alt layer) */
+            lv_obj_scroll_by(chat_hist_cont, 0, c == '+' ? -120 : 120, LV_ANIM_OFF);
+        } else if (c == '\b') {
             chat_kbd_active = false;
             scr_mgr_pop(false);
+        } else if (c == '\n') {
+            chat_set_tab(true);                 /* Enter: jump to the input page */
+        } else {
+            /* typing jumps to the input page and appends the character */
+            chat_set_tab(true);
+            lv_textarea_add_char(chat_input_ta, c);
         }
     } else {
-        lv_textarea_add_char(chat_input_ta, c);
+        /* --- Input tab --- */
+        if (c == '\n') {
+            chat_send();
+        } else if (c == '\b') {
+            const char *txt = lv_textarea_get_text(chat_input_ta);
+            if (txt && txt[0] != '\0') {
+                lv_textarea_del_char(chat_input_ta);
+            } else {
+                chat_set_tab(false);            /* empty: back to the chat page */
+            }
+        } else if (c == '\v') {
+            chat_confirm_show();                /* volume key: New chat (keyboard path) */
+        } else {
+            lv_textarea_add_char(chat_input_ta, c);
+        }
     }
 }
 
@@ -919,7 +970,7 @@ static void chat_create(lv_obj_t *parent)
     scr_back_btn_create(parent, "AI Text", chat_back_cb);
 
     lv_obj_t *cont = lv_obj_create(parent);
-    lv_obj_set_size(cont, 232, 274);
+    lv_obj_set_size(cont, 232, 288);
     lv_obj_align(cont, LV_ALIGN_TOP_MID, 0, 32);
     lv_obj_set_style_border_width(cont, 0, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_PART_MAIN);
@@ -929,10 +980,52 @@ static void chat_create(lv_obj_t *parent)
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* --- history: read-only, scrollable, top 2/3 (160 px of 274) --- */
-    chat_hist_cont = lv_obj_create(cont);
+    /* --- tab bar: Chat / Input (user request: two pages, tabs switch) --- */
+    lv_obj_t *tab_row = lv_obj_create(cont);
+    lv_obj_set_width(tab_row, lv_pct(100));
+    lv_obj_set_height(tab_row, 30);
+    lv_obj_set_style_bg_opa(tab_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(tab_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(tab_row, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(tab_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(tab_row, 4, LV_PART_MAIN);
+
+    chat_tab_btn = lv_btn_create(tab_row);
+    lv_obj_set_flex_grow(chat_tab_btn, 1);
+    lv_obj_set_height(chat_tab_btn, 30);
+    lv_obj_t *chat_tab_lab = lv_label_create(chat_tab_btn);
+    lv_label_set_text(chat_tab_lab, "Chat");
+    lv_obj_center(chat_tab_lab);
+    lv_obj_add_event_cb(chat_tab_btn, chat_chat_tab_cb, LV_EVENT_CLICKED, NULL);
+
+    input_tab_btn = lv_btn_create(tab_row);
+    lv_obj_set_flex_grow(input_tab_btn, 1);
+    lv_obj_set_height(input_tab_btn, 30);
+    lv_obj_t *input_tab_lab = lv_label_create(input_tab_btn);
+    lv_label_set_text(input_tab_lab, "Input");
+    lv_obj_center(input_tab_lab);
+    lv_obj_add_event_cb(input_tab_btn, chat_input_tab_cb, LV_EVENT_CLICKED, NULL);
+
+    /* --- status line --- */
+    chat_status_lab = lv_label_create(cont);
+    lv_obj_set_style_text_font(chat_status_lab, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(chat_status_lab, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_label_set_text(chat_status_lab, "");
+
+    /* --- Chat page: the history fills the whole page --- */
+    chat_page = lv_obj_create(cont);
+    lv_obj_set_width(chat_page, lv_pct(100));
+    lv_obj_set_flex_grow(chat_page, 1);
+    lv_obj_set_style_bg_opa(chat_page, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(chat_page, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(chat_page, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(chat_page, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollbar_mode(chat_page, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(chat_page, LV_OBJ_FLAG_SCROLLABLE);
+
+    chat_hist_cont = lv_obj_create(chat_page);
     lv_obj_set_width(chat_hist_cont, lv_pct(100));
-    lv_obj_set_height(chat_hist_cont, 160);
+    lv_obj_set_flex_grow(chat_hist_cont, 1);
     lv_obj_set_style_bg_color(chat_hist_cont, lv_color_white(), 0);
     lv_obj_set_style_border_width(chat_hist_cont, 1, 0);
     lv_obj_set_style_border_color(chat_hist_cont, lv_color_black(), 0);
@@ -942,33 +1035,29 @@ static void chat_create(lv_obj_t *parent)
     lv_obj_set_scroll_dir(chat_hist_cont, LV_DIR_VER);
     lv_obj_clear_flag(chat_hist_cont, LV_OBJ_FLAG_SCROLL_CHAIN);
 
-    /* --- status line --- */
-    chat_status_lab = lv_label_create(cont);
-    lv_obj_set_style_text_font(chat_status_lab, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(chat_status_lab, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
-    lv_label_set_text(chat_status_lab, "");
+    /* --- Input page: large textarea + large buttons --- */
+    input_page = lv_obj_create(cont);
+    lv_obj_set_width(input_page, lv_pct(100));
+    lv_obj_set_flex_grow(input_page, 1);
+    lv_obj_set_style_bg_opa(input_page, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(input_page, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(input_page, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(input_page, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(input_page, 4, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(input_page, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(input_page, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* --- input row: multi-line box (1/3) + small side buttons --- */
-    lv_obj_t *input_row = lv_obj_create(cont);
-    lv_obj_set_width(input_row, lv_pct(100));
-    lv_obj_set_height(input_row, 86);
-    lv_obj_set_style_bg_opa(input_row, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(input_row, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(input_row, 0, LV_PART_MAIN);
-    lv_obj_set_flex_flow(input_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(input_row, 4, LV_PART_MAIN);
-
-    chat_input_ta = lv_textarea_create(input_row);
+    chat_input_ta = lv_textarea_create(input_page);
     lv_obj_set_width(chat_input_ta, 176);
-    lv_obj_set_height(chat_input_ta, 86);
+    lv_obj_set_height(chat_input_ta, lv_pct(100));
     lv_textarea_set_max_length(chat_input_ta, 200);
     lv_textarea_set_placeholder_text(chat_input_ta, "Type here...");
     lv_obj_set_style_text_font(chat_input_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
-    /* small Send / Clear / New buttons stacked on the side (3 x 26 px) */
-    lv_obj_t *btn_col = lv_obj_create(input_row);
-    lv_obj_set_width(btn_col, 44);
-    lv_obj_set_height(btn_col, 86);
+    /* big Send / Clear / New buttons stacked on the side (3 x ~74 px) */
+    lv_obj_t *btn_col = lv_obj_create(input_page);
+    lv_obj_set_width(btn_col, 48);
+    lv_obj_set_height(btn_col, lv_pct(100));
     lv_obj_set_style_bg_opa(btn_col, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(btn_col, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(btn_col, 0, LV_PART_MAIN);
@@ -976,16 +1065,16 @@ static void chat_create(lv_obj_t *parent)
     lv_obj_set_style_pad_row(btn_col, 4, LV_PART_MAIN);
 
     lv_obj_t *send_btn = lv_btn_create(btn_col);
-    lv_obj_set_width(send_btn, 44);
-    lv_obj_set_height(send_btn, 26);
+    lv_obj_set_width(send_btn, 48);
+    lv_obj_set_flex_grow(send_btn, 1);
     lv_obj_t *send_lab = lv_label_create(send_btn);
     lv_label_set_text(send_lab, "Send");
     lv_obj_center(send_lab);
     lv_obj_add_event_cb(send_btn, chat_send_btn_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *clear_btn = lv_btn_create(btn_col);
-    lv_obj_set_width(clear_btn, 44);
-    lv_obj_set_height(clear_btn, 26);
+    lv_obj_set_width(clear_btn, 48);
+    lv_obj_set_flex_grow(clear_btn, 1);
     lv_obj_t *clear_lab = lv_label_create(clear_btn);
     lv_label_set_text(clear_lab, "Clear");
     lv_obj_center(clear_lab);
@@ -995,8 +1084,8 @@ static void chat_create(lv_obj_t *parent)
      * history AND the persisted log; usage counters in ai_stats survive.
      * The click opens a confirmation overlay (copilot finding 1.7). */
     lv_obj_t *new_btn = lv_btn_create(btn_col);
-    lv_obj_set_width(new_btn, 44);
-    lv_obj_set_height(new_btn, 26);
+    lv_obj_set_width(new_btn, 48);
+    lv_obj_set_flex_grow(new_btn, 1);
     lv_obj_t *new_lab = lv_label_create(new_btn);
     lv_label_set_text(new_lab, "New");
     lv_obj_center(new_lab);
@@ -1023,6 +1112,8 @@ static void chat_create(lv_obj_t *parent)
         lv_label_set_text(chat_status_lab, "Retry draft restored");
     }
     chat_history_render();
+    /* initial tab: a restored retry draft opens the Input page directly */
+    chat_set_tab(draft.length() > 0);
 }
 
 static void chat_entry(void)
