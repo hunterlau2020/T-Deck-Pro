@@ -204,6 +204,8 @@ static void chat_log_save(void)
         for (uint16_t k = 0; k < len; k++) sum += data[k];
     }
     ok = ok && (f.write((uint8_t *)&sum, 4) == 4);
+    f.flush();                                  /* durable before the rename
+                                                 * (copilot finding 1.3) */
     f.close();
     if (!ok) {
         SPIFFS.remove(CHAT_LOG_TMP);
@@ -234,6 +236,68 @@ static void chat_log_save(void)
 /* Restore the ring from /chat.log on screen create. A log is accepted
  * ONLY when magic and checksum both match - a torn write from a power
  * loss is discarded whole, never partially replayed (copilot 1.4). */
+static void chat_history_reset(void)
+{
+    for (int i = 0; i < chat_hist_cnt; i++) chat_history[i].text.clear();
+    chat_hist_cnt = 0;
+    chat_hist_bytes = 0;
+}
+
+/* Parse records starting at the CURRENT file position.
+ * with_count=true:  a 4-byte record count precedes the records (CHL2 and
+ *                   the CHL1 variant shipped by c90307f);
+ * with_count=false: records run until only the 4-byte checksum remains
+ *                   (the CHL1 variant shipped by 35e9eae).
+ * Returns true when records AND trailing checksum validate; the ring is
+ * reset on any failure so a retry starts clean. */
+static bool chat_log_parse(File &f, bool with_count)
+{
+    uint32_t count = 0;
+    if (with_count) {
+        if (f.available() < 4) return false;
+        f.read((uint8_t *)&count, 4);
+        if (count > CHAT_HIST_MAX) return false;
+    }
+    char buf[CHAT_MSG_MAX + 1];
+    uint32_t sum = 0;
+    bool ok = true;
+    uint32_t n = 0;
+    while (ok) {
+        if (with_count) {
+            if (n >= count) break;
+        } else if (f.available() <= 4) {
+            break;                          /* only the checksum is left */
+        }
+        if (f.available() < 3) { ok = false; break; }
+        uint8_t fl = 0;
+        uint16_t len = 0;
+        f.read(&fl, 1);
+        f.read((uint8_t *)&len, 2);
+        if (len == 0 || len > CHAT_MSG_MAX || f.available() < len) {
+            ok = false;                     /* corrupt tail */
+            break;
+        }
+        f.read((uint8_t *)buf, len);
+        buf[len] = '\0';
+        chat_history_add(fl == 1, buf);
+        sum += fl;
+        sum += len;
+        for (uint16_t k = 0; k < len; k++) sum += (uint8_t)buf[k];
+        n++;
+    }
+    uint32_t stored = 0;
+    if (!ok || f.available() != 4 ||
+        f.read((uint8_t *)&stored, 4) != 4 || stored != sum) {
+        chat_history_reset();
+        return false;
+    }
+    if (with_count && n != count) {
+        chat_history_reset();
+        return false;
+    }
+    return true;
+}
+
 static void chat_log_load(void)
 {
     chat_spiffs_ok = SPIFFS.begin(false);   /* NEVER auto-format on mount trouble (copilot 1.4) */
@@ -250,74 +314,61 @@ static void chat_log_load(void)
         Serial.println("[AIChat] chat.log absent - fresh history");
         return;
     }
-    File f = SPIFFS.open(CHAT_LOG_PATH, FILE_READ);
-    if (!f) {
-        Serial.println("[AIChat] chat.log open failed");
-        return;
-    }
-    Serial.printf("[AIChat] chat.log present, %u bytes\n",
-                  (unsigned)f.size());
 
-    uint32_t magic = 0;
-    if (f.available() < 4 || f.read((uint8_t *)&magic, 4) != 4) {
-        f.close();
-        Serial.println("[AIChat] log corrupt: unreadable header - ignored");
-        return;
-    }
-    if (magic == CHAT_LOG_MAGIC_V1) {
-        /* pre-record-count format: cannot be parsed reliably, say so
-         * instead of blaming corruption (copilot finding 1.3) */
-        f.close();
-        Serial.println("[AIChat] old-format log (CHL1) ignored - history starts fresh");
-        return;
-    }
-    if (magic != CHAT_LOG_MAGIC) {
-        f.close();
-        Serial.println("[AIChat] log corrupt: bad magic - ignored");
-        return;
-    }
-    /* record count from the header (copilot finding 1.1): parse EXACTLY
-     * this many records, then the 4-byte checksum - the loop must never
-     * consume the checksum as a record header */
-    uint32_t count = 0;
-    f.read((uint8_t *)&count, 4);
-    if (count > CHAT_HIST_MAX) {
-        f.close();
-        Serial.println("[AIChat] log corrupt: bad record count - ignored");
-        return;
-    }
-    char buf[CHAT_MSG_MAX + 1];
-    uint32_t sum = 0;
-    bool ok = true;
-    for (uint32_t n = 0; n < count && ok; n++) {
-        if (f.available() < 3) { ok = false; break; }
-        uint8_t fl = 0;
-        uint16_t len = 0;
-        f.read(&fl, 1);
-        f.read((uint8_t *)&len, 2);
-        if (len == 0 || len > CHAT_MSG_MAX || f.available() < len) {
-            ok = false;                 /* corrupt tail */
-            break;
+    /* two attempts: the official path, then the backup promoted over it -
+     * an invalid official must not block a valid backup (copilot 1.3) */
+    for (int attempt = 0; attempt < 2; attempt++) {
+        File f = SPIFFS.open(CHAT_LOG_PATH, FILE_READ);
+        if (!f) {
+            Serial.println("[AIChat] chat.log open failed");
+            return;
         }
-        f.read((uint8_t *)buf, len);
-        buf[len] = '\0';
-        chat_history_add(fl == 1, buf);
-        sum += fl;
-        sum += len;
-        for (uint16_t k = 0; k < len; k++) sum += (uint8_t)buf[k];
+        Serial.printf("[AIChat] chat.log attempt %d: %u bytes\n",
+                      attempt, (unsigned)f.size());
+
+        uint32_t magic = 0;
+        if (f.available() < 4 || f.read((uint8_t *)&magic, 4) != 4) {
+            f.close();
+        } else if (magic == CHAT_LOG_MAGIC) {
+            if (chat_log_parse(f, true)) {
+                f.close();
+                Serial.printf("[AIChat] history restored: %d msgs, %d bytes\n",
+                              chat_hist_cnt, chat_hist_bytes);
+                return;
+            }
+            f.close();
+        } else if (magic == CHAT_LOG_MAGIC_V1) {
+            /* CHL1 was used by TWO shipped formats: without count
+             * (35e9eae) and with count (c90307f). Try both so neither
+             * upgrade path loses history (copilot finding 1.2). */
+            if (chat_log_parse(f, true)) {      /* CHL1-with-count */
+                f.close();
+                Serial.println("[AIChat] restored CHL1 (with count) - resaved as CHL2");
+                return;
+            }
+            f.seek(4);                          /* CHL1-without-count */
+            if (chat_log_parse(f, false)) {
+                f.close();
+                Serial.println("[AIChat] restored CHL1 (no count) - resaved as CHL2");
+                return;
+            }
+            f.close();
+        } else {
+            f.close();
+        }
+
+        if (attempt == 0 && SPIFFS.exists(CHAT_LOG_BAK)) {
+            SPIFFS.remove(CHAT_LOG_PATH);
+            if (!SPIFFS.rename(CHAT_LOG_BAK, CHAT_LOG_PATH)) {
+                Serial.println("[AIChat] bak promote failed");
+                break;
+            }
+            Serial.println("[AIChat] official invalid - promoted .bak");
+            continue;
+        }
+        break;
     }
-    uint32_t stored = 0;
-    if (!ok || f.available() < 4 || f.read((uint8_t *)&stored, 4) != 4 || stored != sum) {
-        f.close();
-        for (int i = 0; i < chat_hist_cnt; i++) chat_history[i].text.clear();
-        chat_hist_cnt = 0;
-        chat_hist_bytes = 0;
-        Serial.println("[AIChat] log corrupt: checksum mismatch - ignored");
-        return;
-    }
-    f.close();
-    Serial.printf("[AIChat] history restored: %lu msgs, %d bytes\n",
-                  (unsigned long)count, chat_hist_bytes);
+    Serial.println("[AIChat] log ignored (corrupt or unknown) - history starts fresh");
 }
 
 /* ---- retry draft persistence (copilot finding 1.5) ---------------------
@@ -519,7 +570,12 @@ static void chat_send(void)
         return;
     }
     chat_history_snapshot(rq);      /* multi-turn context, capped at 8 KB */
-    Serial.printf("[AIChat] send: %u context msgs\n", (unsigned)rq->history.size());
+    /* copy UI-visible values BEFORE the ownership handoff: once the task
+     * exists, it may delete rq at any moment (fast HTTP failure) and the
+     * UI must never touch it again (copilot finding 1.1) */
+    const size_t ctx_msgs = rq->history.size();
+    const bool ctx_trimmed = chat_ctx_trimmed;
+    Serial.printf("[AIChat] send: %u context msgs\n", (unsigned)ctx_msgs);
 
     TaskHandle_t h = NULL;
     if (xTaskCreate(chat_send_task_func, "chat_send", 1024 * 8,
@@ -529,6 +585,7 @@ static void chat_send(void)
         return;
     }
     s_chat_send_busy = true;
+    /* rq is owned by the task from here on - do NOT dereference it */
 
     /* copilot 1.7: the bubble is added only AFTER the task really started;
      * a retry REUSES the pending bubble (drop-last + re-add) instead of
@@ -550,7 +607,7 @@ static void chat_send(void)
      * travels with the request and whether older turns were trimmed */
     char st[64];
     snprintf(st, sizeof(st), "Sent · %u ctx msgs%s",
-             (unsigned)rq->history.size(), chat_ctx_trimmed ? " · trimmed" : "");
+             (unsigned)ctx_msgs, ctx_trimmed ? " · trimmed" : "");
     lv_label_set_text(chat_status_lab, st);
 }
 
