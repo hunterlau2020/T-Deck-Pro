@@ -427,7 +427,10 @@ static void weather_fetch_task(void *param)
 
     if (data_valid) {
         last_fetch_time = millis();
-        if (location_name[0] == '\0') fetch_city_name(lat, lon, key);
+        /* re-resolve the city EVERY fetch so the name follows the
+         * coordinates - a cached name from the previous location (e.g.
+         * San Carlos from the old SF fallback) must not stick */
+        fetch_city_name(lat, lon, key);
         save_cache();
         Serial.printf("[Weather] ok: %d hourly, %d daily\n", hourly_count, daily_count);
     }
@@ -570,6 +573,10 @@ void weather_keyboard_poll()
             weather_cleanup();
             scr_mgr_pop(false);
         }
+    } else if (c == 'r') {
+        /* manual refresh (user request): bypass the 1 h cache */
+        last_fetch_time = 0;
+        start_fetch();
     } else if (c == '\n' || c == ' ' || c == '+' || c == '-') {
         /* Enter/Space or Sym-layer +/- cycle the 3 pages (user report:
          * +/- should work like the other screens) */

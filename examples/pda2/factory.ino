@@ -774,6 +774,8 @@ void loop()
     ai_chat_keyboard_poll();
     extern void ai_cfg_keyboard_poll();
     ai_cfg_keyboard_poll();
+    extern void shutdown_keyboard_poll();
+    shutdown_keyboard_poll();
     bq25896_runtime_maintain();
 
     audio.loop();

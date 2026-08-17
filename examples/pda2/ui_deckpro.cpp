@@ -3614,24 +3614,58 @@ static scr_lifecycle_t screen8_2 = {
 #endif
 //************************************[ screen 9 ]****************************************** Shutdown
 #if 1
-static lv_timer_t *shutdown_timer = NULL;
+static bool shutdown_kbd_active = false;
+static lv_obj_t *shutdown_confirm = NULL;
+
+static void shutdown_confirm_accept(void)
+{
+    if (shutdown_confirm) {
+        lv_obj_del(shutdown_confirm);
+        shutdown_confirm = NULL;
+    }
+    shutdown_kbd_active = false;
+    ui_shutdown_on();
+}
+
+static void shutdown_confirm_cancel(void)
+{
+    if (shutdown_confirm) {
+        lv_obj_del(shutdown_confirm);
+        shutdown_confirm = NULL;
+    }
+    shutdown_kbd_active = false;
+    scr_mgr_pop(false);
+}
+
+static void shutdown_confirm_accept_cb(lv_event_t *e) { shutdown_confirm_accept(); }
+static void shutdown_confirm_cancel_cb(lv_event_t *e) { shutdown_confirm_cancel(); }
+
+/* Enter = confirm shutdown, any other key = cancel back to the menu
+ * (user request: accidental entry must not kill the device - the old
+ * blind 2s auto-shutdown is gone). */
+void shutdown_keyboard_poll(void)
+{
+    if (!shutdown_kbd_active) return;
+    char c;
+    if (!keypad_get_val(&c)) return;
+    keypad_set_flag();
+    if (c == '\n') {
+        shutdown_confirm_accept();
+    } else {
+        shutdown_confirm_cancel();
+    }
+}
 
 static void scr9_btn_event_cb(lv_event_t * e)
 {
     if(e->code == LV_EVENT_CLICKED){
-        scr_mgr_pop(false);
+        shutdown_confirm_cancel();
     }
-}
-
-static void shutdown_timer_event(lv_timer_t* t)
-{
-    ui_shutdown_on();
-    lv_timer_del(t);
 }
 
 static void create9(lv_obj_t *parent)
 {
-    if(ui_battery_25896_is_vbus_in()) 
+    if(ui_battery_25896_is_vbus_in())
     {
         lv_obj_t * label = lv_label_create(parent);
         lv_obj_set_width(label, lv_pct(95));
@@ -3641,26 +3675,81 @@ static void create9(lv_obj_t *parent)
                             "battery is connected alone, and cannot be shut down when connected to USB.");
         lv_obj_center(label);
 
-        // back 
+        // back
         scr_back_btn_create(parent, "Shoutdown", scr8_btn_event_cb);
-    } 
-    else 
+    }
+    else
     {
         lv_obj_t * img = lv_img_create(parent);
         lv_img_set_src(img, &img_start);
         lv_obj_center(img);
 
-        lv_timer_create(shutdown_timer_event, 2000, (void *)parent);
+        scr_back_btn_create(parent, "Shutdown", scr9_btn_event_cb);
+
+        /* confirmation overlay: Enter = OK, Cancel/any key/back = cancel */
+        shutdown_confirm = lv_obj_create(lv_layer_top());
+        lv_obj_set_size(shutdown_confirm, 220, 130);
+        lv_obj_align(shutdown_confirm, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_style_bg_color(shutdown_confirm, lv_color_white(), 0);
+        lv_obj_set_style_border_width(shutdown_confirm, 1, 0);
+        lv_obj_set_style_border_color(shutdown_confirm, lv_color_black(), 0);
+        lv_obj_set_style_radius(shutdown_confirm, 6, 0);
+        lv_obj_set_style_pad_all(shutdown_confirm, 8, 0);
+        lv_obj_set_flex_flow(shutdown_confirm, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_row(shutdown_confirm, 6, 0);
+        lv_obj_clear_flag(shutdown_confirm, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *body = lv_label_create(shutdown_confirm);
+        lv_obj_set_width(body, lv_pct(100));
+        lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
+        lv_label_set_text(body, "Shut down now?\n(Enter=OK, any key=Cancel)");
+        lv_obj_set_style_text_font(body, &lv_font_montserrat_14, 0);
+        lv_obj_set_flex_grow(body, 1);
+
+        lv_obj_t *row = lv_obj_create(shutdown_confirm);
+        lv_obj_set_width(row, lv_pct(100));
+        lv_obj_set_height(row, 32);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(row, 4, LV_PART_MAIN);
+
+        lv_obj_t *cancel_btn = lv_btn_create(row);
+        lv_obj_set_flex_grow(cancel_btn, 1);
+        lv_obj_set_height(cancel_btn, 32);
+        lv_obj_t *cancel_lab = lv_label_create(cancel_btn);
+        lv_label_set_text(cancel_lab, "Cancel");
+        lv_obj_center(cancel_lab);
+        lv_obj_add_event_cb(cancel_btn, shutdown_confirm_cancel_cb, LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t *ok_btn = lv_btn_create(row);
+        lv_obj_set_flex_grow(ok_btn, 1);
+        lv_obj_set_height(ok_btn, 32);
+        lv_obj_t *ok_lab = lv_label_create(ok_btn);
+        lv_label_set_text(ok_lab, "OK");
+        lv_obj_center(ok_lab);
+        lv_obj_add_event_cb(ok_btn, shutdown_confirm_accept_cb, LV_EVENT_CLICKED, NULL);
+
+        shutdown_kbd_active = true;
     }
 }
-static void entry9(void) 
+static void entry9(void)
 {
     ui_disp_full_refr();
 }
 static void exit9(void) {
     ui_disp_full_refr();
+    shutdown_kbd_active = false;
 }
-static void destroy9(void) { }
+static void destroy9(void)
+{
+    shutdown_kbd_active = false;
+    if (shutdown_confirm) {
+        lv_obj_del(shutdown_confirm);
+        shutdown_confirm = NULL;
+    }
+}
 
 static scr_lifecycle_t screen9 = {
     .create = create9,
