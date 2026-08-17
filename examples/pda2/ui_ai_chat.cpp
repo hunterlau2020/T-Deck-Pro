@@ -485,6 +485,9 @@ static void chat_history_snapshot(chat_send_req_t *rq)
     }
 }
 
+static void chat_waitbox_show(void);           /* defined below the poll */
+static void chat_waitbox_hide(void);
+
 static void chat_send(void)
 {
     if (s_chat_send_busy) return;               /* already sending */
@@ -529,39 +532,43 @@ static void chat_send(void)
 
     /* copilot 1.7: the bubble is added only AFTER the task really started;
      * a retry REUSES the pending bubble (drop-last + re-add) instead of
-     * appending a duplicate. The draft STAYS in the input box until
-     * success, so failures can retry with the same bubble. */
+     * appending a duplicate. Per user request (2026-08-17) the input box
+     * clears IMMEDIATELY on send, the wait overlay pops up, and on
+     * failure the text is restored into the box for retry. */
     if (chat_pending_idx >= 0) {
         chat_history_drop_last();
         chat_pending_idx = -1;
     }
     chat_history_add(true, prompt);
     chat_pending_idx = chat_hist_cnt - 1;
+    lv_textarea_set_text(chat_input_ta, "");    /* send = handoff to the bubble */
+    chat_draft_clear();                         /* in flight: not a retry draft yet */
     chat_history_render();
     chat_log_save();
+    chat_waitbox_show();                        /* "Waiting server reply... 10s" */
     /* context visibility (copilot finding 1.8): show how much history
      * travels with the request and whether older turns were trimmed */
     char st[64];
-    snprintf(st, sizeof(st), "Thinking · %u ctx msgs%s",
+    snprintf(st, sizeof(st), "Sent · %u ctx msgs%s",
              (unsigned)rq->history.size(), chat_ctx_trimmed ? " · trimmed" : "");
     lv_label_set_text(chat_status_lab, st);
 }
 
-/* Mark the pending bubble failed without touching the input draft
- * (copilot 1.7: "mark failed instead of duplicating"). The draft is
- * persisted so the retry survives a reboot (copilot finding 1.5). */
+/* Mark the pending bubble failed, restore its text into the input box
+ * for retry and keep the persisted draft in sync (copilot 1.7/1.5). */
 static void chat_mark_pending_failed(void)
 {
     if (chat_pending_idx < 0) return;
-    string marked = chat_history[chat_pending_idx].text;
-    marked += " (failed)";
+    string failed = chat_history[chat_pending_idx].text;
+    string marked = failed + " (failed)";
     chat_history_drop_last();
     chat_pending_idx = -1;
     chat_history_add(true, marked.c_str());
     chat_pending_idx = chat_hist_cnt - 1;
+    lv_textarea_set_text(chat_input_ta, failed.c_str());  /* retry-ready */
+    chat_draft_save(failed.c_str());
     chat_history_render();
     chat_log_save();                            /* pending bubble is skipped inside */
-    chat_draft_save(lv_textarea_get_text(chat_input_ta));
 }
 
 /* New-confirm overlay (defined below, after the poll that drives it) */
@@ -570,29 +577,99 @@ static void chat_confirm_show(void);
 static void chat_confirm_accept(void);
 static void chat_confirm_cancel(void);
 
+/* ---- send-wait overlay (user request 2026-08-17) -----------------------
+ * Pops up on Send ("Waiting server reply... 10s"), countdown ticks on
+ * second changes only (EPD-friendly); at 0 it shows "still waiting..."
+ * and STAYS until the reply arrives - success closes it and shows the
+ * assistant bubble, failure closes it, marks the pending bubble and
+ * restores the text into the input box for retry. */
+static lv_obj_t *chat_waitbox = NULL;
+static lv_obj_t *chat_waitbox_body = NULL;
+static uint32_t chat_wait_t0 = 0;
+static uint32_t chat_wait_last = 99;
+static void chat_waitbox_hide(void);
+
+static void chat_waitbox_show(void)
+{
+    chat_waitbox_hide();
+    chat_waitbox = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(chat_waitbox, 220, 110);
+    lv_obj_align(chat_waitbox, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(chat_waitbox, lv_color_white(), 0);
+    lv_obj_set_style_border_width(chat_waitbox, 1, 0);
+    lv_obj_set_style_border_color(chat_waitbox, lv_color_black(), 0);
+    lv_obj_set_style_radius(chat_waitbox, 6, 0);
+    lv_obj_set_style_pad_all(chat_waitbox, 8, 0);
+    lv_obj_clear_flag(chat_waitbox, LV_OBJ_FLAG_SCROLLABLE);
+
+    chat_waitbox_body = lv_label_create(chat_waitbox);
+    lv_obj_set_width(chat_waitbox_body, lv_pct(100));
+    lv_label_set_long_mode(chat_waitbox_body, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(chat_waitbox_body, "Waiting server reply... 10s");
+    lv_obj_set_style_text_font(chat_waitbox_body, &lv_font_montserrat_14, 0);
+    lv_obj_center(chat_waitbox_body);
+
+    chat_wait_t0 = millis();
+    chat_wait_last = 99;
+}
+
+static void chat_waitbox_hide(void)
+{
+    if (chat_waitbox) {
+        lv_obj_del(chat_waitbox);
+        chat_waitbox = NULL;
+        chat_waitbox_body = NULL;
+    }
+}
+
+static void chat_waitbox_tick(void)
+{
+    if (chat_waitbox == NULL || chat_waitbox_body == NULL) return;
+    int32_t remain = 10000 - (int32_t)(millis() - chat_wait_t0);
+    if (remain <= 0) {
+        if (chat_wait_last != 0) {
+            chat_wait_last = 0;
+            lv_label_set_text(chat_waitbox_body,
+                              "Waiting server reply...\nstill waiting...");
+        }
+        return;
+    }
+    uint32_t secs = ((uint32_t)remain + 999) / 1000;
+    if (secs != chat_wait_last) {
+        chat_wait_last = secs;
+        char buf[48];
+        snprintf(buf, sizeof(buf), "Waiting server reply... %lus", (unsigned)secs);
+        lv_label_set_text(chat_waitbox_body, buf);
+    }
+}
+
 void ai_chat_keyboard_poll(void)
 {
-    /* Drain async replies (queue, ownership transfers to the UI).
-     * Only a result matching the CURRENT page generation may clear busy
-     * (finding 1.6): a stale reply of an earlier visit must not release
-     * the busy flag of the request currently in flight. */
+    chat_waitbox_tick();                        /* countdown ticks on second changes */
+
+    /* Drain async replies (queue, ownership transfers to the UI) FIRST -
+     * the waitbox stays open while a request is in flight, and the reply
+     * (or the error) is what closes it. Only a result matching the
+     * CURRENT page generation may clear busy (finding 1.6): a stale
+     * reply of an earlier visit must not release the busy flag of the
+     * request currently in flight. */
     chat_reply_t *cr = NULL;
     while (s_chat_q && xQueueReceive(s_chat_q, &cr, 0) == pdTRUE) {
         if (!cr) continue;
         if (cr->gen == s_chat_page_gen && chat_kbd_active) {
             s_chat_send_busy = false;
+            chat_waitbox_hide();                /* the wait is over */
             if (cr->ok) {
                 Serial.printf("[AIChat] reply len=%u\n", (unsigned)cr->reply.length());
                 chat_pending_idx = -1;          /* user message confirmed */
-                lv_textarea_set_text(chat_input_ta, "");    /* success: draft consumed */
                 chat_draft_clear();             /* retry draft no longer needed */
                 chat_history_add(false, cr->reply.c_str());
                 chat_history_render();
                 chat_log_save();
                 lv_label_set_text(chat_status_lab, "");
             } else {
-                /* failure: the draft stays in the box for retry, the pending
-                 * bubble is marked so the retry visibly reuses it */
+                /* failure: the pending bubble is marked, its text is
+                 * restored into the input box for retry */
                 chat_mark_pending_failed();
                 lv_label_set_text(chat_status_lab, "AI error - check cfg / WiFi");
             }
@@ -600,6 +677,13 @@ void ai_chat_keyboard_poll(void)
             Serial.println("[AIChat] stale reply dropped");
         }
         delete cr;
+    }
+
+    /* waitbox open: swallow input until the reply arrives */
+    if (chat_waitbox != NULL) {
+        char c2;
+        if (keypad_get_val(&c2)) keypad_set_flag();
+        return;
     }
 
     if (!chat_kbd_active) return;
@@ -906,6 +990,7 @@ static void chat_destroy(void)
 {
     chat_kbd_active = false;
     chat_confirm_close();                       /* no overlay on other screens */
+    chat_waitbox_hide();                        /* no waitbox on other screens */
     openai_stats_flush();                       /* lifecycle checkpoint (copilot 1.1) */
     s_chat_page_gen++;                          /* late replies of this visit are dropped */
     /* safe to clear busy here: the in-flight task owns its own request
