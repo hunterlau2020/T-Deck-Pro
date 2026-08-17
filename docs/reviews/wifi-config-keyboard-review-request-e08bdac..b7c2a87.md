@@ -13,6 +13,7 @@
   - `f3e1698` — `pda2: wifi scan overlay - reviewer edit: bind min-display to the visible frame`（Codex 直接改进）
   - `7ecebcd` — `pda2: coalesce keypad bursts into one EPD render per pass`（用户反馈：输入延迟）
   - `1f46630` — `pda2: redraw-on-release scroll + Enter inserts newline in AI Text`（用户反馈）
+  - `b7c2a87` — `pda2: weather - migrate from One Call 3.0 to the free 2.5 endpoints`（用户反馈）
 - **历史范围**：`844a907..156732c`（31→28 个 commit）已由 Codex **全量接受**（见
   [评审结果](wifi-config-keyboard-review-result-codex-844a907..156732c.md)），本申请
   **不再重复携带**已通过的内容——评审只需审上述 4 个新 commit。
@@ -55,6 +56,13 @@ Test: 56 tok, 0.000100 USD
 - Chat tab 下按任意可见字符自动跳 Input tab 并追加；Enter 跳 Input；空框 Backspace 回 Chat
 - 重试草稿恢复时默认打开 Input tab
 - New 键盘路径改到音量键 `'\v'`（Input tab 下；Alt+Enter 让位给 tab 切换）
+
+### 1.10 Weather 迁移免费 2.5 端点（`b7c2a87`，用户反馈）
+
+One Call 3.0 需要付费订阅且 OWM 正将其下线（免费 key 401）——改用 `/data/2.5/weather`
+（当前天气，免费档无 UV 显示 `UV:--`）+ `/data/2.5/forecast`（5 天/3h 槽位：前 12 槽做
+逐小时表、按本地日期聚合成每日 min/max/湿度/降水）；页标题 8-Day → 5-Day。API key 存
+gitignored 的 config_keys.h，不进入仓库。
 
 ### 1.9 滚动抬手才刷 + 回车改换行（`1f46630`，用户反馈）
 
@@ -117,7 +125,7 @@ hide waitbox（与 destroy 一致）。
 ## 5. 回滚方案
 
 ```bash
-git revert 1f46630 7ecebcd f3e1698 06a2c13 cc94452 0b43685 f4449c3 8770a41 e08bdac
+git revert b7c2a87 1f46630 7ecebcd f3e1698 06a2c13 cc94452 0b43685 f4449c3 8770a41 e08bdac
 ```
 
 ## 6. 申请审批事项
