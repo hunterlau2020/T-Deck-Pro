@@ -52,7 +52,7 @@ bool openai_chat(const char *prompt, const char *base_url,
                  const char *model, const char *api_key, string &out,
                  uint32_t timeout_ms = 30000);
 
-#define AI_BASE_DEFAULT "https://openrouter.ai/api/v1/chat/completions"
+#define AI_BASE_DEFAULT "https://openrouter.ai/api/v1"
 #define AI_MODEL_DEFAULT "deepseek/deepseek-v4-flash-0731"
 /* v1: fixed system prompt (not user-configurable). Moving it into NVS
  * ("ai.system") is planned together with the cfg_version migration. */

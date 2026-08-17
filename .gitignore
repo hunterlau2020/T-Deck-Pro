@@ -15,3 +15,6 @@ docs/image_source/img_start - 副本.xcf
 examples/test_factory/
 other/
 config_keys.h
+
+# Device-side secrets backups (never commit)
+env.cfg

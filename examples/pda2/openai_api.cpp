@@ -143,6 +143,7 @@ static cJSON *ai_msg_add(cJSON *msgs, const char *role, const char *content)
  * accounting, not conversation data. */
 #define AI_STATS_MAGIC_V1 0x53544154u  /* "STAT": 74c24ff single-group blob */
 #define AI_STATS_MAGIC_V2 0x53544156u  /* "STAV": dual-group blob (0328cd2+) */
+#define AI_STATS_MAGIC_V3 0x53544157u  /* "STAW": dual-group + reset_month (monthly reset) */
 
 typedef struct {
     uint32_t magic;
@@ -152,6 +153,9 @@ typedef struct {
     /* test (config screen pings) */
     uint64_t t_p_tok, t_c_tok, t_tot_tok, t_cached, t_cwrite, t_audio, t_reasoning;
     double   t_cost;
+    /* YYYYMM of the current accounting month; when the wall clock crosses
+     * into a new month the counters reset (user request) */
+    uint32_t reset_month;
 } ai_stats_t;
 
 /* pre-split layout written by 74c24ff (same magic family, no test group) */
@@ -161,6 +165,15 @@ typedef struct {
     double   cost;
     uint64_t cached, cwrite, audio, reasoning;
 } ai_stats_v1_t;
+
+/* dual-group layout before the monthly reset field */
+typedef struct {
+    uint32_t magic;
+    uint64_t p_tok, c_tok, tot_tok, cached, cwrite, audio, reasoning;
+    double   cost;
+    uint64_t t_p_tok, t_c_tok, t_tot_tok, t_cached, t_cwrite, t_audio, t_reasoning;
+    double   t_cost;
+} ai_stats_v2_t;
 
 static StaticSemaphore_t s_ai_stats_mux_buf;
 static SemaphoreHandle_t s_ai_stats_mux =
@@ -182,8 +195,11 @@ static double ai_json_dbl(cJSON *obj, const char *key)
     return (it && cJSON_IsNumber(it)) ? it->valuedouble : 0.0;
 }
 
-/* Call with the mutex held. Migrates the pre-split V1 blob into the
- * chat group instead of silently zeroing it (copilot finding 1.4). */
+/* Call with the mutex held. Migrates V1/V2 blobs instead of silently
+ * zeroing them (copilot finding 1.4), then applies the MONTHLY RESET
+ * (user request): when the wall clock crossed into a new month the
+ * counters start over. Skipped while NTP is unsynced (epoch < 2023),
+ * so a cold boot can never wipe the stats accidentally. */
 static void ai_stats_load_locked(void)
 {
     if (s_ai_stats_loaded) return;
@@ -192,8 +208,20 @@ static void ai_stats_load_locked(void)
     if (p.begin("ai_stats", false)) {
         size_t n = p.getBytes("stats", &s_ai_stats, sizeof(s_ai_stats));
         p.end();
-        if (n == sizeof(s_ai_stats) && s_ai_stats.magic == AI_STATS_MAGIC_V2) {
+        if (n == sizeof(s_ai_stats) && s_ai_stats.magic == AI_STATS_MAGIC_V3) {
             /* current format - nothing to do */
+        } else if (n == sizeof(ai_stats_v2_t)) {
+            ai_stats_v2_t v2;
+            if (p.begin("ai_stats", false)) {
+                n = p.getBytes("stats", &v2, sizeof(v2));
+                p.end();
+            }
+            if (n == sizeof(v2) && v2.magic == AI_STATS_MAGIC_V2) {
+                memcpy(&s_ai_stats.p_tok, &v2.p_tok,
+                       (char *)&v2.t_cost + sizeof(v2.t_cost) - (char *)&v2.p_tok);
+                s_stats_since_persist = 1;
+                Serial.println("[AI] stats blob migrated from V2 to V3");
+            }
         } else if (n == sizeof(ai_stats_v1_t)) {
             ai_stats_v1_t v1;
             if (p.begin("ai_stats", false)) {
@@ -201,7 +229,6 @@ static void ai_stats_load_locked(void)
                 p.end();
             }
             if (n == sizeof(v1) && v1.magic == AI_STATS_MAGIC_V1) {
-                /* migrate: the old single group becomes the chat group */
                 s_ai_stats.p_tok = v1.p_tok;
                 s_ai_stats.c_tok = v1.c_tok;
                 s_ai_stats.tot_tok = v1.tot_tok;
@@ -210,15 +237,30 @@ static void ai_stats_load_locked(void)
                 s_ai_stats.cwrite = v1.cwrite;
                 s_ai_stats.audio = v1.audio;
                 s_ai_stats.reasoning = v1.reasoning;
-                s_stats_since_persist = 1;      /* dirty: the next flush commits
-                                                 * the V2 schema (copilot 1.5) */
-                Serial.println("[AI] stats blob migrated from V1 to V2");
+                s_stats_since_persist = 1;
+                Serial.println("[AI] stats blob migrated from V1 to V3");
             }
         } else {
             Serial.println("[AI] stats blob unrecognized - starting fresh");
         }
     }
-    s_ai_stats.magic = AI_STATS_MAGIC_V2;
+    s_ai_stats.magic = AI_STATS_MAGIC_V3;
+
+    /* monthly reset (user request) */
+    time_t now = time(nullptr);
+    if (now > 1700000000) {                     /* NTP synced */
+        struct tm *tm_info = gmtime(&now);
+        uint32_t ym = (tm_info->tm_year + 1900) * 100 + (tm_info->tm_mon + 1);
+        const uint32_t prev = s_ai_stats.reset_month;
+        if (prev != 0 && prev != ym) {
+            memset(&s_ai_stats, 0, sizeof(s_ai_stats));
+            s_ai_stats.magic = AI_STATS_MAGIC_V3;
+            s_stats_since_persist = 1;          /* commit the reset */
+            Serial.printf("[AI] stats monthly reset (%lu -> %lu)\n",
+                          (unsigned long)prev, (unsigned long)ym);
+        }
+        s_ai_stats.reset_month = ym;
+    }
     s_ai_stats_loaded = true;
 }
 
@@ -381,6 +423,16 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
 {
     if (!prompt || !base_url || !model || !api_key) return false;
     if (!http_require_wifi("AI")) return false;
+
+    /* The config stores the provider BASE (e.g. https://api.deepseek.com/v1);
+     * the chat endpoint appends /chat/completions - unless the stored base
+     * already carries it (legacy NVS values). */
+    string ep = base_url;
+    if (ep.rfind("/chat/completions") == string::npos) {
+        while (!ep.empty() && ep.back() == '/') ep.pop_back();
+        ep += "/chat/completions";
+    }
+    base_url = ep.c_str();
 
     /* Request shape mirrors the OpenRouter curl reference:
      * {"model":..., "temperature":0.7, "reasoning":{"exclude":true},

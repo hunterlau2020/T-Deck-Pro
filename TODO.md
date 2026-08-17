@@ -13,11 +13,10 @@
 
 - [x] **P0 Sleep 三项真机回归**（2026-08-17 用户实测 ✅：倒计时 2→1→深睡、Back 取消、
       BOOT 唤醒）——合并门禁满足。
-- [ ] **重启恢复复测**（2026-08-17 第一轮 ❌，根因 SPIFFS rename 冲突已修 `867435e`）：
-      聊 2-3 轮 → RESET → 历史恢复（串口 `chat.log present` / `history restored`）→
-      追问上文 AI 能接上。
-- [ ] **P1/P2 真机回归**（申请 §4 剩余项）：多轮记忆 ✅ 已过；AI Config Test 计费提示/
-      取消、New 确认/重试草稿、WiFi Test 连按与离页重进、长回答 `(truncated)`。
+- [x] **重启恢复复测**（2026-08-17 第二轮 ✅：历史恢复 + 多轮接续；`867435e` bak 三步换入生效）。
+- [ ] **P1/P2 真机回归**（申请 §4 剩余项）：多轮记忆 ✅、重启恢复 ✅、Test 文案/Close ✅、
+      New 确认 ✅、发送交互 ✅、WiFi Test 离页重进 ✅ 已过；剩余：失败重试路径（关热点）、
+      长回答 `(truncated)`、Weather 三页/刷新、provider 下拉、usage 月度清零。
 
 ### 预研收尾（评审跟踪项）
 
@@ -43,8 +42,8 @@
 
 ### 安全（推公网 / 发布前，`SECURITY.md` 4 步）
 
-- [ ] 删除 `AI_KEY_DEFAULT` 真实 Key 字符串（改 `""` 或占位符）。
-- [ ] 移除 `[env:pda2]` 的 `-DAI_KEY_DEFAULT_COMPILED`。
+- [x] 删除 `AI_KEY_DEFAULT` 真实 Key 字符串（`0e78025`：默认改 `""`）。
+- [x] 移除 `[env:pda2]` 的 `-DAI_KEY_DEFAULT_COMPILED`（`0e78025`）。
 - [ ] OpenRouter 后台轮换 Key。
 - [ ] `git filter-repo` 清理历史 + 仓库通告。
 

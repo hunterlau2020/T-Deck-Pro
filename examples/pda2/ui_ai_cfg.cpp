@@ -29,6 +29,7 @@
 #include "ui_deckpro.h"
 #include "ui_deckpro_port.h"
 #include "openai_api.h"
+#include "env_secrets.h"
 #include "ui_scr_mrg.h"
 #include "http_utils.h"
 #include <freertos/FreeRTOS.h>
@@ -47,11 +48,13 @@ static lv_obj_t *ai_model_ta = NULL;
 static lv_obj_t *ai_key_lab = NULL;
 static lv_obj_t *ai_key_ta = NULL;
 static lv_obj_t *ai_status_lab = NULL;
+static lv_obj_t *ai_provider_lab = NULL;
 static bool ai_cfg_kbd_active = false;
 static int  ai_cfg_field = 0;            /* 0=base 1=model 2=key */
 static char ai_base[160] = {0};
 static char ai_model[80] = {0};
 static char ai_key[80] = {0};
+
 
 /* The task works on its OWN snapshot of the draft (finding 1.6 pattern):
  * UI edits while the request is in flight can never corrupt it. */
@@ -72,6 +75,80 @@ static QueueHandle_t s_ai_test_q = NULL;
 static volatile uint32_t s_ai_test_req_gen = 0;    /* bumped to cancel a pending test */
 static volatile bool s_ai_test_busy = false;       /* UI-owned */
 static bool s_ai_test_passed = false;              /* required by Save; cleared on edit */
+
+/* Provider presets (user request): choosing one fills the base/model
+ * boxes (still editable); "custom" leaves the boxes alone. The stored
+ * base never carries /chat/completions - openai_chat appends it. */
+static void ai_cfg_sync_draft(void);
+static void ai_cfg_status_hint(void);
+
+typedef struct {
+    const char *name;
+    const char *base;
+    const char *model;
+} ai_provider_t;
+
+static const ai_provider_t s_providers[] = {
+    { "openrouter", "https://openrouter.ai/api/v1",
+      "deepseek/deepseek-v4-flash-0731" },
+    { "deepseek",   "https://api.deepseek.com/v1",
+      "deepseek-v4-flash" },
+    { "minimax",    "https://api.minimaxi.com/v1",
+      "MiniMax-M3" },
+    { "qwen",       "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "qwen3.7-plus" },
+    { "tencent",    "https://tokenhub.tencentmaas.com/v1",
+      "hy3" },
+    { "custom",     "", "" },
+};
+#define AI_PROVIDER_NUM 6
+static int ai_provider_idx = AI_PROVIDER_NUM - 1;   /* custom until matched */
+
+/* Apply the current provider: label + base/model boxes (+ the OpenRouter
+ * key fill when NVS holds no key and /env.cfg does - user request 5). */
+static void ai_provider_apply(void)
+{
+    const ai_provider_t *p = &s_providers[ai_provider_idx];
+    lv_label_set_text_fmt(ai_provider_lab, "Provider: %s", p->name);
+    if (p->base[0] != '\0') {
+        lv_textarea_set_text(ai_base_ta, p->base);
+        strncpy(ai_base, p->base, sizeof(ai_base) - 1);
+        ai_base[sizeof(ai_base) - 1] = '\0';
+        lv_textarea_set_text(ai_model_ta, p->model);
+        strncpy(ai_model, p->model, sizeof(ai_model) - 1);
+        ai_model[sizeof(ai_model) - 1] = '\0';
+    }
+    if (strcmp(p->name, "openrouter") == 0) {
+        const char *ktxt = lv_textarea_get_text(ai_key_ta);
+        if (!ktxt || ktxt[0] == '\0') {
+            char k[96] = "";
+            if (!env_get("OPENROUTER_KEY", k, sizeof(k))) {
+                env_get("AI_KEY", k, sizeof(k));
+            }
+            if (k[0] != '\0') {
+                lv_textarea_set_text(ai_key_ta, k);
+                strncpy(ai_key, k, sizeof(ai_key) - 1);
+                ai_key[sizeof(ai_key) - 1] = '\0';
+                Serial.println("[AICfg] key filled from env.cfg");
+            }
+        }
+    }
+    s_ai_test_passed = false;               /* base/model changed: Test is stale */
+    ai_cfg_status_hint();
+}
+
+static void ai_provider_next(void)
+{
+    ai_cfg_sync_draft();                    /* keep the outgoing field's edits */
+    ai_provider_idx = (ai_provider_idx + 1) % AI_PROVIDER_NUM;
+    ai_provider_apply();
+    Serial.printf("[AICfg] provider: %s\n", s_providers[ai_provider_idx].name);
+}
+
+static void ai_provider_btn_cb(lv_event_t *e)
+{
+    ai_provider_next();
+}
 
 /* Test feedback msgbox: "Testing... Ns" countdown, replaced by the result,
  * always with a Close button. Close = Cancel while a test is pending. */
@@ -396,7 +473,11 @@ void ai_cfg_keyboard_poll(void)
     if (!keypad_get_val(&c)) break;
     keypad_set_flag();
 
-    if (c == '\t' || c == '\v') continue;       /* Alt+Enter scan combo / volume key */
+    if (c == '\t') {
+        ai_provider_next();                     /* Alt+Enter: cycle the provider */
+        continue;
+    }
+    if (c == '\v') continue;                    /* volume key */
 
     lv_obj_t *ta = ai_cfg_field_ta(ai_cfg_field);
 
@@ -449,6 +530,17 @@ static void ai_cfg_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Provider selector (user request): click cycles, Alt+Enter cycles */
+    lv_obj_t *provider_row = lv_btn_create(cont);
+    lv_obj_set_width(provider_row, lv_pct(100));
+    lv_obj_set_height(provider_row, 28);
+    lv_obj_set_style_pad_all(provider_row, 4, LV_PART_MAIN);
+    ai_provider_lab = lv_label_create(provider_row);
+    lv_label_set_text(ai_provider_lab, "Provider: custom");
+    lv_obj_set_style_text_font(ai_provider_lab, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(ai_provider_lab, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_add_event_cb(provider_row, ai_provider_btn_cb, LV_EVENT_CLICKED, NULL);
 
     /* Base URL: label + multi-line box (long URLs stay editable) */
     ai_base_lab = lv_label_create(cont);
@@ -541,6 +633,17 @@ static void ai_cfg_create(lv_obj_t *parent)
     lv_textarea_set_text(ai_base_ta, ai_base);
     lv_textarea_set_text(ai_model_ta, ai_model);
     lv_textarea_set_text(ai_key_ta, ai_key);
+    /* match the saved base to a provider preset (custom when unknown);
+     * DISPLAY only - the saved values stay untouched */
+    ai_provider_idx = AI_PROVIDER_NUM - 1;
+    for (int i = 0; i < AI_PROVIDER_NUM - 1; i++) {
+        if (strcmp(ai_base, s_providers[i].base) == 0) {
+            ai_provider_idx = i;
+            break;
+        }
+    }
+    lv_label_set_text_fmt(ai_provider_lab, "Provider: %s",
+                          s_providers[ai_provider_idx].name);
     ai_cfg_field = 0;
     s_ai_test_passed = false;
     ai_cfg_refresh_labels();
