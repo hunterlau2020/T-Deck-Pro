@@ -32,6 +32,7 @@
   - `dbe15ed` — `pda2: AI Chat - no rq use after task handoff + dual CHL1 parse + bak fallback`
   - `aedd401` — `pda2: usage stats - loop-tick 60s persist + AI Cfg checkpoint + V2 commit on migration`
   - `76bc321` — `docs: inline the api-key dev-exception decision into SECURITY.md`
+  - `156732c` — `pda2: AI Config - Usage button shows chat/test statistics`（用户追加需求）
 - **评审依据**：
   - [主评审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c.md)（部分接受，11 Findings）
   - [Copilot 复审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c-copilot.md)（退回修订，10 Findings）
@@ -242,6 +243,20 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 | Codex 1.10 SECURITY.md 引用断裂 | `76bc321`：决策正文内联进 SECURITY.md，openai_api.h 仅引用 SECURITY.md |
 | Codex 1.12 P1/P2 回归回填 | 待用户（至少 6 项 P1 + 2 项 P2） |
 | Codex 1.11 分段评审 | 下轮申请按 5-7 commit 分段（docs/reviews/README.md 已立条款） |
+
+### 2.18 第七轮（`156732c`）— 第二轮真机回归回填 + Usage 按钮
+
+**第二轮真机回归（2026-08-17 用户实测，§4 已回填）**：
+- ✅ (1) 重启恢复复测：历史恢复 + 多轮上下文接续（`867435e`/`dbe15ed` 修复验证通过）
+- ✅ (2) AI Config Test：计费文案 + Close 取消（stale 丢弃）
+- ✅ (5) New 确认框 OK/Cancel
+- ✅ (6) 发送交互：Send 立即清框 + 气泡 + 等待层倒计时 → 回复到达自动消失
+- ✅ (7) WiFi Test 进行中离页 → 重进可立即重试
+- ⏸ (3) 失败重试路径：用户已掌握关 WiFi 方法（关热点/清凭据重启），待下次顺带验证
+- ✅→N/A (8) 扫描中退出：实测当前网络扫描 1-2s 完成，无可见退出窗口（覆盖层一闪而过），按 N/A 记录
+- ✅ (4) usage 累计：`156732c` 在 AI Config 加 **Usage 按钮**（Save/Test 旁第三按钮），msgbox 显示 chat/test 两组 tokens + USD 累计，串口 totals 同步可核
+
+**Test 验证方式**：用户确认**保持现状**（最小 chat-completion，~1 token 计费已明示；/models 列表方案的"填错模型仍显示通过"缺陷不再回退）。
 11. **usage 统计**：一次对话后串口出现 `[AI] usage +232/215 tok, cost +...`；重启后再对话，totals 在上次基础上累加
 12. **New 按钮**：点 New → **先弹确认框**；OK → 历史清空、状态行 `History cleared`；Cancel/任意键 → 无变化；重启后仍为空；usage 计数不受影响
 13. **Sleep 帧等待**：点 Sleep → 提示画面完整显示后倒计时才从 2 开始（旧固件会吃掉 1-2s 全刷时间）；倒计时内 Back 取消
