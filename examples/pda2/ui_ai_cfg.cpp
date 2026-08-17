@@ -103,11 +103,11 @@ static void ai_msgbox_set_text(const char *text)
     }
 }
 
-static void ai_msgbox_show(const char *text)
+static void ai_msgbox_show(const char *text, int height = 160)
 {
     ai_msgbox_close_cb(NULL);
     ai_msgbox = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(ai_msgbox, 220, 160);
+    lv_obj_set_size(ai_msgbox, 220, height);
     lv_obj_align(ai_msgbox, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(ai_msgbox, lv_color_white(), 0);
     lv_obj_set_style_border_width(ai_msgbox, 1, 0);
@@ -323,9 +323,9 @@ static void ai_save_btn_cb(lv_event_t *e)
 static void ai_usage_btn_cb(lv_event_t *e)
 {
     Serial.println("[AICfg] Usage button clicked");
-    char buf[128];
+    char buf[192];
     openai_stats_text(buf, sizeof(buf));
-    ai_msgbox_show(buf);                        /* chat/test two-line totals */
+    ai_msgbox_show(buf, 205);                   /* taller box for the 6-line breakdown */
 }
 
 void ai_cfg_keyboard_poll(void)

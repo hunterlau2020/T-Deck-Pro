@@ -251,10 +251,22 @@ void openai_stats_text(char *buf, int buf_len)
         return;
     }
     ai_stats_load_locked();
+    /* show the full breakdown, including the cached-token details the
+     * user asked to surface (usage.prompt_tokens_details.cached_tokens) */
     snprintf(buf, buf_len,
-             "Chat: %llu tok, %.6f USD\nTest: %llu tok, %.6f USD",
-             (unsigned long long)s_ai_stats.tot_tok, s_ai_stats.cost,
-             (unsigned long long)s_ai_stats.t_tot_tok, s_ai_stats.t_cost);
+             "Chat: %llu tok\n"
+             "  cached %llu, write %llu\n"
+             "  audio %llu, rsn %llu\n"
+             "  cost %.6f USD\n"
+             "Test: %llu tok, %.6f USD",
+             (unsigned long long)s_ai_stats.tot_tok,
+             (unsigned long long)s_ai_stats.cached,
+             (unsigned long long)s_ai_stats.cwrite,
+             (unsigned long long)s_ai_stats.audio,
+             (unsigned long long)s_ai_stats.reasoning,
+             s_ai_stats.cost,
+             (unsigned long long)s_ai_stats.t_tot_tok,
+             s_ai_stats.t_cost);
     xSemaphoreGive(s_ai_stats_mux);
 }
 
