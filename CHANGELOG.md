@@ -5,6 +5,9 @@
 
 ## 2026-08-17
 
+- **Secrets 配置链**（`0e78025`）：真实 Key 从跟踪源码移除——NVS → SPIFFS `/env.cfg`
+  → gitignored config_keys.h → 空默认；Weather key/坐标同链（默认深圳）；SECURITY.md
+  重写（历史 Key 视为已泄露，推送前 filter-repo）
 - **真机回归第一轮**（用户实测）：多轮记忆 ✅、P0 Sleep 三项 ✅（合并门禁满足）；
   重启恢复 ❌ → 根因 **SPIFFS rename 目标已存在时失败**（第二次保存起静默失败），
   `867435e` 改 bak 三步换入 + 诊断串口，待复测

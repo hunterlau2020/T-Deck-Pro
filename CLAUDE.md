@@ -14,8 +14,9 @@ These come from prior session memory and review rounds; treat them as hard rules
    - Every change goes through a review-request file under `docs/reviews/` named `wifi-config-keyboard-review-request-<commit-id>.md`. Filename is the commit (or range) id.
    - Commits must be split per module (keypad driver / WiFi config / AI chat each in its own commit). Co-Authored-By line is `Claude <noreply@anthropic.com>`.
    - Existing review result files are **never overwritten** — superseded request files can be merged into a range request, but results stand.
-2. **Real API key exception** (project-specific deviation from default hygiene guidance):
-   - `examples/pda2/openai_api.h::AI_KEY_DEFAULT` currently holds a real OpenRouter key. Per user decision, **dev-phase retention is acceptable** to iterate quickly on AI features. Compensating controls (compile-time `#warning`, `SECURITY.md`, dev-tier key rotation) are recommended but **not blocking**. Before any push to a public remote, the key string must be removed from the file.
+2. **Secrets chain** (no real key in tracked source since 2026-08-17):
+   - Lookup order: NVS → SPIFFS `/env.cfg` (parsed by `examples/pda2/env_secrets.cpp`) → gitignored `config_keys.h` → empty default. `env.cfg.example` is tracked; the real `/env.cfg` never is.
+   - OLDER COMMITS still contain a real OpenRouter key string in `openai_api.h` history — treat it as compromised; `git filter-repo` before any public push (GitHub push protection also blocks plain pushes). See `SECURITY.md`.
 3. **Documentation vs hardware discrepancies**: `docs/issue_list.md` is the **canonical fix log** (each entry: status, committish fixing it). When you spot a doc/assumption vs HD-V2 reality mismatch, add an entry there — don't argue from first principles. Many "this can't work" comments predate commits that already resolved the issue.
 
 ## Where to find things
