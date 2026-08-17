@@ -3,9 +3,11 @@
 - **申请人**：Claude（pda2 现场调试，配合用户实测按键）
 - **申请日期**：2026-08-18
 - **关联分支**：`HD-V2-250915`
-- **关联 commit**（本轮 1 个，未评审）：
+- **关联 commit**（本轮 4 个，未评审）：
   - `fd7be74` — `pda2: AI Config provider presets + base suffix + monthly usage reset`
   - `d22007d` — `pda2: AI Config - native dropdown provider selector + per-provider keys`（用户反馈）
+  - `da0217f` — `pda2: secrets - rename env default key AI_KEY -> OPENROUTER_KEY`（用户反馈）
+  - `4c3c9b1` — `pda2: AI Config - custom clears fields + key chain config_keys fallback`（用户反馈）
 - **历史范围**：`e08bdac..b9b1ed4` 已由 Codex 全量接受（见
   [评审结果](wifi-config-keyboard-review-result-codex-e08bdac..b9b1ed4.md)），本申请
   只覆盖其后未评审的 commit。
@@ -22,16 +24,22 @@
   （OPENROUTER/DEEPSEEK/MINIMAX/QWEN/TENCENT_KEY）→ 空框；Save 把 key 存入当前
   provider 名下，切走再切回自动恢复
 - 下拉在进屏时先按已存 base 设置选中**再**挂 change 回调——初始化不会覆盖已存值
+- **`4c3c9b1` 修正**：openrouter 的 key 链补上最后一级 gitignored
+  `config_keys.h` 的 `AI_KEY_DEFAULT_DEV`（此前链到 env 即止，设备无 /env.cfg
+  时切换 openrouter 显示空 Key）；`custom` 选中时**清空** base/model/key 三框
+  及草稿缓冲（此前保持不动，用户要求"custom = 从头开始"）
+- **`da0217f` 修正**：/env.cfg 默认 key 改名 `AI_KEY` → `OPENROUTER_KEY`
+  （openai_load_config 与 provider 链统一读 `OPENROUTER_KEY`，示例/注释同步）
 
 ### 1.1 AI Config provider 下拉（用户需求 3/4/5）
 
 - Base 框上方新增 **Provider 行**：`openrouter / deepseek / minimax / qwen / tencent / custom`；
   点击行或 **Alt+Enter** 循环切换
-- 选中预设即自动填 base/model 输入框（用户可再改）；`custom` 不动框内容
+- 选中预设即自动填 base/model 输入框（用户可再改）；`custom` 清空三框（`4c3c9b1` 起）
 - 存储的 base 是**供应商根地址**（如 `https://api.deepseek.com/v1`）；调用时由
   `openai_chat` 自动追加 `/chat/completions`（已含后缀的旧 NVS 值不受影响）
-- 选择 **openrouter** 且 Key 框为空、NVS 无 key 时：从 `/env.cfg` 读
-  `OPENROUTER_KEY`（回退 `AI_KEY`）填入 Key 输入框
+- 选择 **openrouter** 且 NVS 无 key 时：`/env.cfg` 读 `OPENROUTER_KEY` →
+  config_keys.h `AI_KEY_DEFAULT_DEV` 兜底填入 Key 输入框（`da0217f`/`4c3c9b1` 起）
 - 预设表：openrouter=`deepseek/deepseek-v4-flash-0731`；deepseek=`deepseek-v4-flash`；
   minimax=`MiniMax-M3`；qwen=`qwen3.7-plus`；tencent=`hy3`
 - 进屏时按已存 base 匹配预设高亮（仅显示，不覆盖已存值）
@@ -62,10 +70,12 @@
 
 **本轮新增**
 1. ⏸ Provider 行显示与切换（点击 / Alt+Enter 循环 6 项）；选中 deepseek → base/model 自动填
-2. ⏸ 选 openrouter 且 Key 框空 → Key 自动填入（串口 `[AICfg] key filled from env.cfg`）
+2. ⏸ 选 openrouter → Key 自动填入（NVS key.openrouter → env → config_keys 兜底，
+     串口 `[AICfg] key for openrouter loaded`）
 3. ⏸ 选 deepseek 后 Test → 正常通过（base 自动补 `/chat/completions`，串口无 404）
-4. ⏸ custom 选中 → base/model 框保持不动
+4. ⏸ custom 选中 → base/model/key 三框清空（`4c3c9b1` 起）
 5. ⏸ usage 月度清零：Usage 弹窗数据正确；跨月清零逻辑（代码级，等 9 月自动验证）
+6. ⏸ Save 后切走再切回同一 provider → key 从 NVS `key.<provider>` 恢复
 
 **上轮 b9b1ed4**
 6. ⏸ Weather `r` 键 → `Fetching...` → 数据更新
@@ -91,7 +101,7 @@
 ## 5. 回滚方案
 
 ```bash
-git revert d22007d fd7be74
+git revert 4c3c9b1 da0217f d22007d fd7be74
 ```
 
 ## 6. 申请审批事项
