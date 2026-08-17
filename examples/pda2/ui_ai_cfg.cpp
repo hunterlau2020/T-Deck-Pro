@@ -91,6 +91,9 @@ typedef struct {
     const char *key_name;       /* /env.cfg key for this provider's API key */
 } ai_provider_t;
 
+/* KEEP IN SYNC with the lv_dropdown_set_options() string list below:
+ * same provider names, same order - the dropdown callback indexes
+ * s_providers by the selected entry. */
 static const ai_provider_t s_providers[] = {
     { "openrouter", "https://openrouter.ai/api/v1",
       "deepseek/deepseek-v4-flash-0731", "OPENROUTER_KEY" },
@@ -306,9 +309,10 @@ static void ai_cfg_save(void)
     const char *err = NULL;
     if (openai_save_config(ai_base, ai_model, ai_key, &err)) {
         /* remember the key under THIS provider too, so switching away
-         * and back restores it (per-provider keys) */
+         * and back restores it (per-provider keys). Skip custom (base is
+         * empty) - key.custom would be dead storage, never read back. */
         const ai_provider_t *p = &s_providers[ai_provider_idx];
-        if (p->name[0] != '\0') {
+        if (p->base[0] != '\0') {
             char nkey[32];
             snprintf(nkey, sizeof(nkey), "key.%s", p->name);
             Preferences pr;
@@ -577,6 +581,7 @@ static void ai_cfg_create(lv_obj_t *parent)
     lv_obj_set_width(ai_provider_dd, lv_pct(100));
     lv_obj_set_height(ai_provider_dd, 30);
     lv_obj_set_style_text_font(ai_provider_dd, &lv_font_montserrat_14, LV_PART_MAIN);
+    /* KEEP IN SYNC with s_providers[] above: same names, same order. */
     lv_dropdown_set_options(ai_provider_dd,
                             "openrouter\n"
                             "deepseek\n"
