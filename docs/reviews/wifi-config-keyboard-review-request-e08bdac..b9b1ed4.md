@@ -16,6 +16,7 @@
   - `b7c2a87` — `pda2: weather - migrate from One Call 3.0 to the free 2.5 endpoints`（用户反馈）
   - `ece4079` — `pda2: weather - add Sectigo Root R46 to the CA bundle + page keys`（用户反馈）
   - `0e78025` — `pda2: secrets chain - NVS -> /env.cfg -> gitignored config, no key in tracked source`（用户要求）
+  - `b9b1ed4` — `pda2: weather manual refresh + city follows coords; shutdown confirmation`（用户反馈）
 - **历史范围**：`844a907..156732c`（31→28 个 commit）已由 Codex **全量接受**（见
   [评审结果](wifi-config-keyboard-review-result-codex-844a907..156732c.md)），本申请
   **不再重复携带**已通过的内容——评审只需审上述 4 个新 commit。
@@ -58,6 +59,13 @@ Test: 56 tok, 0.000100 USD
 - Chat tab 下按任意可见字符自动跳 Input tab 并追加；Enter 跳 Input；空框 Backspace 回 Chat
 - 重试草稿恢复时默认打开 Input tab
 - New 键盘路径改到音量键 `'\v'`（Input tab 下；Alt+Enter 让位给 tab 切换）
+
+### 1.13 Weather 刷新 + 城市名跟随 / Shutdown 确认（`b9b1ed4`，用户反馈）
+
+- Weather：`r` 键强制刷新（绕过 1h 缓存）；城市名**每次 fetch 重查**——旧金山 fallback 的
+  "San Carlos" 缓存名不再粘住（现在跟随深圳坐标）
+- Shutdown：移除盲式 2s 自动关机，改确认框（Enter=OK，Cancel 按钮/任意键/back=返回菜单）
+  ——误入不再直接断电
 
 ### 1.12 Secrets 配置链（`0e78025`，用户要求）
 
@@ -143,7 +151,7 @@ hide waitbox（与 destroy 一致）。
 ## 5. 回滚方案
 
 ```bash
-git revert 0e78025 ece4079 b7c2a87 1f46630 7ecebcd f3e1698 06a2c13 cc94452 0b43685 f4449c3 8770a41 e08bdac
+git revert b9b1ed4 0e78025 ece4079 b7c2a87 1f46630 7ecebcd f3e1698 06a2c13 cc94452 0b43685 f4449c3 8770a41 e08bdac
 ```
 
 ## 6. 申请审批事项
