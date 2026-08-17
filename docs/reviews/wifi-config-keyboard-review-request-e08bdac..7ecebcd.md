@@ -11,6 +11,7 @@
   - `cc94452` — `pda2: AI Chat - tabs move into the top row next to back`
   - `06a2c13` — `pda2: AI Chat - ignore the volume key on the Chat tab`（Codex §1.3 修复）
   - `f3e1698` — `pda2: wifi scan overlay - reviewer edit: bind min-display to the visible frame`（Codex 直接改进）
+  - `7ecebcd` — `pda2: coalesce keypad bursts into one EPD render per pass`（用户反馈：输入延迟）
 - **历史范围**：`844a907..156732c`（31→28 个 commit）已由 Codex **全量接受**（见
   [评审结果](wifi-config-keyboard-review-result-codex-844a907..156732c.md)），本申请
   **不再重复携带**已通过的内容——评审只需审上述 4 个新 commit。
@@ -53,6 +54,13 @@ Test: 56 tok, 0.000100 USD
 - Chat tab 下按任意可见字符自动跳 Input tab 并追加；Enter 跳 Input；空框 Backspace 回 Chat
 - 重试草稿恢复时默认打开 Input tab
 - New 键盘路径改到音量键 `'\v'`（Input tab 下；Alt+Enter 让位给 tab 切换）
+
+### 1.8 键盘突发输入合并渲染（`7ecebcd`，用户反馈）
+
+打字每字符几百毫秒、连按数秒才显示完——根因：每个 poll pass 只取一个键，
+而每次渲染都会触发 EPD 全区域刷新（~0.3-1s），连打等于每个字符排队一次刷新。
+三个文本输入 poll（AI Chat / AI Config / WiFi Cfg）改为**一次 pass 排空整个按键
+积压**（≤32 键，控制键按 FIFO 顺序即时分派），整串输入合并为一次渲染。
 
 ### 1.7 扫描覆盖层可见帧绑定（`f3e1698`，Codex 直接改进）
 
@@ -101,7 +109,7 @@ hide waitbox（与 destroy 一致）。
 ## 5. 回滚方案
 
 ```bash
-git revert f3e1698 06a2c13 cc94452 0b43685 f4449c3 8770a41 e08bdac
+git revert 7ecebcd f3e1698 06a2c13 cc94452 0b43685 f4449c3 8770a41 e08bdac
 ```
 
 ## 6. 申请审批事项
