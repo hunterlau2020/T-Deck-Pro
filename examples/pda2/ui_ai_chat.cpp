@@ -784,8 +784,13 @@ void ai_chat_keyboard_poll(void)
 
     if (!chat_kbd_active) return;
 
+    /* burst processing (user feedback): drain the whole key backlog in
+     * ONE poll pass so a typed run coalesces into a single EPD render
+     * instead of one flush per character - the per-char dispatch below
+     * is unchanged, it just runs in a loop. */
+    for (int guard = 0; guard < 32; guard++) {
     char c;
-    if (!keypad_get_val(&c)) return;
+    if (!keypad_get_val(&c)) break;
     keypad_set_flag();
 
     /* New-confirmation open: Enter = OK, any other key = Cancel
@@ -796,14 +801,14 @@ void ai_chat_keyboard_poll(void)
         } else {
             chat_confirm_cancel();
         }
-        return;
+        break;
     }
 
-    if (s_chat_send_busy) return;               /* sending: swallow input */
+    if (s_chat_send_busy) break;                /* sending: swallow input */
 
     if (c == '\t') {                            /* Alt+Enter: toggle tab */
         chat_set_tab(!chat_tab_input);
-        return;
+        continue;
     }
 
     if (!chat_tab_input) {
@@ -814,13 +819,14 @@ void ai_chat_keyboard_poll(void)
         } else if (c == '\b') {
             chat_kbd_active = false;
             scr_mgr_pop(false);
+            break;
         } else if (c == '\n') {
             chat_set_tab(true);                 /* Enter: jump to the input page */
         } else if (c == '\v') {
             /* volume key: no-op on the Chat tab - New confirm is
              * Input-tab only, and the control byte must never reach the
              * textarea (codex finding 1.3) */
-            return;
+            continue;
         } else {
             /* typing jumps to the input page and appends the character */
             chat_set_tab(true);
@@ -830,6 +836,7 @@ void ai_chat_keyboard_poll(void)
         /* --- Input tab --- */
         if (c == '\n') {
             chat_send();
+            break;                              /* send clears the box + opens the waitbox */
         } else if (c == '\b') {
             const char *txt = lv_textarea_get_text(chat_input_ta);
             if (txt && txt[0] != '\0') {
@@ -839,10 +846,12 @@ void ai_chat_keyboard_poll(void)
             }
         } else if (c == '\v') {
             chat_confirm_show();                /* volume key: New chat (keyboard path) */
+            break;
         } else {
             lv_textarea_add_char(chat_input_ta, c);
         }
     }
+    }                                           /* end burst loop */
 }
 
 static void chat_send_btn_cb(lv_event_t *e)

@@ -2110,15 +2110,21 @@ void wifi_cfg_keyboard_poll()
     wifi_cfg_scan_poll();                       /* async scan result (runs every loop) */
     wifi_scan_overlay_update();                 /* countdown/hide of the scan overlay */
     wifi_banner_update();                       /* auto-hide of the result banner */
+
+    /* burst processing (user feedback): drain the whole key backlog in
+     * ONE poll pass so a typed run coalesces into a single EPD render
+     * instead of one flush per character - the per-char dispatch below
+     * is unchanged, it just runs in a loop. */
+    for (int guard = 0; guard < 32; guard++) {
     char c;
-    if (!keypad_get_val(&c)) return;
+    if (!keypad_get_val(&c)) break;
     keypad_set_flag();
 
-    if (c == '\v') return;                      /* volume key: reserved, no handler yet */
+    if (c == '\v') continue;                    /* volume key: reserved, no handler yet */
 
     if (wifi_cfg_field == 0) {
         if (wifi_scan_state == WIFI_SCAN_RUNNING) {
-            return;                             /* scan in flight: ignore keys */
+            break;                              /* scan in flight: ignore keys */
         }
         if (c == '\t') {
             /* Alt+Enter: independent scan entry, works with any box content
@@ -2185,6 +2191,7 @@ void wifi_cfg_keyboard_poll()
             lv_textarea_add_char(wifi_pass_ta, c);
         }
     }
+    }                                           /* end burst loop */
 }
 
 static void scr4_1_btn_event_cb(lv_event_t * e)

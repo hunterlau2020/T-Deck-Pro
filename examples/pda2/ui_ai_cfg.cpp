@@ -388,11 +388,15 @@ void ai_cfg_keyboard_poll(void)
         return;
     }
 
+    /* burst processing (user feedback): drain the whole key backlog in
+     * ONE poll pass so a typed run coalesces into a single EPD render
+     * instead of one flush per character. */
+    for (int guard = 0; guard < 32; guard++) {
     char c;
-    if (!keypad_get_val(&c)) return;
+    if (!keypad_get_val(&c)) break;
     keypad_set_flag();
 
-    if (c == '\t' || c == '\v') return;         /* Alt+Enter scan combo / volume key */
+    if (c == '\t' || c == '\v') continue;       /* Alt+Enter scan combo / volume key */
 
     lv_obj_t *ta = ai_cfg_field_ta(ai_cfg_field);
 
@@ -402,6 +406,7 @@ void ai_cfg_keyboard_poll(void)
             ai_cfg_set_field(ai_cfg_field + 1);
         } else {
             ai_cfg_save();
+            break;                              /* save may open a msgbox */
         }
     } else if (c == '\b') {
         const char *txt = lv_textarea_get_text(ta);
@@ -414,12 +419,14 @@ void ai_cfg_keyboard_poll(void)
         } else {
             ai_cfg_kbd_active = false;
             scr_mgr_pop(false);
+            break;
         }
     } else {
         lv_textarea_add_char(ta, c);
         s_ai_test_passed = false;               /* edited: Test is stale */
         ai_cfg_status_hint();                   /* finding 1.4: show the reason */
     }
+    }                                           /* end burst loop */
 }
 
 static void ai_cfg_back_cb(lv_event_t *e)
