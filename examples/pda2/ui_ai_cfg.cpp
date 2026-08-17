@@ -30,6 +30,7 @@
 #include "ui_deckpro_port.h"
 #include "openai_api.h"
 #include "env_secrets.h"
+#include "config_keys.h"
 #include "ui_scr_mrg.h"
 #include "http_utils.h"
 #include <Preferences.h>
@@ -108,12 +109,21 @@ static int ai_provider_idx = AI_PROVIDER_NUM - 1;   /* custom until matched */
 
 /* Apply the current provider: base/model boxes + THAT provider's key.
  * Key chain per provider: NVS "key.<name>" -> /env.cfg "<NAME>_KEY" ->
- * empty box (user fills their own). Each provider keeps its OWN key -
- * switching back restores it from NVS. */
+ * (openrouter only) gitignored config_keys.h AI_KEY_DEFAULT_DEV -> empty
+ * box. Each provider keeps its OWN key - switching back restores it from
+ * NVS. "custom" CLEARS all three boxes (user request). */
 static void ai_provider_apply(void)
 {
     const ai_provider_t *p = &s_providers[ai_provider_idx];
-    if (p->base[0] != '\0') {
+    if (p->base[0] == '\0') {
+        /* custom: start from scratch */
+        lv_textarea_set_text(ai_base_ta, "");
+        lv_textarea_set_text(ai_model_ta, "");
+        lv_textarea_set_text(ai_key_ta, "");
+        ai_base[0] = '\0';
+        ai_model[0] = '\0';
+        ai_key[0] = '\0';
+    } else {
         lv_textarea_set_text(ai_base_ta, p->base);
         strncpy(ai_base, p->base, sizeof(ai_base) - 1);
         ai_base[sizeof(ai_base) - 1] = '\0';
@@ -134,7 +144,10 @@ static void ai_provider_apply(void)
         } else if (p->key_name[0] != '\0') {
             env_get(p->key_name, k, sizeof(k));
             if (k[0] == '\0' && strcmp(p->name, "openrouter") == 0) {
-                env_get("AI_KEY", k, sizeof(k));
+#ifdef AI_KEY_DEFAULT_DEV
+                strncpy(k, AI_KEY_DEFAULT_DEV, sizeof(k) - 1);
+                k[sizeof(k) - 1] = '\0';
+#endif
             }
         }
         lv_textarea_set_text(ai_key_ta, k);
