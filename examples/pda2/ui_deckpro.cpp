@@ -2400,11 +2400,15 @@ static void wifi_scan_overlay_hide(void)
 }
 
 /* Called every loop while the screen is active. */
+#define WIFI_SCAN_OVL_MIN_MS 800
 static void wifi_scan_overlay_update(void)
 {
     if (!wifi_scan_ovl) return;
-    if (wifi_scan_state != WIFI_SCAN_RUNNING) {
-        wifi_scan_overlay_hide();               /* scan finished (or failed) */
+    if (wifi_scan_state != WIFI_SCAN_RUNNING &&
+        millis() - wifi_scan_ovl_t0 >= WIFI_SCAN_OVL_MIN_MS) {
+        /* user report: fast scans (<1 s) finished before the overlay
+         * even reached the panel - hold it for a minimum visible time */
+        wifi_scan_overlay_hide();
         return;
     }
     uint32_t elapsed = millis() - wifi_scan_ovl_t0;
