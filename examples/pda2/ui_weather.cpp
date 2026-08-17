@@ -340,6 +340,19 @@ static void weather_fetch_task(void *param)
         Preferences p; p.begin("weather", false);
         p.putFloat("gps_lat", lat); p.putFloat("gps_lon", lon);
         p.end();
+    } else {
+#ifdef WEATHER_DEFAULT_COORDS
+        /* no GPS fix (indoors): use the configured city, e.g.
+         *   #define WEATHER_DEFAULT_COORDS "lat=31.23&lon=121.47"
+         * in config_keys.h */
+        const char *cfg = WEATHER_DEFAULT_COORDS;
+        float clat = 0, clon = 0;
+        if (sscanf(cfg, "lat=%f&lon=%f", &clat, &clon) == 2 &&
+            clat != 0 && clon != 0) {
+            lat = clat; lon = clon;
+            loc_source = "config";
+        }
+#endif
     }
 
     Serial.printf("[Weather] Using %s: lat=%.4f lon=%.4f\n", loc_source, lat, lon);
@@ -512,11 +525,21 @@ void weather_keyboard_poll()
             weather_cleanup();
             scr_mgr_pop(false);
         }
-    } else if (c == '\n' || c == ' ') {
-        if (weather_page < WEATHER_PAGE_COUNT - 1) {
-            show_page(weather_page + 1);
-        } else {
-            show_page(0);
+    } else if (c == '\n' || c == ' ' || c == '+' || c == '-') {
+        /* Enter/Space or Sym-layer +/- cycle the 3 pages (user report:
+         * +/- should work like the other screens) */
+        if (c == '+' || c == '\n' || c == ' ') {
+            if (weather_page < WEATHER_PAGE_COUNT - 1) {
+                show_page(weather_page + 1);
+            } else {
+                show_page(0);
+            }
+        } else {                                /* '-' = previous page */
+            if (weather_page > 0) {
+                show_page(weather_page - 1);
+            } else {
+                show_page(WEATHER_PAGE_COUNT - 1);
+            }
         }
     }
 }
