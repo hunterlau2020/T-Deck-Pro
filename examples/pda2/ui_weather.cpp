@@ -1,7 +1,13 @@
 /**
  * @file      ui_weather.cpp
- * @brief     Weather app using OpenWeatherMap One Call API 3.0.
- *            Adapted for T-Deck Pro factory framework.
+ * @brief     Weather app using OpenWeatherMap FREE endpoints:
+ *              - /data/2.5/weather    (current conditions)
+ *              - /data/2.5/forecast   (5-day / 3-hour slots, aggregated
+ *                into hourly rows and daily min/max)
+ *              - /geo/1.0/reverse     (city name)
+ *            One Call 3.0 was replaced: it requires a paid subscription
+ *            and OpenWeatherMap is sunsetting it. API key comes from
+ *            config_keys.h (gitignored, never committed).
  */
 #include "Arduino.h"
 #include "ui_deckpro.h"
@@ -89,112 +95,154 @@ static const lv_img_dsc_t *weather_icon_img(const char *ic)
     return &img_w_cloud;
 }
 
-// --- JSON parsing ---
+// --- JSON parsing (free 2.5 endpoints; One Call 3.0 requires a paid
+// subscription and is being sunset, user report: weather broke) ---
 
-static void parse_onecall(const char *json)
+static void parse_current_weather(const char *json)
 {
     cJSON *root = cJSON_Parse(json);
     if (!root) return;
 
-    const char *day_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-
-    cJSON *tz = cJSON_GetObjectItem(root, "timezone_offset");
+    cJSON *tz = cJSON_GetObjectItem(root, "timezone");
     if (tz) tz_offset = tz->valueint;
 
-    cJSON *current = cJSON_GetObjectItem(root, "current");
-    if (current) {
-        cJSON *t = cJSON_GetObjectItem(current, "temp");
-        if (t) cur.temp = t->valuedouble;
-        cJSON *fl = cJSON_GetObjectItem(current, "feels_like");
-        if (fl) cur.feels_like = fl->valuedouble;
-        cJSON *hum = cJSON_GetObjectItem(current, "humidity");
-        if (hum) cur.humidity = hum->valueint;
-        cJSON *pres = cJSON_GetObjectItem(current, "pressure");
-        if (pres) cur.pressure = pres->valueint;
-        cJSON *ws = cJSON_GetObjectItem(current, "wind_speed");
-        if (ws) cur.wind = ws->valuedouble;
-        cJSON *uvi = cJSON_GetObjectItem(current, "uvi");
-        if (uvi) cur.uvi = (int)uvi->valuedouble;
+    cJSON *m = cJSON_GetObjectItem(root, "main");
+    if (m) {
+        cJSON *v = cJSON_GetObjectItem(m, "temp");
+        if (v) cur.temp = v->valuedouble;
+        v = cJSON_GetObjectItem(m, "feels_like");
+        if (v) cur.feels_like = v->valuedouble;
+        v = cJSON_GetObjectItem(m, "humidity");
+        if (v) cur.humidity = v->valueint;
+        v = cJSON_GetObjectItem(m, "pressure");
+        if (v) cur.pressure = v->valueint;
+    }
+    cJSON *w = cJSON_GetObjectItem(root, "wind");
+    if (w) {
+        cJSON *v = cJSON_GetObjectItem(w, "speed");
+        if (v) cur.wind = v->valuedouble;
+    }
+    cur.uvi = -1;                   /* the free endpoints carry no UV index */
 
-        cJSON *wa = cJSON_GetObjectItem(current, "weather");
+    cJSON *wa = cJSON_GetObjectItem(root, "weather");
+    if (wa && cJSON_GetArraySize(wa) > 0) {
+        cJSON *w0 = cJSON_GetArrayItem(wa, 0);
+        cJSON *desc = cJSON_GetObjectItem(w0, "description");
+        if (desc && desc->valuestring) strncpy(cur.desc, desc->valuestring, 63);
+        cJSON *ic = cJSON_GetObjectItem(w0, "icon");
+        if (ic && ic->valuestring) strncpy(cur.icon, ic->valuestring, 7);
+    }
+    data_valid = true;
+    cJSON_Delete(root);
+}
+
+static void parse_forecast(const char *json)
+{
+    cJSON *root = cJSON_Parse(json);
+    if (!root) return;
+    const char *day_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+
+    cJSON *city = cJSON_GetObjectItem(root, "city");
+    if (city) {
+        cJSON *tz = cJSON_GetObjectItem(city, "timezone");
+        if (tz) tz_offset = tz->valueint;
+    }
+    cJSON *list = cJSON_GetObjectItem(root, "list");
+    if (!list) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    hourly_count = 0;
+    daily_count = 0;
+    time_t now = time(NULL);
+    int prev_yday = -1;
+    int day_idx = -1;
+    float day_min = 0, day_max = 0;
+    int day_hum_sum = 0, day_slots = 0, day_pop = 0;
+    char day_desc[24] = "";
+
+    int count = cJSON_GetArraySize(list);
+    for (int i = 0; i < count; i++) {
+        cJSON *item = cJSON_GetArrayItem(list, i);
+        cJSON *dt = cJSON_GetObjectItem(item, "dt");
+        if (!dt) continue;
+        time_t ts = (time_t)dt->valueint;
+        if (ts < now) continue;
+
+        float slot_temp = 0;
+        int slot_hum = 0;
+        cJSON *m = cJSON_GetObjectItem(item, "main");
+        if (m) {
+            cJSON *v = cJSON_GetObjectItem(m, "temp");
+            if (v) slot_temp = v->valuedouble;
+            v = cJSON_GetObjectItem(m, "humidity");
+            if (v) slot_hum = v->valueint;
+        }
+        int pop_pct = 0;
+        cJSON *pop = cJSON_GetObjectItem(item, "pop");
+        if (pop) pop_pct = (int)(pop->valuedouble * 100);
+        char slot_desc[24] = "";
+        cJSON *wa = cJSON_GetObjectItem(item, "weather");
         if (wa && cJSON_GetArraySize(wa) > 0) {
             cJSON *w0 = cJSON_GetArrayItem(wa, 0);
-            cJSON *desc = cJSON_GetObjectItem(w0, "description");
-            if (desc && desc->valuestring) strncpy(cur.desc, desc->valuestring, 63);
-            cJSON *ic = cJSON_GetObjectItem(w0, "icon");
-            if (ic && ic->valuestring) strncpy(cur.icon, ic->valuestring, 7);
+            cJSON *ms = cJSON_GetObjectItem(w0, "main");
+            if (ms && ms->valuestring) strncpy(slot_desc, ms->valuestring, 23);
         }
-        data_valid = true;
-    }
 
-    cJSON *hourly_arr = cJSON_GetObjectItem(root, "hourly");
-    if (hourly_arr) {
-        hourly_count = 0;
-        int count = cJSON_GetArraySize(hourly_arr);
-        time_t now = time(NULL);
-        for (int i = 0; i < count && hourly_count < MAX_HOURLY; i++) {
-            cJSON *item = cJSON_GetArrayItem(hourly_arr, i);
-            cJSON *dt = cJSON_GetObjectItem(item, "dt");
-            if (!dt) continue;
-            time_t ts = (time_t)dt->valueint;
-            if (ts < now) continue;
-            time_t local_ts = ts + tz_offset;
-            struct tm *tm_info = gmtime(&local_ts);
-            if (!tm_info) continue;
+        time_t local_ts = ts + tz_offset;
+        struct tm *tm_info = gmtime(&local_ts);
+        if (!tm_info) continue;
 
+        /* hourly: first MAX_HOURLY slots from now (3 h steps = 36 h) */
+        if (hourly_count < MAX_HOURLY) {
             hourly_entry_t *h = &hourly[hourly_count];
             h->ts = ts;
-            snprintf(h->time_str, sizeof(h->time_str), "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
-            cJSON *t = cJSON_GetObjectItem(item, "temp");
-            if (t) h->temp = t->valuedouble;
-            cJSON *pop = cJSON_GetObjectItem(item, "pop");
-            if (pop) h->pop_pct = (int)(pop->valuedouble * 100);
-            cJSON *wa2 = cJSON_GetObjectItem(item, "weather");
-            if (wa2 && cJSON_GetArraySize(wa2) > 0) {
-                cJSON *w0 = cJSON_GetArrayItem(wa2, 0);
-                cJSON *ms = cJSON_GetObjectItem(w0, "main");
-                if (ms && ms->valuestring) strncpy(h->desc, ms->valuestring, 15);
-            }
+            snprintf(h->time_str, sizeof(h->time_str), "%02d:%02d",
+                     tm_info->tm_hour, tm_info->tm_min);
+            h->temp = slot_temp;
+            h->pop_pct = pop_pct;
+            strncpy(h->desc, slot_desc, 15);
             hourly_count++;
         }
-    }
 
-    cJSON *daily_arr = cJSON_GetObjectItem(root, "daily");
-    if (daily_arr) {
-        daily_count = 0;
-        int count = cJSON_GetArraySize(daily_arr);
-        for (int i = 0; i < count && daily_count < MAX_DAILY; i++) {
-            cJSON *item = cJSON_GetArrayItem(daily_arr, i);
-            cJSON *dt = cJSON_GetObjectItem(item, "dt");
-            if (!dt) continue;
-
-            time_t ts = (time_t)dt->valueint + tz_offset;
-            struct tm *tm_info = gmtime(&ts);
-            if (!tm_info) continue;
-
-            daily_entry_t *d = &daily[daily_count];
+        /* daily: aggregate the 3 h slots by LOCAL date (min/max temp,
+         * mean humidity, max pop, first slot's condition) */
+        if (tm_info->tm_yday != prev_yday) {
+            if (day_idx >= 0) {
+                daily_entry_t *d = &daily[day_idx];
+                d->temp_min = day_min;
+                d->temp_max = day_max;
+                d->humidity = day_hum_sum / day_slots;
+                d->pop_pct = day_pop;
+                strncpy(d->desc, day_desc, 15);
+            }
+            if (daily_count >= MAX_DAILY) break;
+            day_idx = daily_count;
+            daily_entry_t *d = &daily[day_idx];
             snprintf(d->day_str, sizeof(d->day_str), "%s", day_names[tm_info->tm_wday]);
-
-            cJSON *temp_obj = cJSON_GetObjectItem(item, "temp");
-            if (temp_obj) {
-                cJSON *tmin = cJSON_GetObjectItem(temp_obj, "min");
-                cJSON *tmax = cJSON_GetObjectItem(temp_obj, "max");
-                if (tmin) d->temp_min = tmin->valuedouble;
-                if (tmax) d->temp_max = tmax->valuedouble;
-            }
-            cJSON *hum = cJSON_GetObjectItem(item, "humidity");
-            if (hum) d->humidity = hum->valueint;
-            cJSON *pop = cJSON_GetObjectItem(item, "pop");
-            if (pop) d->pop_pct = (int)(pop->valuedouble * 100);
-
-            cJSON *wa2 = cJSON_GetObjectItem(item, "weather");
-            if (wa2 && cJSON_GetArraySize(wa2) > 0) {
-                cJSON *w0 = cJSON_GetArrayItem(wa2, 0);
-                cJSON *ms = cJSON_GetObjectItem(w0, "main");
-                if (ms && ms->valuestring) strncpy(d->desc, ms->valuestring, 23);
-            }
+            day_min = day_max = slot_temp;
+            day_hum_sum = slot_hum;
+            day_slots = 1;
+            day_pop = pop_pct;
+            strncpy(day_desc, slot_desc, 23);
             daily_count++;
+            prev_yday = tm_info->tm_yday;
+        } else {
+            if (slot_temp < day_min) day_min = slot_temp;
+            if (slot_temp > day_max) day_max = slot_temp;
+            day_hum_sum += slot_hum;
+            day_slots++;
+            if (pop_pct > day_pop) day_pop = pop_pct;
         }
+    }
+    if (day_idx >= 0) {
+        daily_entry_t *d = &daily[day_idx];
+        d->temp_min = day_min;
+        d->temp_max = day_max;
+        d->humidity = day_hum_sum / day_slots;
+        d->pop_pct = day_pop;
+        strncpy(d->desc, day_desc, 15);
     }
     cJSON_Delete(root);
 }
@@ -296,19 +344,37 @@ static void weather_fetch_task(void *param)
 
     Serial.printf("[Weather] Using %s: lat=%.4f lon=%.4f\n", loc_source, lat, lon);
 
+    /* Free-tier endpoints: current weather + 5-day/3h forecast
+     * (One Call 3.0 needs a paid subscription and is being sunset). */
     char url[256];
     snprintf(url, sizeof(url),
-             "https://api.openweathermap.org/data/3.0/onecall?lat=%.4f&lon=%.4f&exclude=minutely,alerts&units=metric&appid=%s",
+             "https://api.openweathermap.org/data/2.5/weather?lat=%.4f&lon=%.4f&units=metric&appid=%s",
              lat, lon, OWM_API_KEY);
-
     http_response_t resp = http_get(url, 15000);
-    if (resp.success) {
-        parse_onecall(resp.body.c_str());
-        last_fetch_time = millis();
+    if (resp.success && resp.status_code == 200) {
+        parse_current_weather(resp.body.c_str());
+    } else {
+        Serial.printf("[Weather] current fetch failed: HTTP %d %s\n",
+                      resp.status_code, resp.error.c_str());
     }
 
-    if (data_valid && location_name[0] == '\0') fetch_city_name(lat, lon);
-    if (data_valid) save_cache();
+    snprintf(url, sizeof(url),
+             "https://api.openweathermap.org/data/2.5/forecast?lat=%.4f&lon=%.4f&units=metric&appid=%s",
+             lat, lon, OWM_API_KEY);
+    resp = http_get(url, 15000);
+    if (resp.success && resp.status_code == 200) {
+        parse_forecast(resp.body.c_str());
+    } else {
+        Serial.printf("[Weather] forecast fetch failed: HTTP %d %s\n",
+                      resp.status_code, resp.error.c_str());
+    }
+
+    if (data_valid) {
+        last_fetch_time = millis();
+        if (location_name[0] == '\0') fetch_city_name(lat, lon);
+        save_cache();
+        Serial.printf("[Weather] ok: %d hourly, %d daily\n", hourly_count, daily_count);
+    }
 #endif
     fetch_task = NULL;
     vTaskDelete(NULL);
@@ -346,10 +412,18 @@ static void update_ui()
         lv_label_set_text_fmt(temp_label, "%.0f\xC2\xB0" "C  (%.0f\xC2\xB0)",
                               cur.temp, cur.feels_like);
 
-    if (detail_label)
-        lv_label_set_text_fmt(detail_label,
-                              "%s\nHum:%d%% Wind:%.1fm/s\nPress:%dhPa UV:%d",
-                              cur.desc, cur.humidity, cur.wind, cur.pressure, cur.uvi);
+    if (detail_label) {
+        if (cur.uvi >= 0) {
+            lv_label_set_text_fmt(detail_label,
+                                  "%s\nHum:%d%% Wind:%.1fm/s\nPress:%dhPa UV:%d",
+                                  cur.desc, cur.humidity, cur.wind, cur.pressure, cur.uvi);
+        } else {
+            /* free endpoints carry no UV index */
+            lv_label_set_text_fmt(detail_label,
+                                  "%s\nHum:%d%% Wind:%.1fm/s\nPress:%dhPa UV:--",
+                                  cur.desc, cur.humidity, cur.wind, cur.pressure);
+        }
+    }
 
     if (status_label) lv_label_set_text(status_label, "");
 
@@ -399,7 +473,7 @@ static lv_obj_t *pages[WEATHER_PAGE_COUNT] = {};
 static lv_obj_t *page_label = NULL;
 static bool weather_kbd_active = false;
 
-static const char *page_titles[] = {"Current", "Hourly", "8-Day"};
+static const char *page_titles[] = {"Current", "Hourly", "5-Day"};
 
 static void weather_cleanup()
 {
