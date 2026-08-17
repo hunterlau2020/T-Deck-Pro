@@ -5,6 +5,7 @@
 - **关联分支**：`HD-V2-250915`
 - **关联 commit**（本轮 1 个，未评审）：
   - `fd7be74` — `pda2: AI Config provider presets + base suffix + monthly usage reset`
+  - `d22007d` — `pda2: AI Config - native dropdown provider selector + per-provider keys`（用户反馈）
 - **历史范围**：`e08bdac..b9b1ed4` 已由 Codex 全量接受（见
   [评审结果](wifi-config-keyboard-review-result-codex-e08bdac..b9b1ed4.md)），本申请
   只覆盖其后未评审的 commit。
@@ -13,6 +14,14 @@
 ---
 
 ## 1. 变更明细（`fd7be74`）
+
+### 1.2 Provider 下拉改进（`d22007d`，用户反馈）
+
+- 行内循环按钮改为**原生 lv_dropdown**（触摸展开列表），Alt+Enter 键盘循环保留
+- **每 provider 独立 key**：切换时按 NVS `key.<provider>` → /env.cfg `<NAME>_KEY`
+  （OPENROUTER/DEEPSEEK/MINIMAX/QWEN/TENCENT_KEY）→ 空框；Save 把 key 存入当前
+  provider 名下，切走再切回自动恢复
+- 下拉在进屏时先按已存 base 设置选中**再**挂 change 回调——初始化不会覆盖已存值
 
 ### 1.1 AI Config provider 下拉（用户需求 3/4/5）
 
@@ -82,7 +91,7 @@
 ## 5. 回滚方案
 
 ```bash
-git revert fd7be74
+git revert d22007d fd7be74
 ```
 
 ## 6. 申请审批事项
