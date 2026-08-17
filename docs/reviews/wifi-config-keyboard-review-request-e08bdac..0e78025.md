@@ -15,6 +15,7 @@
   - `1f46630` — `pda2: redraw-on-release scroll + Enter inserts newline in AI Text`（用户反馈）
   - `b7c2a87` — `pda2: weather - migrate from One Call 3.0 to the free 2.5 endpoints`（用户反馈）
   - `ece4079` — `pda2: weather - add Sectigo Root R46 to the CA bundle + page keys`（用户反馈）
+  - `0e78025` — `pda2: secrets chain - NVS -> /env.cfg -> gitignored config, no key in tracked source`（用户要求）
 - **历史范围**：`844a907..156732c`（31→28 个 commit）已由 Codex **全量接受**（见
   [评审结果](wifi-config-keyboard-review-result-codex-844a907..156732c.md)），本申请
   **不再重复携带**已通过的内容——评审只需审上述 4 个新 commit。
@@ -57,6 +58,13 @@ Test: 56 tok, 0.000100 USD
 - Chat tab 下按任意可见字符自动跳 Input tab 并追加；Enter 跳 Input；空框 Backspace 回 Chat
 - 重试草稿恢复时默认打开 Input tab
 - New 键盘路径改到音量键 `'\v'`（Input tab 下；Alt+Enter 让位给 tab 切换）
+
+### 1.12 Secrets 配置链（`0e78025`，用户要求）
+
+真实 Key 从**跟踪源码**中彻底移除（AI_KEY_DEFAULT=""，C1 warning/宏删除），配置链 =
+**NVS → SPIFFS `/env.cfg`（新 env_secrets 解析器）→ gitignored config_keys.h → 空默认**。
+NVS 无值时从 /env.cfg 取值填进程序。Weather 的 OWM key 与默认坐标走同一链（默认城市深圳）。
+新增 `env.cfg.example`；SECURITY.md 重写（历史 Key 视为已泄露、发布前 filter-repo 清单）。
 
 ### 1.11 Weather TLS 修复 + 翻页键（`ece4079`，用户反馈）
 
@@ -135,7 +143,7 @@ hide waitbox（与 destroy 一致）。
 ## 5. 回滚方案
 
 ```bash
-git revert ece4079 b7c2a87 1f46630 7ecebcd f3e1698 06a2c13 cc94452 0b43685 f4449c3 8770a41 e08bdac
+git revert 0e78025 ece4079 b7c2a87 1f46630 7ecebcd f3e1698 06a2c13 cc94452 0b43685 f4449c3 8770a41 e08bdac
 ```
 
 ## 6. 申请审批事项
