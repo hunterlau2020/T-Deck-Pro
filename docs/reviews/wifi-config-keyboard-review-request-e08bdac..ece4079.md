@@ -14,6 +14,7 @@
   - `7ecebcd` — `pda2: coalesce keypad bursts into one EPD render per pass`（用户反馈：输入延迟）
   - `1f46630` — `pda2: redraw-on-release scroll + Enter inserts newline in AI Text`（用户反馈）
   - `b7c2a87` — `pda2: weather - migrate from One Call 3.0 to the free 2.5 endpoints`（用户反馈）
+  - `ece4079` — `pda2: weather - add Sectigo Root R46 to the CA bundle + page keys`（用户反馈）
 - **历史范围**：`844a907..156732c`（31→28 个 commit）已由 Codex **全量接受**（见
   [评审结果](wifi-config-keyboard-review-result-codex-844a907..156732c.md)），本申请
   **不再重复携带**已通过的内容——评审只需审上述 4 个新 commit。
@@ -56,6 +57,15 @@ Test: 56 tok, 0.000100 USD
 - Chat tab 下按任意可见字符自动跳 Input tab 并追加；Enter 跳 Input；空框 Backspace 回 Chat
 - 重试草稿恢复时默认打开 Input tab
 - New 键盘路径改到音量键 `'\v'`（Input tab 下；Alt+Enter 让位给 tab 切换）
+
+### 1.11 Weather TLS 修复 + 翻页键（`ece4079`，用户反馈）
+
+- 真机报 X509 验证失败：api.openweathermap.org 链 `*.openweathermap.org ← Sectigo OV R36 ←
+  **Sectigo Root R46**`，5 根 bundle 未覆盖 → 从活链提取 R46 追加进 CA_BUNDLE，
+  `ca_bundle_check.py` 6/6 PASS
+- Sym 层 `+`/`-` 循环切换 Current/Hourly/5-Day 三页（`-` 反向回绕），与其它屏一致
+- GPS 无定位（室内）时改用 `WEATHER_DEFAULT_COORDS`（config_keys.h，gitignored）作为
+  位置回退，不再固定旧金山坐标
 
 ### 1.10 Weather 迁移免费 2.5 端点（`b7c2a87`，用户反馈）
 
@@ -125,7 +135,7 @@ hide waitbox（与 destroy 一致）。
 ## 5. 回滚方案
 
 ```bash
-git revert b7c2a87 1f46630 7ecebcd f3e1698 06a2c13 cc94452 0b43685 f4449c3 8770a41 e08bdac
+git revert ece4079 b7c2a87 1f46630 7ecebcd f3e1698 06a2c13 cc94452 0b43685 f4449c3 8770a41 e08bdac
 ```
 
 ## 6. 申请审批事项
