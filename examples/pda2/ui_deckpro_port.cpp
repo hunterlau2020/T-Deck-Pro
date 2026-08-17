@@ -48,6 +48,11 @@ uint32_t ui_disp_flush_done_seq(void)
 {
     return disp_flush_seq_done();
 }
+
+void ui_disp_suppress_flush(bool s)
+{
+    disp_set_suppress_flush(s);
+}
 //************************************[ screen 0 ]****************************************** menu
 //************************************[ screen 1 ]****************************************** lora
 

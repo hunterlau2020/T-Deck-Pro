@@ -66,6 +66,7 @@ union flush_buf_pixel
 void disp_full_refr(void); // Next global refresh
 uint32_t disp_full_refr_seq(void);   // request a full refresh, return ITS sequence
 uint32_t disp_flush_seq_done(void);  // sequence of the last full flush that reached the panel
+void disp_set_suppress_flush(bool s); // suppress EPD writes during touch scroll (redraw on release)
 void ink_screen_prepare_shutdown(void);
 void shared_spi_bus_init(void);
 void shared_spi_lock(void);

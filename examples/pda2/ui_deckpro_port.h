@@ -41,6 +41,7 @@ extern "C" {
 void ui_disp_full_refr(void);
 uint32_t ui_disp_full_refr_seq(void);
 uint32_t ui_disp_flush_done_seq(void);
+void ui_disp_suppress_flush(bool s);
 
 // [ screen 1 ] --- lora
 float ui_lora_get_freq(void);

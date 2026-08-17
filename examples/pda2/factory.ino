@@ -66,6 +66,16 @@ int disp_refr_mode = DISP_REFR_MODE_PART;
  * leftover flush of a previous screen. */
 static volatile uint32_t disp_flush_req_seq = 0;
 static volatile uint32_t disp_flush_done_seq = 0;
+/* "Redraw on release" (user request): while a touch scroll is in
+ * progress, EPD writes are suppressed - the pixels still accumulate in
+ * decodebuffer - and the panel is refreshed ONCE when the scroll ends.
+ * This avoids one 0.3-1 s flush per scroll step on e-paper. */
+static volatile bool disp_suppress_flush = false;
+
+void disp_set_suppress_flush(bool s)
+{
+    disp_suppress_flush = s;
+}
 
 uint8_t isT_Deck_Pro_v1_1 = 0;
 const char Version_str1[] = "T-Deck-Pro V1.0";
@@ -235,6 +245,12 @@ static void flush_timer_cb(lv_timer_t *t)
     static int part_count = 0;
     lv_disp_t *disp = lv_disp_get_default();
     if(disp->rendering_in_progress == false) {
+        if (disp_suppress_flush) {
+            /* touch scroll in progress: the release handler refreshes */
+            disp_refr_mode = DISP_REFR_MODE_PART;
+            lv_timer_pause(flush_timer);
+            return;
+        }
         /* Reviewer #5 fix: every FACTORY_EPD_FULL_REFRESH_INTERVAL partial
          * flushes (≈ minutes of activity), force a full EPD waveform refresh
          * to clear accumulated ghosting. Without this, the partial-only path
@@ -275,7 +291,13 @@ static void dips_render_start_cb(struct _lv_disp_drv_t * disp_drv)
 static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)
 {
     convert_lvgl_buf_to_epd_bitmap(color_p, lv_area_get_width(area), lv_area_get_height(area));
-    flush_epd_bitmap(area);
+    if (!disp_suppress_flush) {
+        flush_epd_bitmap(area);
+    } else {
+        /* pixels accumulate in decodebuffer; the release handler flushes
+         * the whole panel once (redraw-on-release) */
+        disp_refr_mode = DISP_REFR_MODE_PART;
+    }
     
     static int idx = 0;
     Serial.printf("disp_flush:%d, %s, area=(%d,%d)-(%d,%d)\n",

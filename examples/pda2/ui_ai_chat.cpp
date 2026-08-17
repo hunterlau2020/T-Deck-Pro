@@ -41,9 +41,13 @@
  *   Chat tab:  \n -> jump to Input   \b -> back to menu
  *              + / - (Sym/Alt layer): scroll the history
  *              any visible char -> jump to Input and append it
- *   Input tab: \n -> send            \b -> delete; empty -> back to Chat
+ *   Input tab: \n -> insert a newline (multi-line writing; the Send
+ *                    BUTTON is the only send path, per user request)
+ *              \b -> delete; empty -> back to Chat
  *              '\v' (volume): New chat confirm
  *   confirmation open: \n = OK, any other key = Cancel
+ *   touch scroll: redraw-on-release (EPD writes suppressed while the
+ *   finger is down, one full refresh on lift)
  */
 #include "Arduino.h"
 #include "ui_deckpro.h"
@@ -577,6 +581,26 @@ static void chat_set_tab(bool input_tab)
 static void chat_chat_tab_cb(lv_event_t *e)  { chat_set_tab(false); }
 static void chat_input_tab_cb(lv_event_t *e) { chat_set_tab(true); }
 
+/* Redraw-on-release for the history scroll (user request): a touch
+ * scroll suppresses EPD writes - one 0.3-1 s flush per step was far too
+ * slow - and the panel refreshes ONCE when the finger lifts. Programmatic
+ * scrolls (render-to-bottom, keyboard +/-) have indev == NULL and flush
+ * normally. */
+static void chat_scroll_begin_cb(lv_event_t *e)
+{
+    if (lv_event_get_indev(e) != NULL) {
+        ui_disp_suppress_flush(true);
+    }
+}
+
+static void chat_scroll_end_cb(lv_event_t *e)
+{
+    if (lv_event_get_indev(e) != NULL) {
+        ui_disp_suppress_flush(false);
+        ui_disp_full_refr();
+    }
+}
+
 static void chat_send(void)
 {
     if (s_chat_send_busy) return;               /* already sending */
@@ -835,8 +859,9 @@ void ai_chat_keyboard_poll(void)
     } else {
         /* --- Input tab --- */
         if (c == '\n') {
-            chat_send();
-            break;                              /* send clears the box + opens the waitbox */
+            /* Enter inserts a NEWLINE - multi-line writing (user request:
+             * sending is the Send button's job now) */
+            lv_textarea_add_char(chat_input_ta, '\n');
         } else if (c == '\b') {
             const char *txt = lv_textarea_get_text(chat_input_ta);
             if (txt && txt[0] != '\0') {
@@ -1042,6 +1067,8 @@ static void chat_create(lv_obj_t *parent)
     lv_obj_set_scrollbar_mode(chat_hist_cont, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_scroll_dir(chat_hist_cont, LV_DIR_VER);
     lv_obj_clear_flag(chat_hist_cont, LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_add_event_cb(chat_hist_cont, chat_scroll_begin_cb, LV_EVENT_SCROLL_BEGIN, NULL);
+    lv_obj_add_event_cb(chat_hist_cont, chat_scroll_end_cb, LV_EVENT_SCROLL_END, NULL);
 
     /* --- Input page: large textarea + large buttons --- */
     input_page = lv_obj_create(cont);
@@ -1132,6 +1159,8 @@ static void chat_entry(void)
 static void chat_exit(void)
 {
     ui_disp_full_refr();
+    ui_disp_suppress_flush(false);              /* a mid-scroll leave must not
+                                                 * freeze the display */
     chat_waitbox_hide();                        /* push-away leaves no waitbox on
                                                  * other screens (codex 1.11) */
     /* sync the retry draft with the ACTUAL textarea state (copilot finding
