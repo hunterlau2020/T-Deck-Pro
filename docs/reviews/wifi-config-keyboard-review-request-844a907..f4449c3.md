@@ -33,6 +33,9 @@
   - `aedd401` — `pda2: usage stats - loop-tick 60s persist + AI Cfg checkpoint + V2 commit on migration`
   - `76bc321` — `docs: inline the api-key dev-exception decision into SECURITY.md`
   - `156732c` — `pda2: AI Config - Usage button shows chat/test statistics`（用户追加需求）
+  - `e08bdac` — `pda2: AI Config - Usage breakdown includes cached_tokens details`（用户追加需求）
+  - `8770a41` — `pda2: wifi scan - hold the overlay for a minimum visible time`（用户反馈修复）
+  - `f4449c3` — `pda2: AI Chat - two-tab layout: full-screen Chat + big Input`（用户追加需求）
 - **评审依据**：
   - [主评审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c.md)（部分接受，11 Findings）
   - [Copilot 复审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c-copilot.md)（退回修订，10 Findings）
@@ -259,6 +262,18 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 - ✅ (4) usage 累计：`156732c` 在 AI Config 加 **Usage 按钮**（Save/Test 旁第三按钮），msgbox 显示 chat/test 两组 tokens + USD 累计，串口 totals 同步可核
 
 **Test 验证方式**：用户确认**保持现状**（最小 chat-completion，~1 token 计费已明示；/models 列表方案的"填错模型仍显示通过"缺陷不再回退）。
+
+### 2.19 第八轮（`e08bdac..f4449c3`）— 用户反馈
+
+- **Usage 明细**（`e08bdac`）：Usage 弹窗显示完整 breakdown——Chat 组 total/cached/
+  cache_write/audio/reasoning/cost（用户点名要 `prompt_tokens_details.cached_tokens`）+ Test 组
+- **扫描中间提示**（`8770a41`）：确认 overlay 在 `scanNetworks` 返回 RUNNING 后**立即**弹出
+  （不是扫描完成后）；实测看不到的原因是快速扫描（<1s）在覆盖层 EPD 局刷上屏前就完成被
+  hide——加 800ms 最短显示时间，扫描结束后覆盖层继续停留至满 800ms 再隐藏
+- **AI Text 双 Tab**（`f4449c3`）：Chat/Input 两个 tab（Alt+Enter 切换）——Chat tab 历史
+  **占满全屏**；Input tab 大输入框（176×~220）+ 大按钮（48×~74×3）；Send 后自动跳回
+  Chat tab；Chat tab 按任意可见字符自动跳 Input 并追加；重试草稿恢复时默认开 Input tab；
+  New 键盘路径改到音量键（Input tab 下）
 11. **usage 统计**：一次对话后串口出现 `[AI] usage +232/215 tok, cost +...`；重启后再对话，totals 在上次基础上累加
 12. ✅ **New 按钮**：确认框 OK/Cancel 行为正常（2026-08-17 实测）；usage 计数不受影响（Usage 按钮可核）
 13. **Sleep 帧等待**：点 Sleep → 提示画面完整显示后倒计时才从 2 开始（旧固件会吃掉 1-2s 全刷时间）；倒计时内 Back 取消
