@@ -29,6 +29,9 @@
   - `3cdff38` — `pda2: persistence lifecycle + format migration + trim visibility`
   - `55054fa` — `pda2: menu - AI-first first page (user-requested order)`（用户追加需求）
   - `75dd255` — `pda2: AI Chat - send UX: clear on send + waiting overlay`（用户追加需求）
+  - `dbe15ed` — `pda2: AI Chat - no rq use after task handoff + dual CHL1 parse + bak fallback`
+  - `aedd401` — `pda2: usage stats - loop-tick 60s persist + AI Cfg checkpoint + V2 commit on migration`
+  - `76bc321` — `docs: inline the api-key dev-exception decision into SECURITY.md`
 - **评审依据**：
   - [主评审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c.md)（部分接受，11 Findings）
   - [Copilot 复审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c-copilot.md)（退回修订，10 Findings）
@@ -224,6 +227,21 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 10. ✅ **多轮记忆**（2026-08-17 用户实测）：连续两问，第二问引用上文（"翻译成中文"）→ AI 正确接上（用户反馈"似乎解决了，继续观察"）
 16. ⏸ **发送交互**（`75dd255` 新实现待测）：Send → 输入框立即清空 + 气泡立即出现 + 等待层 `Waiting server reply... 10s` → 回复到达关闭并追加气泡；失败回填输入框可重试
 17. ⏸ **菜单第一屏**：9 个条目按 AI 优先顺序显示，第二屏为硬件/系统类
+
+### 2.17 第六轮（`dbe15ed..76bc321`）— Copilot 复审 844a907..3cdff38 + Codex 复审 844a907..3cdff38
+
+| 评审项 | 处理（commit） |
+|---|---|
+| **Cop 1.1 High** 任务创建后 UI 仍读 rq（跨核 use-after-free） | `dbe15ed`：任务创建前把 ctx_msgs/trimmed 复制为 UI 局部变量，handoff 后不再解引用 rq |
+| Cop 1.2 CHL1 双义丢历史 | `dbe15ed`：loader 对 CHL1 双格式逐一尝试（带 count → 无 count），任一成功即恢复（下次存 CHL2） |
+| Cop 1.3 official 无效不试 bak / tmp 无 flush | `dbe15ed`：official 解析失败时 promote bak 重试；tmp 写完后显式 `flush()` 再 rename |
+| Cop 1.4 60s 落盘无定时器 / AI Cfg 不 flush | `aedd401`：`openai_stats_poll()` 挂入 loop() 周期检查 60s 窗口；ai_cfg destroy 加 checkpoint |
+| Cop 1.5 V1 迁移不立即写 V2 | `aedd401`：迁移成功即标 dirty，下个 checkpoint 落 V2 |
+| Cop 1.6 真机复测 | 待用户（§4 第二轮清单） |
+| Cop 1.7 整文件重写 | 已登记 TODO（技术债，不阻断） |
+| Codex 1.10 SECURITY.md 引用断裂 | `76bc321`：决策正文内联进 SECURITY.md，openai_api.h 仅引用 SECURITY.md |
+| Codex 1.12 P1/P2 回归回填 | 待用户（至少 6 项 P1 + 2 项 P2） |
+| Codex 1.11 分段评审 | 下轮申请按 5-7 commit 分段（docs/reviews/README.md 已立条款） |
 11. **usage 统计**：一次对话后串口出现 `[AI] usage +232/215 tok, cost +...`；重启后再对话，totals 在上次基础上累加
 12. **New 按钮**：点 New → **先弹确认框**；OK → 历史清空、状态行 `History cleared`；Cancel/任意键 → 无变化；重启后仍为空；usage 计数不受影响
 13. **Sleep 帧等待**：点 Sleep → 提示画面完整显示后倒计时才从 2 开始（旧固件会吃掉 1-2s 全刷时间）；倒计时内 Back 取消
@@ -244,10 +262,10 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 ## 6. 回滚方案
 
 ```bash
-git revert 75dd255 55054fa 3cdff38 867435e 8d273cd 4c1ceda 0328cd2 c90307f 538e6d0 74c24ff 35e9eae ba31181 9a89cdd 5dd8e32 23063b0 06f9235 e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
+git revert 76bc321 aedd401 dbe15ed 75dd255 55054fa 3cdff38 867435e 8d273cd 4c1ceda 0328cd2 c90307f 538e6d0 74c24ff 35e9eae ba31181 9a89cdd 5dd8e32 23063b0 06f9235 e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
 ```
 
-25 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。（按评审 §1.11 约定，下轮起单次申请 ≥10 commit 时分段评审。）
+28 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。（按评审 §1.11 约定，下轮起单次申请 ≥10 commit 时分段评审。）
 
 ## 7. 申请审批事项
 
