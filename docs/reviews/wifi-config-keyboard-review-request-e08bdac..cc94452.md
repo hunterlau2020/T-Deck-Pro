@@ -8,6 +8,7 @@
   - `8770a41` — `pda2: wifi scan - hold the overlay for a minimum visible time`
   - `f4449c3` — `pda2: AI Chat - two-tab layout: full-screen Chat + big Input`
   - `0b43685` — `pda2: AI Chat - hide the waitbox on screen exit too`
+  - `cc94452` — `pda2: AI Chat - tabs move into the top row next to back`
 - **历史范围**：`844a907..156732c`（31→28 个 commit）已由 Codex **全量接受**（见
   [评审结果](wifi-config-keyboard-review-result-codex-844a907..156732c.md)），本申请
   **不再重复携带**已通过的内容——评审只需审上述 4 个新 commit。
@@ -51,6 +52,11 @@ Test: 56 tok, 0.000100 USD
 - 重试草稿恢复时默认打开 Input tab
 - New 键盘路径改到音量键 `'\v'`（Input tab 下；Alt+Enter 让位给 tab 切换）
 
+### 1.5 Tab 并入顶栏（`cc94452`，用户反馈）
+
+Chat/Input tab 按钮移到返回按钮同一行（顶栏右端），下方整块区域归页面使用——
+历史区比上一版再高出原 tab 条高度（约 30px）。
+
 ### 1.4 等待层离屏清理（`0b43685`，Codex §1.11 顺手修复）
 
 `scr_mgr_push` 只触发 exit 不触发 destroy，等待层会留在 top layer——`chat_exit` 现在也
@@ -83,7 +89,7 @@ hide waitbox（与 destroy 一致）。
 ## 5. 回滚方案
 
 ```bash
-git revert 0b43685 f4449c3 8770a41 e08bdac
+git revert cc94452 0b43685 f4449c3 8770a41 e08bdac
 ```
 
 ## 6. 申请审批事项
