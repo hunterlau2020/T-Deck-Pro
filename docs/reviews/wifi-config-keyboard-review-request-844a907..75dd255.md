@@ -27,6 +27,8 @@
   - `8d273cd` — `tests: executable state-machine test for the dual-slot NVS save`
   - `867435e` — `pda2: AI Chat - fix log swap-in rename conflict + load diagnostics`（真机回归发现）
   - `3cdff38` — `pda2: persistence lifecycle + format migration + trim visibility`
+  - `55054fa` — `pda2: menu - AI-first first page (user-requested order)`（用户追加需求）
+  - `75dd255` — `pda2: AI Chat - send UX: clear on send + waiting overlay`（用户追加需求）
 - **评审依据**：
   - [主评审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c.md)（部分接受，11 Findings）
   - [Copilot 复审 eecebda..ceade9c](wifi-config-keyboard-review-result-eecebda..ceade9c-copilot.md)（退回修订，10 Findings）
@@ -188,6 +190,11 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 | 1.8 上下文静默裁剪 | 状态行显示 `Thinking · N ctx msgs · trimmed`（发生裁剪时） |
 | 1.7 真机回归 | 见 §4 回填：P0 ✅、多轮 ✅、重启恢复 ❌→已修待复测 |
 
+### 2.16 第五轮（`55054fa`/`75dd255`）— 用户追加需求（2026-08-17）
+
+- **菜单第一屏重排**（`55054fa`）：AI 优先——`AI Cfg / AI Text / AI Chat / Dict / Weather / Calendar / Calc / Wifi / Sleep`；硬件/系统类条目（Lora/Setting/GPS/Test/Battery/Input/A7682E/Shutdown/Motor）移至第二屏
+- **AI Text 发送交互**（`75dd255`）：点 Send 后**输入框立即清空**、用户气泡立即入历史、弹置顶等待层 `Waiting server reply... 10s`（按秒变化更新文本，到 0 显示 `still waiting...` 持续等待）；回复到达 → 等待层消失 + AI 气泡追加；失败 → 等待层消失 + pending 气泡标 `(failed)` + **文本回填输入框**可重试（草稿持久化同步）。等待层打开期间吞键、离屏销毁
+
 ## 3. 验证状态
 
 | 项目 | 状态 | 证据 |
@@ -214,7 +221,9 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 7. ⏸ 发送成功 → 输入框清空、回复左对齐追加、自动滚底；发送失败 → 草稿保留、气泡标 `(failed)`；重试**不产生重复气泡**
 8. ❌→🔧 重启/重进 AI Text → 历史完整恢复（SPIFFS）：第一轮失败（历史未展示、AI 无上下文）。根因：SPIFFS rename 目标已存在时失败，第二次保存起静默失败。`867435e` 已修（bak 三步换入 + 诊断串口），**待复测**
 9. ⏸ 长回答 >4KB → `(truncated)` 无乱码；中文/emoji 正常
-10. ✅ **多轮记忆**（2026-08-17 用户实测）：连续两问，第二问引用上文（"翻译成中文"）→ AI 正确接上
+10. ✅ **多轮记忆**（2026-08-17 用户实测）：连续两问，第二问引用上文（"翻译成中文"）→ AI 正确接上（用户反馈"似乎解决了，继续观察"）
+16. ⏸ **发送交互**（`75dd255` 新实现待测）：Send → 输入框立即清空 + 气泡立即出现 + 等待层 `Waiting server reply... 10s` → 回复到达关闭并追加气泡；失败回填输入框可重试
+17. ⏸ **菜单第一屏**：9 个条目按 AI 优先顺序显示，第二屏为硬件/系统类
 11. **usage 统计**：一次对话后串口出现 `[AI] usage +232/215 tok, cost +...`；重启后再对话，totals 在上次基础上累加
 12. **New 按钮**：点 New → **先弹确认框**；OK → 历史清空、状态行 `History cleared`；Cancel/任意键 → 无变化；重启后仍为空；usage 计数不受影响
 13. **Sleep 帧等待**：点 Sleep → 提示画面完整显示后倒计时才从 2 开始（旧固件会吃掉 1-2s 全刷时间）；倒计时内 Back 取消
@@ -235,10 +244,10 @@ Hist 改名 **New**：语义 = 开启新会话——清空可见历史 + SPIFFS 
 ## 6. 回滚方案
 
 ```bash
-git revert 3cdff38 867435e 8d273cd 4c1ceda 0328cd2 c90307f 538e6d0 74c24ff 35e9eae ba31181 9a89cdd 5dd8e32 23063b0 06f9235 e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
+git revert 75dd255 55054fa 3cdff38 867435e 8d273cd 4c1ceda 0328cd2 c90307f 538e6d0 74c24ff 35e9eae ba31181 9a89cdd 5dd8e32 23063b0 06f9235 e1b2d0f a6388b0 8461f65 e60b2e8 9b376da e31cd06 7fec0e5 9c075c5 844a907
 ```
 
-23 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。（按评审 §1.11 约定，下轮起单次申请 ≥10 commit 时分段评审。）
+25 个 commit 按模块拆分，任一可独立 revert，中间态均可独立编译。（按评审 §1.11 约定，下轮起单次申请 ≥10 commit 时分段评审。）
 
 ## 7. 申请审批事项
 
