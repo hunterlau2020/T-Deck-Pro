@@ -99,7 +99,9 @@ static lv_obj_t *chat_status_lab = NULL;
 static bool chat_kbd_active = false;
 
 /* two-tab layout (user request 2026-08-17): Chat page = full-screen
- * history, Input page = big textarea + big buttons */
+ * history, Input page = big textarea + big buttons. The tab buttons
+ * live in the TOP row next to the back button, so the whole area below
+ * belongs to the pages. */
 static lv_obj_t *chat_page = NULL;
 static lv_obj_t *input_page = NULL;
 static lv_obj_t *chat_tab_btn = NULL;
@@ -980,27 +982,19 @@ static void chat_create(lv_obj_t *parent)
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* --- tab bar: Chat / Input (user request: two pages, tabs switch) --- */
-    lv_obj_t *tab_row = lv_obj_create(cont);
-    lv_obj_set_width(tab_row, lv_pct(100));
-    lv_obj_set_height(tab_row, 30);
-    lv_obj_set_style_bg_opa(tab_row, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(tab_row, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(tab_row, 0, LV_PART_MAIN);
-    lv_obj_set_flex_flow(tab_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(tab_row, 4, LV_PART_MAIN);
-
-    chat_tab_btn = lv_btn_create(tab_row);
-    lv_obj_set_flex_grow(chat_tab_btn, 1);
-    lv_obj_set_height(chat_tab_btn, 30);
+    /* --- tab buttons: in the TOP row, right of the back button (user
+     * request: the whole area below stays for the pages) --- */
+    chat_tab_btn = lv_btn_create(parent);
+    lv_obj_set_size(chat_tab_btn, 54, 30);
+    lv_obj_align(chat_tab_btn, LV_ALIGN_TOP_RIGHT, -58, 3);
     lv_obj_t *chat_tab_lab = lv_label_create(chat_tab_btn);
     lv_label_set_text(chat_tab_lab, "Chat");
     lv_obj_center(chat_tab_lab);
     lv_obj_add_event_cb(chat_tab_btn, chat_chat_tab_cb, LV_EVENT_CLICKED, NULL);
 
-    input_tab_btn = lv_btn_create(tab_row);
-    lv_obj_set_flex_grow(input_tab_btn, 1);
-    lv_obj_set_height(input_tab_btn, 30);
+    input_tab_btn = lv_btn_create(parent);
+    lv_obj_set_size(input_tab_btn, 54, 30);
+    lv_obj_align(input_tab_btn, LV_ALIGN_TOP_RIGHT, 0, 3);
     lv_obj_t *input_tab_lab = lv_label_create(input_tab_btn);
     lv_label_set_text(input_tab_lab, "Input");
     lv_obj_center(input_tab_lab);
