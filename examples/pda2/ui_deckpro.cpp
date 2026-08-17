@@ -2364,6 +2364,9 @@ static lv_obj_t *wifi_scan_ovl = NULL;
 static lv_obj_t *wifi_scan_ovl_lab = NULL;
 static uint32_t wifi_scan_ovl_t0 = 0;
 static uint32_t wifi_scan_ovl_last_secs = 0;
+static uint32_t wifi_scan_ovl_flush_seq = 0;
+static uint32_t wifi_scan_ovl_visible_t0 = 0;
+static bool wifi_scan_ovl_frame_visible = false;
 
 static void wifi_scan_overlay_show(void)
 {
@@ -2388,6 +2391,11 @@ static void wifi_scan_overlay_show(void)
     wifi_scan_ovl_t0 = millis();
     wifi_scan_ovl_last_secs = 0;
     lv_label_set_text(wifi_scan_ovl_lab, "Scanning... 10s");
+    /* Bind the minimum-display timer to the frame that actually reaches
+     * the EPD. Object lifetime is not panel-visible time on e-paper. */
+    wifi_scan_ovl_frame_visible = false;
+    wifi_scan_ovl_visible_t0 = 0;
+    wifi_scan_ovl_flush_seq = ui_disp_full_refr_seq();
 }
 
 static void wifi_scan_overlay_hide(void)
@@ -2397,6 +2405,9 @@ static void wifi_scan_overlay_hide(void)
         wifi_scan_ovl = NULL;
         wifi_scan_ovl_lab = NULL;
     }
+    wifi_scan_ovl_frame_visible = false;
+    wifi_scan_ovl_visible_t0 = 0;
+    wifi_scan_ovl_flush_seq = 0;
 }
 
 /* Called every loop while the screen is active. */
@@ -2404,13 +2415,25 @@ static void wifi_scan_overlay_hide(void)
 static void wifi_scan_overlay_update(void)
 {
     if (!wifi_scan_ovl) return;
+
+    if (!wifi_scan_ovl_frame_visible &&
+        ui_disp_flush_done_seq() >= wifi_scan_ovl_flush_seq) {
+        wifi_scan_ovl_frame_visible = true;
+        wifi_scan_ovl_visible_t0 = millis();
+        Serial.println("[WiFi] scan overlay reached panel");
+    }
+
     if (wifi_scan_state != WIFI_SCAN_RUNNING &&
-        millis() - wifi_scan_ovl_t0 >= WIFI_SCAN_OVL_MIN_MS) {
-        /* user report: fast scans (<1 s) finished before the overlay
-         * even reached the panel - hold it for a minimum visible time */
+        wifi_scan_ovl_frame_visible &&
+        millis() - wifi_scan_ovl_visible_t0 >= WIFI_SCAN_OVL_MIN_MS) {
         wifi_scan_overlay_hide();
         return;
     }
+
+    /* A result banner may be created as soon as scanComplete() returns.
+     * Keep the progress layer above it until its own visible interval ends. */
+    lv_obj_move_foreground(wifi_scan_ovl);
+
     uint32_t elapsed = millis() - wifi_scan_ovl_t0;
     if (elapsed >= WIFI_SCAN_OVL_TIMEOUT_MS) {
         wifi_cfg_scan_abort();                  /* countdown over: abort stuck scan */
