@@ -1,28 +1,36 @@
 # Security
 
-## Dev-only API Key exception (user decision)
+## Secrets architecture (2026-08-17)
 
-- A real OpenRouter API key is temporarily committed as
-  `AI_KEY_DEFAULT` in `examples/pda2/openai_api.h` to keep on-device AI
-  verification fast during development. This is a DELIBERATE user
-  decision (2026-08-16): the user weighed strict hygiene against
-  iteration speed and chose dev convenience; three consecutive review
-  rounds had flagged the key as a Critical blocker before this decision.
-  Reviewers must treat the retained key as a dev-phase exception with
-  compensating controls (below), NOT as a merge blocker; it must be
-  re-escalated to Critical before any public push or release.
-- The key is a free-tier key and has been rotated on OpenRouter before
-  this decision was made; it will be rotated again before any release.
-- **Before pushing to a public remote / making a release you MUST:**
-  1. delete the `AI_KEY_DEFAULT` string (replace with `""`),
-  2. remove `-DAI_KEY_DEFAULT_COMPILED` from `[env:pda2]` in `platformio.ini`,
-  3. rotate the key on OpenRouter,
-  4. consider `git filter-repo` to purge the string from history.
-- Compensating control in place: the build emits
-  `#warning "Dev-only API Key in source..."` on every compile while the
-  key is compiled in (C1). No CI secret scanning is configured yet (C3).
+No real API key lives in TRACKED source. Lookup chain for every secret
+(highest priority first):
 
-## Other secrets
+1. **NVS** — runtime storage (AI config saved from the UI wins; NVS
+   namespace `ai` dual-slot, `weather` for OWM key/coords)
+2. **SPIFFS `/env.cfg`** — device-side file, `KEY=VALUE` lines
+   (see `examples/pda2/env.cfg.example`; parsed by
+   `examples/pda2/env_secrets.cpp`). Not part of the repo.
+3. **`examples/pda2/config_keys.h`** — compile-time dev values,
+   **gitignored** (copy from `config_keys.h.example`)
+4. Built-in default (usually empty)
 
-- WiFi credentials are stored in NVS at runtime only; nothing else is
-  hard-coded in source.
+When a value is already present in NVS, the lower layers are ignored
+for that key.
+
+## Git history warning
+
+Older commits (before 2026-08-17) contain a real OpenRouter key string
+in `examples/pda2/openai_api.h`. It has been removed from HEAD and
+should be treated as COMPROMISED:
+
+- The key was revoked / must be rotated on OpenRouter before any use.
+- Before pushing to a PUBLIC remote, run `git filter-repo` (or
+  `git filter-branch`) to purge the string from history, then force
+  push; a plain push is also blocked by GitHub push protection.
+- `config_keys.h` and `/env.cfg` must never be added to git.
+
+## Release checklist
+
+- [ ] No secrets in `git diff HEAD` (run `git grep` for key patterns)
+- [ ] History purged (filter-repo) if pushing publicly
+- [ ] OpenRouter / OpenWeatherMap keys rotated

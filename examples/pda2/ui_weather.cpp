@@ -13,10 +13,50 @@
 #include "ui_deckpro.h"
 #include "ui_deckpro_port.h"
 #include "http_utils.h"
+#include "env_secrets.h"
 #include "config_keys.h"
 #include <cJSON.h>
 #include <Preferences.h>
 #include <WiFi.h>
+
+/* Secrets chain (SECURITY.md): NVS -> /env.cfg -> gitignored
+ * config_keys.h -> none. No real key lives in TRACKED source. */
+static void weather_owm_key(char *out, int outlen)
+{
+    out[0] = '\0';
+    Preferences p;
+    p.begin("weather", true);
+    String k = p.getString("owm_key", "");
+    p.end();
+    if (k.length() > 0) {
+        strncpy(out, k.c_str(), outlen - 1);
+        out[outlen - 1] = '\0';
+        return;
+    }
+    if (env_get("OWM_KEY", out, outlen)) return;
+#ifdef OWM_API_KEY
+    strncpy(out, OWM_API_KEY, outlen - 1);
+    out[outlen - 1] = '\0';
+#endif
+}
+
+static void weather_coords(float *lat, float *lon)
+{
+    Preferences p;
+    p.begin("weather", true);
+    String c = p.getString("coords", "");
+    p.end();
+    if (c.length() > 0 &&
+        sscanf(c.c_str(), "lat=%f&lon=%f", lat, lon) == 2) return;
+    char buf[64];
+    if (env_get("WEATHER_COORDS", buf, sizeof(buf)) &&
+        sscanf(buf, "lat=%f&lon=%f", lat, lon) == 2) return;
+#ifdef WEATHER_DEFAULT_COORDS
+    if (sscanf(WEATHER_DEFAULT_COORDS, "lat=%f&lon=%f", lat, lon) == 2) return;
+#endif
+    *lat = 37.49f;                          /* last resort */
+    *lon = -122.27f;
+}
 
 LV_IMG_DECLARE(img_w_clear);
 LV_IMG_DECLARE(img_w_pcloudy);
@@ -294,13 +334,13 @@ static bool cache_is_fresh()
 
 // --- Fetch ---
 
-static void fetch_city_name(float lat, float lon)
+static void fetch_city_name(float lat, float lon, const char *key)
 {
-#ifdef OWM_API_KEY
+    if (!key || key[0] == '\0') return;
     char url[256];
     snprintf(url, sizeof(url),
              "https://api.openweathermap.org/geo/1.0/reverse?lat=%.4f&lon=%.4f&limit=1&appid=%s",
-             lat, lon, OWM_API_KEY);
+             lat, lon, key);
     http_response_t resp = http_get(url, 5000);
     if (resp.success) {
         cJSON *arr = cJSON_Parse(resp.body.c_str());
@@ -311,12 +351,19 @@ static void fetch_city_name(float lat, float lon)
         }
         if (arr) cJSON_Delete(arr);
     }
-#endif
 }
 
 static void weather_fetch_task(void *param)
 {
-#ifdef OWM_API_KEY
+    char key[96];
+    weather_owm_key(key, sizeof(key));
+    if (key[0] == '\0') {
+        Serial.println("[Weather] no OWM key (NVS /env.cfg config_keys.h) - skip");
+        fetch_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
     float lat = 37.49f, lon = -122.27f;
     const char *loc_source = "fallback";
 
@@ -341,18 +388,14 @@ static void weather_fetch_task(void *param)
         p.putFloat("gps_lat", lat); p.putFloat("gps_lon", lon);
         p.end();
     } else {
-#ifdef WEATHER_DEFAULT_COORDS
-        /* no GPS fix (indoors): use the configured city, e.g.
-         *   #define WEATHER_DEFAULT_COORDS "lat=31.23&lon=121.47"
-         * in config_keys.h */
-        const char *cfg = WEATHER_DEFAULT_COORDS;
-        float clat = 0, clon = 0;
-        if (sscanf(cfg, "lat=%f&lon=%f", &clat, &clon) == 2 &&
-            clat != 0 && clon != 0) {
+        /* no GPS fix (indoors): NVS coords -> /env.cfg -> config_keys.h
+         * (Shenzhen is the user-configured default) */
+        float clat, clon;
+        weather_coords(&clat, &clon);
+        if (clat != 0 && clon != 0) {
             lat = clat; lon = clon;
             loc_source = "config";
         }
-#endif
     }
 
     Serial.printf("[Weather] Using %s: lat=%.4f lon=%.4f\n", loc_source, lat, lon);
@@ -362,7 +405,7 @@ static void weather_fetch_task(void *param)
     char url[256];
     snprintf(url, sizeof(url),
              "https://api.openweathermap.org/data/2.5/weather?lat=%.4f&lon=%.4f&units=metric&appid=%s",
-             lat, lon, OWM_API_KEY);
+             lat, lon, key);
     http_response_t resp = http_get(url, 15000);
     if (resp.success && resp.status_code == 200) {
         parse_current_weather(resp.body.c_str());
@@ -373,7 +416,7 @@ static void weather_fetch_task(void *param)
 
     snprintf(url, sizeof(url),
              "https://api.openweathermap.org/data/2.5/forecast?lat=%.4f&lon=%.4f&units=metric&appid=%s",
-             lat, lon, OWM_API_KEY);
+             lat, lon, key);
     resp = http_get(url, 15000);
     if (resp.success && resp.status_code == 200) {
         parse_forecast(resp.body.c_str());
@@ -384,29 +427,31 @@ static void weather_fetch_task(void *param)
 
     if (data_valid) {
         last_fetch_time = millis();
-        if (location_name[0] == '\0') fetch_city_name(lat, lon);
+        if (location_name[0] == '\0') fetch_city_name(lat, lon, key);
         save_cache();
         Serial.printf("[Weather] ok: %d hourly, %d daily\n", hourly_count, daily_count);
     }
-#endif
     fetch_task = NULL;
     vTaskDelete(NULL);
 }
 
 static void start_fetch()
 {
-#ifdef OWM_API_KEY
     if (WiFi.status() != WL_CONNECTED) {
         if (status_label) lv_label_set_text(status_label, "WiFi not connected");
+        return;
+    }
+    char key[96];
+    weather_owm_key(key, sizeof(key));
+    if (key[0] == '\0') {
+        if (status_label)
+            lv_label_set_text(status_label, "No API key.\nSet OWM_KEY in /env.cfg or config_keys.h");
         return;
     }
     if (fetch_task) return;
     if (cache_is_fresh()) return;
     if (status_label) lv_label_set_text(status_label, "Fetching...");
     xTaskCreatePinnedToCore(weather_fetch_task, "weather", 16384, NULL, 5, &fetch_task, 0);
-#else
-    if (status_label) lv_label_set_text(status_label, "No API key.\nSet OWM_API_KEY in config_keys.h");
-#endif
 }
 
 // --- UI update ---

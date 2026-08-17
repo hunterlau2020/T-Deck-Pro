@@ -5,6 +5,8 @@
 #include "Arduino.h"
 #include "openai_api.h"
 #include "http_utils.h"
+#include "env_secrets.h"
+#include "config_keys.h"
 #include <Preferences.h>
 #include <cJSON.h>
 #include <freertos/FreeRTOS.h>
@@ -28,13 +30,15 @@ static const char *cfg_key(const char *field, int slot)
 void openai_load_config(char *base, int base_len, char *model, int model_len,
                         char *key, int key_len)
 {
-    /* Fallback chain (copilot finding 1.8 + main review 1.6):
+    /* Fallback chain (copilot finding 1.8 + main review 1.6 + SECURITY.md):
      * 1. ACTIVE SLOT, if it is initialized. A slot counts as initialized
      *    as soon as ANY of its three keys exists - an empty-but-saved Base
      *    must be read back as empty, NOT silently replaced.
      * 2. Legacy flat keys from pre-dual-slot firmware (any of base/model/
      *    key present).
-     * 3. Compile-time defaults.
+     * 3. Device /env.cfg (AI_KEY=...), then the gitignored
+     *    config_keys.h AI_KEY_DEFAULT_DEV - no real key in TRACKED
+     *    source; the final default is empty.
      * The first save always lands in the INACTIVE slot (active defaults
      * to 0, so next = 1) and flips "active"; after that the legacy branch
      * is never taken again. */
@@ -56,7 +60,14 @@ void openai_load_config(char *base, int base_len, char *model, int model_len,
     } else {
         b = AI_BASE_DEFAULT;
         m = AI_MODEL_DEFAULT;
-        k = AI_KEY_DEFAULT;
+        char env_key[96] = "";
+        if (!env_get("AI_KEY", env_key, sizeof(env_key))) {
+#ifdef AI_KEY_DEFAULT_DEV
+            strncpy(env_key, AI_KEY_DEFAULT_DEV, sizeof(env_key) - 1);
+            env_key[sizeof(env_key) - 1] = '\0';
+#endif
+        }
+        k = env_key;
     }
     p.end();
     strncpy(base,  b.c_str(), base_len  - 1);
