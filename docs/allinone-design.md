@@ -1,5 +1,9 @@
 # 设计方案：allinone 整合固件（GPS + MP3 + 键盘 + 网络词典 + WiFi 配置 + AI 对话）
 
+> **2026-08-19 状态**：用户决策不再新开 allinone——pda2 即整合固件（菜单两页 18
+> 入口已覆盖 GPS/词典/WiFi/AI 等）。MP3 屏因 4G 版无 PCM5102A DAC 取消
+> （`docs/issue_list.md` §3.3）。本文档归档为 pda2 演进参考。
+
 > 状态：**评审未通过**（2026-08-09）— 7 项新 finding 待修订（见 [评审结果](allinone-design-review-result.md)）
 > 原评审：2026-08-08 通过；2026-08-09 二次评审：5 项通过 / 4 项不通过 / 2 项缺证据；新增 2 High + 5 Medium
 > 日期：2026-08-07；**2026-08-16 两轮修订**：① 按 pda2 预研最新结论修订（键盘修饰键模型、WiFi 配置屏设计、扫描生命周期、WiFi Test、AI 输入体验——预研经 11 轮评审 + 真机验证，记录见 `docs/reviews/`）；② **AI 对话/配置交互按两份专项评审重写**（[技术评审](reviews/allinone-ai-interaction-review-result.md) 9 项 + [产品体验评审](reviews/allinone-design-ai-ux-flow-review-result.md) 10 项 + 状态机，§4 AI 两节）
@@ -119,7 +123,7 @@ keypad 三层——普通层小写 a-z + 空格 + `\n`/`\b`（`peri_keypad.cpp::
 |---|---|---|
 | `SCREEN0_ID` | **菜单：8 个按钮**（"1 GPS / 2 Music / 3 Dict / 4 Keys / 5 WiFi / 6 WiFi Cfg / 7 AI / 8 AI Cfg"），单页 9 格布局（评审 #1 修复：原 6 项缺 WiFi Cfg 和 AI Cfg 入口，首次使用无法设 Key）。`menu_btn_list` 9×8 网格，"GPS"右上角显示 `!` 提示未配 WiFi，AI Cfg 同理；Sym 层 `1`-`8`（先按 Sym）进入对应屏 | 裁剪 pda2 菜单 |
 | `SCREEN_GPS_ID` | GPS 状态（坐标/速度/卫星/UTC 时间），沿用 3s 定时刷新；已有 `gps_keyboard_poll`（`\b` 返回） | 复制 `ui_gps_enhanced.cpp` |
-| `SCREEN_MP3_ID` | SD `.mp3` 文件浏览器（分页）+ 播放控制 | 新写 `ui_mp3.cpp` |
+| `SCREEN_MP3_ID` | ~~SD `.mp3` 文件浏览器（分页）+ 播放控制~~ **4G 版取消**（无 DAC，issue_list §3.3） | 新写 `ui_mp3.cpp` |
 | `SCREEN_DICT_ID` | keypad 输入英文单词 → 在线查询 → 显示音标 + 释义（前 3 条） | 复制 `ui_dictionary.cpp` + `dict_lookup.cpp` |
 | `SCREEN_KEYPAD_ID` | 键盘回显测试：按键字符 + 0xHEX + 累计次数 | 新写 `ui_keypad.cpp` |
 | `SCREEN_WIFI_ID` | WiFi 状态/扫描：显示当前 SSID/IP/RSSI，扫描周围 AP 列表；提供 **WiFi Test** 入口（ifconfig.me 公网 IP 测试 → 信息层展示 + 关闭；pda2 为列表项触摸入口，allinone 无触摸需键盘等价键，如 Sym 层数字或 `t`） | 新写 `ui_wifi_status.cpp` |

@@ -47,16 +47,15 @@
 - [ ] OpenRouter 后台轮换 Key。
 - [ ] `git filter-repo` 清理历史 + 仓库通告。
 
-## 阶段 1：实现 `examples/allinone`（设计评审通过后）
+## 阶段 1：~~实现 `examples/allinone`~~（2026-08-19 用户决策：不再新开 allinone）
 
-- [ ] 按 `docs/allinone-design.md` §5/§7 复制裁剪（触摸清理清单、GPS 空句柄守卫、
-      9 屏 + menu_keyboard_poll）。
-- [ ] 移植阶段 0 验证过的 WiFi 配置 + AI 对话/配置屏（`openai_chat_multi` 多轮、
-      双槽保存、SPIFFS 日志、usage 统计照搬）。
-- [ ] 新写 `ui_mp3.cpp`、`ui_keypad.cpp`、`ui_wifi_config.cpp`、`ui_wifi_status.cpp`。
-- [ ] `platformio.ini` 追加 `[env:allinone]`。
+> pda2 即最终整合固件（菜单两页 18 入口已覆盖 GPS/词典/WiFi/AI/天气/睡眠等）。
+> 原 allinone 项处置：
+> - [x] **MP3 屏取消**——4G 版无 PCM5102A DAC（`issue_list` §3.3 探针实测无声）
+> - [ ] **Keys 键盘演示屏**：可做进 pda2（`ui_keypad.cpp` 设计待定，用户未拍板）
+> - [x] WiFi 状态/配置、AI 对话/配置、词典、GPS——pda2 已实现并评审（原"新写/
+>       移植"项全部由现有屏覆盖）
+> - [x] `[env:allinone]` 不追加
+> - `docs/allinone-design.md` 归档为 pda2 演进参考
 
-## 阶段 2：编译与真机验证
-
-- [ ] `pio run -e allinone --jobs 8` 编译通过、无未定义引用。
-- [ ] 烧录真机：菜单切换、GPS/MP3/词典/键盘各功能、WiFi/AI 可用。
+## 阶段 2：~~allinone 编译与真机验证~~（随阶段 1 取消）
