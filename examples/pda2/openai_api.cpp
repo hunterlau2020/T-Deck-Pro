@@ -246,10 +246,12 @@ static void ai_stats_load_locked(void)
     }
     s_ai_stats.magic = AI_STATS_MAGIC_V3;
 
-    /* monthly reset (user request) */
+    /* monthly reset (user request). localtime(): the month boundary is the
+     * USER's local month (CST-8, set in factory.ino setup), not UTC
+     * (review round 28 finding O1). */
     time_t now = time(nullptr);
     if (now > 1700000000) {                     /* NTP synced */
-        struct tm *tm_info = gmtime(&now);
+        struct tm *tm_info = localtime(&now);
         uint32_t ym = (tm_info->tm_year + 1900) * 100 + (tm_info->tm_mon + 1);
         const uint32_t prev = s_ai_stats.reset_month;
         if (prev != 0 && prev != ym) {

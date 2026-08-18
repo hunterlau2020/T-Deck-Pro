@@ -595,6 +595,12 @@ void setup()
 
     Serial.begin(115200);
 
+    /* China Standard Time (UTC+8, no DST). All localtime() users - the
+     * usage-stats monthly reset, Calendar, Sleep/status timestamps - run
+     * on UTC without this. */
+    setenv("TZ", "CST-8", 1);
+    tzset();
+
     // IO
     pinMode(BOARD_KEYBOARD_LED, OUTPUT);
     pinMode(BOARD_MOTOR_PIN, OUTPUT);
