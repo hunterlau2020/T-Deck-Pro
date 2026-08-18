@@ -1892,6 +1892,7 @@ static void wifi_cfg_sync_draft(void)
 static void wifi_cfg_scan_abort(void);
 static void wifi_scan_overlay_show(void);
 static void wifi_scan_overlay_update(void);
+static void wifi_scan_overlay_hide(void);
 static void wifi_banner_show(const char *text);
 static void wifi_banner_update(void);
 static void wifi_banner_hide(void);
@@ -2325,7 +2326,14 @@ static void create4_1(lv_obj_t *parent)
 }
 
 static void entry4_1(void) { ui_disp_full_refr(); }
-static void exit4_1(void) { ui_disp_full_refr(); }
+static void exit4_1(void) {
+    /* The scan overlay/banner live on lv_layer_top() and would outlive a
+     * plain push (exit runs, destroy does not): hide them so they don't
+     * sit on top of the pushed screen (review round 25 finding). */
+    wifi_scan_overlay_hide();
+    wifi_banner_hide();
+    ui_disp_full_refr();
+}
 /* Abort an in-flight async scan (review round 4 finding 1.2): wait for the
  * explicit SCAN_DONE event (which guarantees the framework's _scanDone()
  * has finished allocating/filling the results) before scanDelete(). On
