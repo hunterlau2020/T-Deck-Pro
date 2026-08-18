@@ -41,7 +41,32 @@
 |---|---|---|
 | 编译 | ✅ | `pio run -e pda2` → SUCCESS |
 | 烧录 | ✅ | COM5，Hash verified |
-| 真机回归 | ⏸ | 继承第 29 轮 15 项待用户；本轮新增 1 项代码级（custom Save 不写 key.custom，无可见 UI 变化） |
+| 真机回归 | 部分 ✅ | 下方清单：2026-08-18 用户实测 11 项通过，6/14/15 待测 |
+| 本轮新增 1 项 | ✅（代码级） | custom Save 不写 `key.custom`，无可见 UI 变化 |
+
+### 真机回归清单（继承第 29 轮 15 项，2026-08-18 回填）
+
+**d22007d..4c3c9b1（第 29 轮）新增**
+1. ✅ Provider 下拉显示与切换（点击 / Alt+Enter 循环 6 项）；选 deepseek → base/model 自动填
+2. ✅ 选 openrouter → Key 自动填入（串口 `[AICfg] key for openrouter loaded`）
+3. ✅ 选 deepseek 后 Test → 通过（base 自动补 `/chat/completions`，无 404）
+4. ✅ custom 选中 → base/model/key 三框清空
+5. ✅ Usage 弹窗数据正确（跨月清零逻辑代码级，等 9 月自动验证）
+6. ⏸ Save 后切走再切回同一 provider → key 从 NVS `key.<provider>` 恢复
+
+**上轮 b9b1ed4（第 27 轮）**
+7. ✅ Weather `r` 键 → `Fetching...` → 数据更新
+8. ✅ Weather 城市显示深圳（不再是 San Carlos）
+9. ✅ Shutdown 四路径：Enter=关机；任意键=返回菜单；Cancel 按钮=返回；返回键=返回
+10. ✅ USB 插入时进 Shutdown → 只显示提示无关机
+
+**Weather/Secrets 继承**
+11. ✅ Weather 三页内容（Current/Hourly/5-Day）+ `+`/`-` 翻页 + `UV:--`
+12. ✅ 无 GPS 时深圳回退（串口 `Using config: lat=22.5431`）
+13. ✅（代码级） 空 NVS 时 AI Key 走 config_keys.h——第 29 轮 §1.3 四级链核验通过；
+    实测需擦除 NVS（连带丢失 WiFi 配置），不做破坏性验证
+14. ⏸ 失败重试路径：关热点发送 → 等待层消失 + 文本回填 + 气泡 `(failed)` → 重开热点重发成功
+15. ⏸ 长回答 >4KB → `(truncated)` 无乱码
 
 ## 4. 遗留项（继承，简要）
 
