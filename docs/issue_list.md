@@ -107,6 +107,17 @@
 - **验证**：2026-08-19 `examples/test_i2s_probe` 探针固件两轮实测——① 1s 提示音：解码全程正常（ID3→syncword→EOF），无声；② 60s 音频 + 音量 0→21 渐变、串口 `running=1` 确认在播、耳机经电脑验证正常：**仍无声**。ESP32-S3 无内置 DAC，板上无 DAC 芯片 = 无模拟音频输出路径，I2S 信号无处可去
 - **结论**：**MP3 播放屏在此板上不可行**（allinone 设计稿 §4 的 MP3 屏取消）；3.5mm 孔疑似接 4G 模组通话音频，与固件无关。测试遗留 `test_i2s_probe` 示例保留作硬件验证记录
 
+### 3.4 SD 卡仅支持 FAT16/FAT32，exFAT 显示 0MB ✅
+
+- **现象**：用户插入 120GB exFAT 卡，About System 屏 "SD total: 0MB"；串口
+  `f_mount failed: (13) There is no valid FAT volume`——卡被硬件识别但 FATFS
+  （ESP32 SD 库）不认 exFAT/NTFS
+- **修复**：`a924c4e` — 挂载失败时区分"无卡/格式非 FAT"（`cardType()` 在 f_mount
+  失败后仍保留检测类型），About System 屏加 `SD hint: need FAT32 / no card`，
+  串口打印原因
+- **用户操作**：>32GB 卡用 guiformat/Rufus 格成 FAT32（MBR 分区表）后重启机器；
+  FAT32 上限 2TB，SDHC/SDXC 均可
+
 ---
 
 ## 4. 文档与构建环境偏差

@@ -3,6 +3,35 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-08-19
+
+- **收尾批次 1**（`764e7bf`/`6ce2b4b`/`980b6df`，第 31 轮 A 接受）：
+  - usage 月度清零改**本地月界**：setup 设 `TZ=CST-8`，stats 用 `localtime()`
+    （第 28 轮 O1 闭合）；Calendar/Sleep 时间戳同享该时区（此前全按 UTC）
+  - WiFi 扫描覆盖层/结果 banner 在屏幕被 push 覆盖时隐藏（`exit4_1`，第 25 轮闭合）
+  - `test_keypad` 加 raw/driver 列镜像换算注释 + README §2 说明（issue_list 1.4 闭合）
+- **MP3 屏取消（硬件定论）**：4G 版板上无 PCM5102A DAC——`test_i2s_probe` 探针两轮
+  实测（1s 提示音 + 60s 音频音量 0→21 渐变、`running=1`、耳机经电脑验证正常）均无声；
+  I2S 引脚 7/8/9 被 A7682E（RI/ITR/RST）占用。issue_list §3.3、探针示例保留作验证记录
+- **allinone 取消（用户决策）**：不新开整合固件，pda2 即最终形态；设计稿归档为参考；
+  Keys 演示屏为唯一遗留候选（未拍板）
+- **SD 卡格式提示**（`a924c4e`）：120GB exFAT 卡挂载失败显示 0MB 无解释 →
+  About System 屏增加 `SD hint: need FAT32 / no card`（cardType 在 f_mount 失败后
+  仍可区分空槽与坏格式）；串口同步打印原因。**SD 卡仅支持 FAT16/FAT32**
+
+## 2026-08-18
+
+- **AI Config provider 原生下拉**（`fd7be74`/`d22007d`，第 28/29 轮 A 接受）：
+  lv_dropdown 6 项预设（openrouter/deepseek/minimax/qwen/tencent/custom）+ Alt+Enter
+  循环；每 provider 独立 key（NVS `key.<provider>` → /env.cfg `<NAME>_KEY`）；usage
+  统计升 V3（`reset_month` 月度清零，NTP 哨兵防冷启动误清）
+- **用户反馈修正**（`da0217f`/`4c3c9b1`，第 29 轮 A 接受）：env 默认 key 改名
+  `AI_KEY`→`OPENROUTER_KEY`；openrouter key 链补 config_keys.h 兜底；custom 选中
+  清空三框；Save 不再写死存储 `key.custom`（第 30 轮，`a2ecd7b`）
+- **评审流程修订**：申请文件名 = 本轮实际覆盖 commit 首末（含两端，非 git 区间记法），
+  已接受 commit 彻底出列（含结果文件接受范围核对，曾漏看第 28 轮范围）
+- **真机回归回填**：15 项清单 11 项 ✅（用户实测 2026-08-18；13 为代码级核验）
+
 ## 2026-08-17
 
 - **Secrets 配置链**（`0e78025`）：真实 Key 从跟踪源码移除——NVS → SPIFFS `/env.cfg`

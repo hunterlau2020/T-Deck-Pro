@@ -5,18 +5,19 @@
 
 ## 阶段 0（当前）：pda2 预研
 
-> 状态（2026-08-17）：WiFi 配置屏、AI 对话/配置屏已在 pda2 跑通并经 **22 轮评审**迭代
-> （`docs/reviews/`，最新申请 `wifi-config-keyboard-review-request-844a907..8d273cd.md`）。
-> 预研结论已回写 `docs/allinone-design.md` §4，阶段 1 照此移植。
+> 状态（2026-08-19）：WiFi 配置屏、AI 对话/配置屏已在 pda2 跑通并经 **31 轮评审**迭代
+> （`docs/reviews/`，最新申请 `wifi-config-keyboard-review-request-a924c4e.md`）。
+> 2026-08-19 用户决策：不新开 allinone，pda2 即最终整合固件（设计稿归档为参考）。
 
 ### 阻塞项（合并前置条件）
 
 - [x] **P0 Sleep 三项真机回归**（2026-08-17 用户实测 ✅：倒计时 2→1→深睡、Back 取消、
       BOOT 唤醒）——合并门禁满足。
 - [x] **重启恢复复测**（2026-08-17 第二轮 ✅：历史恢复 + 多轮接续；`867435e` bak 三步换入生效）。
-- [ ] **P1/P2 真机回归**（申请 §4 剩余项）：多轮记忆 ✅、重启恢复 ✅、Test 文案/Close ✅、
-      New 确认 ✅、发送交互 ✅、WiFi Test 离页重进 ✅ 已过；剩余：失败重试路径（关热点）、
-      长回答 `(truncated)`、Weather 三页/刷新、provider 下拉、usage 月度清零。
+- [ ] **P1/P2 真机回归**（申请清单剩余项）：多轮记忆 ✅、重启恢复 ✅、Test 文案/Close ✅、
+      New 确认 ✅、发送交互 ✅、WiFi Test 离页重进 ✅、Weather 三页/`r` 刷新 ✅、
+      provider 下拉 ✅ 已过；剩余 3 项：Save 后 key 恢复（#6）、失败重试路径（关热点，14）、
+      长回答 `(truncated)`（15）。
 
 ### 预研收尾（评审跟踪项）
 
@@ -37,7 +38,7 @@
 - [ ] **Shutdown 观察项**（issue_list §6）：① 下次 shutdown 后插 USB 是否直接进系统
       （卡开机画面是否复现）；② 长按电源键 2-3s 能否唤醒；③ 复现卡死时抓串口日志；
       ④ 是否改为深度休眠（BOOT 键唤醒）——用户暂定"先观察再决定"。
-- [ ] **test_keypad 镜像注释**：raw 坐标与驱动坐标列镜像，示例加换算提示（issue_list 1.4）。
+- [x] **test_keypad 镜像注释**（`980b6df`）：示例加换算提示 + README §2 镜像说明（issue_list 1.4 闭合）。
 - [ ] **开机 NTP 等待**：setup() 末尾轮询时间同步（设计稿建议 30s，未实施，issue_list 2.2）。
 
 ### 安全（推公网 / 发布前，`SECURITY.md` 4 步）

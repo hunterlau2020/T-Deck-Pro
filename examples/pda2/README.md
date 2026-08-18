@@ -8,7 +8,8 @@ A PDA (Personal Digital Assistant) firmware for the **LilyGo T-Deck Pro v1.1** b
 - **Display**: 3.1" E-Paper 240×320 monochrome (GDEQ031T10)
 - **Keyboard**: TCA8418 4×10 matrix with sym/alt modifiers
 - **Touch**: CST226SE capacitive (HYN driver)
-- **Peripherals**: SX1262 LoRa, GPS, BHI260AP IMU, BQ25896/BQ27220 power, DRV2605 haptic, A7682E GSM, PCM5102A audio
+- **Peripherals**: SX1262 LoRa, GPS, BHI260AP IMU, BQ25896/BQ27220 power, DRV2605 haptic, A7682E GSM, PCM5102A audio (**4G/A7682E 版无 PCM5102A DAC**——耳机孔无 I2S 输出，MP3 播放不可行，见 issue_list §3.3)
+- **SD card**: FAT16/FAT32 only（exFAT/NTFS 挂载失败显示 0MB，About System 屏有 `SD hint` 提示）；FAT32 上限 2TB，>32GB 卡需第三方工具格式化
 
 ## Key Functions
 
@@ -49,7 +50,7 @@ python -m platformio run -e pda2 -t upload --upload-port COM5
 python -m platformio device monitor -p COM5 -b 115200
 ```
 
-WiFi credentials and API keys go in `config_keys.h` (copy from `config_keys.h.example`). This file is gitignored.
+Secrets follow the chain **NVS → SPIFFS `/env.cfg` → gitignored `config_keys.h` → empty default** (SECURITY.md). No real keys in tracked source.
 
 ## Architecture
 
