@@ -56,31 +56,40 @@ void setup()
     Serial.printf("[probe] setPinout(BCLK=%d,LRC=%d,DOUT=%d) = %d\n",
                   I2S_BCLK, I2S_LRC, I2S_DOUT, ok ? 1 : 0);
 
-    audio.setVolume(18); /* 0..21 */
+    audio.setVolume(0); /* ramped up during playback, see loop() */
 
-    File f = SPIFFS.open("/1-off.mp3");
+    File f = SPIFFS.open("/test_tone.mp3");
     Serial.printf("[probe] exists=%d size=%u name=\"%s\"\n",
-                  SPIFFS.exists("/1-off.mp3") ? 1 : 0,
+                  SPIFFS.exists("/test_tone.mp3") ? 1 : 0,
                   f ? (unsigned)f.size() : 0,
                   f ? f.name() : "(n/a)");
     if (f) f.close();
 
-    bool r = audio.connecttoFS(SPIFFS, "/1-off.mp3");
+    bool r = audio.connecttoFS(SPIFFS, "/test_tone.mp3");
     Serial.printf("[probe] connecttoFS returned %d, running=%d\n",
                   r ? 1 : 0, audio.isRunning() ? 1 : 0);
     Serial.flush();
 }
 
 static uint32_t last_report = 0;
+static uint8_t  last_vol = 255;
 
 void loop()
 {
     audio.loop();
 
+    /* Ramp volume 0..21 over the first 60 s so any output is audible. */
+    uint32_t cur = audio.getAudioCurrentTime();
+    uint8_t vol = (cur > 60) ? 21 : (uint8_t)(cur * 21 / 60);
+    if (vol != last_vol) {
+        last_vol = vol;
+        audio.setVolume(vol);
+    }
+
     if (millis() - last_report > 1000) {
         last_report = millis();
-        Serial.printf("[probe] running=%d cur=%us\n",
+        Serial.printf("[probe] running=%d cur=%us vol=%u\n",
                       audio.isRunning() ? 1 : 0,
-                      (unsigned)audio.getAudioCurrentTime());
+                      (unsigned)cur, (unsigned)vol);
     }
 }

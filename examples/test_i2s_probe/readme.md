@@ -25,7 +25,7 @@ pio run -e test_i2s_probe -t upload --upload-port COM5
 |---|---|
 | SPIFFS 读取 / ID3 解析 / MP3 解码 | ✅ 完整走通（串口日志：syncword → 44100Hz → EOF） |
 | I2S 外设配置 | ✅ `setPinout` 成功 |
-| **耳机孔出声** | ❌ **无声** |
+| **耳机孔出声** | ❌ **无声**（两轮：① 1s 提示音；② 60s 音频 + 音量 0→21 渐变、`running=1` 确认在播，耳机已用电脑验证正常，仍无声） |
 
 **结论**：4G 版板上无 PCM5102A DAC 芯片（耳机孔旁丝印 "QM-H693 GSM-V1.3" 为 4G
 模组）；ESP32-S3 无内置 DAC，I2S 数字信号无处转换。**MP3 播放屏在此硬件上不可行**
