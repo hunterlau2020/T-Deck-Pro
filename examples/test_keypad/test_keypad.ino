@@ -43,6 +43,10 @@ void loop(void)
         else Serial.print("RELEASE\tR: ");
         k &= 0x7F;
         k--;
+        // NOTE: these are RAW matrix coordinates. The pda2 driver
+        // (peri_keypad.cpp) mirrors the columns: driver_col = 9 - raw_col.
+        // To compare with the pda2 keymap, convert the printed C first.
+        // e.g. raw (R2 C9) = Alt = driver (2,0).
         Serial.print(k / 10);
         Serial.print("\tC: ");
         Serial.print(k % 10);
