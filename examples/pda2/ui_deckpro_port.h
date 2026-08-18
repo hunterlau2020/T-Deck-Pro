@@ -78,7 +78,7 @@ bool ui_setting_get_a7682_status(void);
 // setting - > About System
 const char *ui_setting_get_sf_ver(void);
 const char *ui_setting_get_hd_ver(void);
-void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used);
+void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used, int *state);
 
 typedef struct {
     bool pass;

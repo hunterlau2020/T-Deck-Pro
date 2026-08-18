@@ -336,13 +336,18 @@ bool ui_sd_test_run(ui_sd_test_result_t *out)
     return result->pass;
 }
 
-void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
+void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used, int *state)
 {
+    /* state: 0 = mounted OK, 1 = no card, 2 = card present but the
+     * filesystem is not FAT16/FAT32 (mount rejected it). */
     if (total) {
         *total = 0;
     }
     if (used) {
         *used = 0;
+    }
+    if (state) {
+        *state = 0;
     }
 
     ui_sd_test_result_t result;
@@ -354,6 +359,15 @@ void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
     shared_spi_unlock();
 
     if (!mounted) {
+        /* cardType() still reports the detected type after a failed
+         * f_mount (the card answered the init commands), which is how
+         * an exFAT/NTFS card is told apart from an empty slot. */
+        uint8_t ct = SD.cardType();
+        if (state) {
+            *state = (ct == CARD_NONE) ? 1 : 2;
+        }
+        Serial.printf("[SD] capacity query failed: %s (cardType=%s)\n",
+                      result.error, sd_card_type_to_string(ct));
         return;
     }
 

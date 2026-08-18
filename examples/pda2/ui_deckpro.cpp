@@ -973,7 +973,8 @@ static void create2_1(lv_obj_t *parent)
 
     char buf[30];
     uint64_t total=0, used=0;
-    ui_setting_get_sd_capacity(&total, &used);
+    int sd_state = 0;
+    ui_setting_get_sd_capacity(&total, &used, &sd_state);
     lv_snprintf(buf, 30, "%lluMB", total);
     str += line_full_format(28, "SD total:", (const char *)buf);
     str += "\n                           \n";
@@ -981,6 +982,15 @@ static void create2_1(lv_obj_t *parent)
     lv_snprintf(buf, 30, "%lluMB", used);
     str += line_full_format(28, "SD used:", (const char *)buf);
     str += "\n                           \n";
+
+    /* tell the user WHY the card shows 0MB instead of leaving it cryptic */
+    if (sd_state == 2) {
+        str += line_full_format(28, "SD hint:", "need FAT32");
+        str += "\n                           \n";
+    } else if (sd_state == 1) {
+        str += line_full_format(28, "SD hint:", "no card");
+        str += "\n                           \n";
+    }
 
 
     lv_label_set_text_fmt(info, "%s", str.c_str());
