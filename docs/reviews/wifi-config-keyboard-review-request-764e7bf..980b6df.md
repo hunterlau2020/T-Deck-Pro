@@ -13,7 +13,9 @@
   - `a2ecd7b`（第 30 轮，key.custom + 同步标注）— [结果](wifi-config-keyboard-review-result-codex-a2ecd7b.md)
   - `d22007d..4c3c9b1`（第 29 轮）、`b9b1ed4..fd7be74`（第 28 轮）、
     `e08bdac..b9b1ed4`（第 27 轮）
-- **硬件**：T-Deck-Pro HD-V2（V1.1，25-09-15 批次，COM5，**本轮烧录待设备连接**）
+- **评审状态**：第 31 轮 Codex **A 全量接受**，本申请闭环（见
+  [评审结果](wifi-config-keyboard-review-result-codex-764e7bf..980b6df.md)）。
+- **硬件**：T-Deck-Pro HD-V2（V1.1，25-09-15 批次，COM5，已烧录）
 
 ---
 
