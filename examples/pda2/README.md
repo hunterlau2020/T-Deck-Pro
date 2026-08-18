@@ -98,6 +98,11 @@ void show_page(int idx) {
 
 The T-Deck Pro keyboard is a 4×10 matrix read by TCA8418. The driver (`peri_keypad.cpp`) translates raw matrix positions to characters with sym/alt modifier support.
 
+> **Raw vs driver coordinates are column-mirrored**: the driver maps
+> `driver_col = 9 - raw_col` (e.g. raw `(R2 C9)` = Alt = driver `(2,0)`).
+> `examples/test_keypad` prints the RAW row/col - convert the column before
+> comparing with the maps below.
+
 **Normal layer:**
 ```
 q   w   e   r   t   y   u   i   o   p

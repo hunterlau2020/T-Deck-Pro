@@ -35,11 +35,11 @@
 - **后果**：Sym 层按麦克风键无反应（用户报告）
 - **修复**：`6a9ab00` — Sym 层 (3,6) = `'0'`。正常层麦克风仍无功能（录音功能未接入）
 
-### 1.4 `test_keypad` 原始坐标与驱动坐标是列镜像 ⬜
+### 1.4 `test_keypad` 原始坐标与驱动坐标是列镜像 ⬜→✅
 
 - **差异**：`examples/test_keypad/test_keypad.ino` 打印 raw row/col；`peri_keypad.cpp` 内部 `col = 9 - raw_col`。两者列方向相反，直接用 raw 值对照 keymap 会完全错位
 - **影响**：排查键位时易误导（本清单 1.1 的实测解码即靠此换算得出）
-- **建议**：test_keypad 示例加一行换算提示注释；README 键盘节注明镜像关系
+- **修复**：`980b6df` — test_keypad 示例加换算提示注释；`README.md` §2 键盘节加镜像关系说明
 
 ### 1.5 TCA8418 溢出标志是 W1C 而非 read-to-clear ✅
 
