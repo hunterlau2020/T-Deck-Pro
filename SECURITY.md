@@ -33,14 +33,17 @@ been removed from HEAD and **treated as COMPROMISED**:
   to ALREADY be clean (all reachable blobs scanned, 0 hits) — it had been
   rewritten from another machine before 2026-08-21. Local rewrite produced
   different hashes, so pushing HD-V2-250915 requires `--force` (expected).
-- Full pre-rewrite backup (contains the key): keep offline, delete only
-  after the remote force-push is verified:
-  `E:\cpp_works\T-Deck-Pro-pre-filter-backup-2026-08-21.bundle`
+- Full pre-rewrite backup (contains the key): the remote was force-pushed
+  and blob-verified clean on 2026-08-21, so the backup is now redundant and
+  can be deleted: `E:\cpp_works\T-Deck-Pro-pre-filter-backup-2026-08-21.bundle`
+- OpenRouter key ROTATED 2026-08-21; the new key lives in `/env.cfg` (device
+  SPIFFS + repo-root `data/env.cfg`, both gitignored). `config_keys.h` was
+  cleared to a template the same day (OWM key/coords moved to `/env.cfg` too).
 - `config_keys.h` and `/env.cfg` must never be added to git.
 
 ## Release checklist
 
 - [ ] No secrets in `git diff HEAD` (run `git grep` for key patterns)
 - [x] History purged (filter-repo, 2026-08-21)
-- [ ] OpenRouter / OpenWeatherMap keys rotated
-- [ ] Force-push rewritten `HD-V2-250915` after review rounds land
+- [x] OpenRouter key rotated (2026-08-21; OWM key never leaked — env-chain only)
+- [x] Rewritten `HD-V2-250915` force-pushed and blob-verified (2026-08-21)
