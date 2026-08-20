@@ -412,8 +412,9 @@ static void create0(lv_obj_t *parent)
     menu_taskbar_battery_percent = lv_label_create(status_parent);
     lv_obj_set_style_text_font(menu_taskbar_battery_percent, &Font_Mono_Bold_14, LV_PART_MAIN);
 
-    //
-    page_num = MENU_BTN_NUM / 9;
+    // page_num is the MAX page index used by the gesture gate
+    // (page_curr < page_num), not the page count: N=18 -> index 0..1.
+    page_num = (MENU_BTN_NUM - 1) / 9;
 
     menu_screen1 = lv_obj_create(parent);
     lv_obj_set_size(menu_screen1, lv_pct(100), LV_VER_RES - status_bar_height);
