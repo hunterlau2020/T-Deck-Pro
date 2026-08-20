@@ -187,6 +187,25 @@
 - **待观察项**：① 下次 shutdown 后插 USB 是否直接进系统（卡死是否复现）；② 长按电源键 2-3s 能否唤醒；③ 复现卡死时保留串口日志定位初始化卡点
 - **待决策**：是否把 Shutdown 改为深度休眠（BOOT 键唤醒，同 Sleep 屏机制）——用户暂定"先观察再决定"
 
+## 7. 第三批评审修复（评审 `pda2-review-result-2026-08-07-20.md`，2026-08-21 处理）
+
+该评审 4 项发现：P1 CA 证书早已修复（见 §5.3），其余 3 项 P2 于本批关闭。
+
+### 7.1 CI 的 `PLATFORMIO_SRC_DIR` 被构建脚本覆盖 ✅
+
+- **差异**：`.github/workflows/platformio.yml` 每个矩阵项 `export PLATFORMIO_SRC_DIR=examples/xxx` 后裸跑 `pio run`，但 `script/set_srcdir.py` 无条件 `Replace(PROJECT_SRC_DIR=...)`，默认环境 `T-Deck-Pro` 一律被改指 `examples/test_GPS`——矩阵"全绿"但实际没编 factory 等被选项
+- **修复**：`3f654a5` — `set_srcdir.py` 优先尊重外部 `PLATFORMIO_SRC_DIR`（项目相对路径），未设置时才走 env→example 映射；本机已验证 `PLATFORMIO_SRC_DIR=examples/factory` 时 `T-Deck-Pro` 环境实际编译 `factory.ino.cpp.o`
+
+### 7.2 GPS 写侧未与快照锁同步 ✅
+
+- **差异**：`gps_get_snapshot()` 持 `s_gps_snapshot_mux` 读全部字段，但 `gps_task` 的 `displayInfo()` 在另一核**无锁写**同一批 `gps_*` 全局——双核下快照仍可能混合两次定位的读数，原子快照契约形同虚设
+- **修复**：`11b7ec3` — `displayInfo()` 先在局部变量里组装本次更新（Serial 打印全部走局部变量，锁内无慢操作），最后**一次临界区**发布全部 11 个字段；旧的 5 个 `gps_get_*()` 单字段 getter 也补上同一把锁；顺手补上从未被写入的 `gps_altitude`（此前永远是 0）
+
+### 7.3 `http_utils.h` 宣传的 "AI Cfg 信任自签开关" 不存在 ✅
+
+- **差异**：`http_utils.h` 注释指引自签/私有 CA 用户去 "AI Cfg screen 'Trust self-signed' toggle"，但该屏根本没有这个控件，也无人调 `http_set_tls_mode()`——自签端点永远走 CA 校验、必然失败
+- **修复**：`a06a1f9` — AI Config 标题栏右上新增 Trust 开关（`lv_switch`，触摸/音量键 `\v` 均可切换）；`openai_api` 新增 `openai_tls_insecure()/openai_tls_apply()/openai_tls_set()`，存 NVS `ai`/`tls_insecure`（独立单键，**不进**双槽——它是设备级传输设置，不应跟随 Test 门控的 Save 流程）；`factory.ino` setup() 末尾 `openai_tls_apply()` 使开机即生效；NVS 写失败时开关回滚到持久值并弹错误框
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：
