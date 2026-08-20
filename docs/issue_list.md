@@ -213,6 +213,31 @@
 - **差异**：`ui_deckpro.cpp` 的 `page_num = MENU_BTN_NUM / 9` 算的是**页数**，但手势门控 `if(page_curr < page_num)` 把它当**最大下标**用——18 项时 page_num=2，第 2 页再左滑 `page_curr` 进入不存在的页 2：分支只处理 `==0/==1`，画面停在原处，且下一次右滑先被"空滑"用于把状态收回下标 1
 - **修复**：`de78338` — 改为 `(MENU_BTN_NUM - 1) / 9`（最大下标语义），18 项 → 下标 0..1，幽灵页不可达；`MENU_BTN_NUM <= 9` 单页早退不变。Setting/Test/A7682/PCM 页同款 `n/9` 写法未动（各自条目数未踩中 9 的整倍数），penpal 菜单第 3 页批次再统一换共享 ceil helper
 
+## 9. 第四批评审发现（GPT 跟进评审 `pda2-review-result-2026-08-07-21-gpt.md`，2026-08-21 到达，⬜ 待修）
+
+### 9.1 Weather 部分刷新被缓存为成功 ⬜
+
+- **差异**：`ui_weather.cpp:428` 只看 `data_valid`——current 请求失败但旧缓存保持
+  `data_valid=true`、或 current 成功而 forecast 失败时，仍推进 `last_fetch_time`
+  并 `save_cache()` 把新旧混合状态存盘 → 界面报成功、1 小时内不再重试
+- **修法（评审建议）**：两个请求结果分开跟踪；只在**完整刷新**成功后推进
+  新鲜度时间戳；部分刷新后允许更早重试
+
+### 9.2 CI 路径过滤不含 `script/**` ⬜
+
+- **差异**：`script/set_srcdir.py` 决定矩阵实际编译哪个示例（第三批 7.1 刚修过它的
+  优先级 bug），但 `.github/workflows/platformio.yml:7-10` 的 `on.push.paths` 只有
+  `examples/**`、workflow 自身、`platformio.ini`——单独改 set_srcdir.py 会**完全
+  跳过 CI**，上次那类"矩阵全绿但编错源目录"的问题可再次静默发生
+- **修法**：paths 加 `script/**`（或至少 `script/set_srcdir.py`）
+
+### 9.3 `factory.ino` 的 TLS 初始化声明与头文件不一致 ⬜
+
+- **差异**：`factory.ino:757` 局部声明 `extern bool openai_tls_apply(void);`，而
+  `openai_api.h:112` 实为 `void openai_tls_apply(void);`——跨翻译单元声明不兼容
+  （`950fcfe` 引入的笔误；当前调用丢弃返回值通常能链接，但属 UB 邻域）
+- **修法**：include `openai_api.h` 或改局部声明为 `extern void ...`
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：

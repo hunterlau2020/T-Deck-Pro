@@ -5,8 +5,8 @@
 
 ## 阶段 0（当前）：pda2 预研
 
-> 状态（2026-08-19）：WiFi 配置屏、AI 对话/配置屏已在 pda2 跑通并经 **31 轮评审**迭代
-> （`docs/reviews/`，最新申请 `wifi-config-keyboard-review-request-a924c4e.md`）。
+> 状态（2026-08-21）：WiFi 配置屏、AI 对话/配置屏已在 pda2 跑通并经 **31+ 轮评审**迭代
+> （`docs/reviews/`；待结果申请：`a924c4e`、`6d26699..1473ef9`、`de78338`）。
 > 2026-08-19 用户决策：不新开 allinone，pda2 即最终整合固件（设计稿归档为参考）。
 
 ### 阻塞项（合并前置条件）
@@ -18,6 +18,16 @@
       New 确认 ✅、发送交互 ✅、WiFi Test 离页重进 ✅、Weather 三页/`r` 刷新 ✅、
       provider 下拉 ✅ 已过；剩余 3 项：Save 后 key 恢复（#6）、失败重试路径（关热点，14）、
       长回答 `(truncated)`（15）。
+
+### 第四批评审（GPT 跟进评审，2026-08-21 到达，待修——**2026-08-22 批次**）
+
+- [ ] **Weather 部分刷新误存成功**（issue_list §9.1）：current/forecast 结果分开跟踪，
+      仅完整刷新推进 `last_fetch_time`，部分刷新允许更早重试（`ui_weather.cpp:428`）。
+- [ ] **CI paths 补 `script/**`**（issue_list §9.2）：单独改 `set_srcdir.py` 目前会
+      跳过 CI（`.github/workflows/platformio.yml:7-10`）。
+- [ ] **factory.ino TLS extern 声明改 `void`**（issue_list §9.3，`950fcfe` 笔误）：
+      或直接 include `openai_api.h`。
+- 修完按惯例：编译烧录 → 拆模块 commit → 评审申请（weather / CI / TLS 三模块）。
 
 ### 预研收尾（评审跟踪项）
 
@@ -45,8 +55,24 @@
 
 - [x] 删除 `AI_KEY_DEFAULT` 真实 Key 字符串（`0e78025`：默认改 `""`）。
 - [x] 移除 `[env:pda2]` 的 `-DAI_KEY_DEFAULT_COMPILED`（`0e78025`）。
-- [ ] OpenRouter 后台轮换 Key。
-- [ ] `git filter-repo` 清理历史 + 仓库通告。
+- [x] OpenRouter 后台轮换 Key（2026-08-21：旧 key 作废，新 key 只存 `/env.cfg`）。
+- [x] `git filter-repo` 清理历史 + 仓库通告（2026-08-21：清洗 + force-push + 远程
+      blob 验证干净，SECURITY.md 记录；`config_keys.h` 同日清空为模板）。
+
+## 笔友（PenPal）App（进行中，2026-08-21 起）
+
+- [x] **设计文档 v1**（`docs/penpal-design.md`，API schema 对本地测试服务器实测）。
+- [x] **两轮设计评审**：Codex 首轮（C 部分接受）+ Kimi k3 二轮（C 部分接受，
+      `8019da8` 归档，含首轮 3 处失实引用勘误）。
+- [x] **设计 v2 修订**（`97e5d2f`）：k3 三前置（页数公式最大下标语义 / LLM 超时
+      180s / `s_pp_busy_gen`）+ 同批 8 项全部落实。
+- [ ] **设计 v2 复审**（Kimi/Codex 再走一轮；通过后进入实现）。
+- [ ] **实现 commit 1**：`penpal: API client`（penpal_api + 配置链 + env.cfg.example）。
+- [ ] **实现 commit 2**：`penpal: screen UI`（ui_penpal×3 + poll 挂接）。
+- [ ] **实现 commit 3**：`penpal: menu icon + third menu page`（注意 §6 的 4 处配套，
+      幽灵页存量已由 `de78338` 修复）。
+- [ ] **实现 commit 4**：docs + 评审申请（含单队列偏差与 waitbox Close=取消首例标注）。
+- 前置环境（用户侧）：测试服务器可达 + Windows 防火墙放行 8000 入站。
 
 ## 阶段 1：~~实现 `examples/allinone`~~（2026-08-19 用户决策：不再新开 allinone）
 

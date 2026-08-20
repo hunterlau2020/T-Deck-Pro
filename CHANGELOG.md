@@ -3,6 +3,32 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-08-21
+
+- **第三批评评修复**（评审 `pda2-review-result-2026-08-07-20.md` 遗留 3 P2，全部关闭）：
+  `6d26699` CI 尊重外部 `PLATFORMIO_SRC_DIR`（set_srcdir.py 不再覆盖矩阵选择）；
+  `52f709e` GPS 写侧临界区（displayInfo 一次锁发布 11 字段 + getter 补锁）；
+  `950fcfe` AI Config 补 Trust 自签 TLS 开关（NVS `ai`/`tls_insecure` 单键 +
+  `\v` 键切换 + 开机 `openai_tls_apply()`）；台账 issue_list §7。申请
+  `6d26699..1473ef9` 已递交
+- **安全收尾（SECURITY.md checklist 全勾）**：`git filter-repo` 历史清洗
+  （3 条替换规则，全对象库 blob 扫描 0 命中）→ `HD-V2-250915` force-push 且
+  远程 blob 验证干净；OpenRouter key 作废旧 key、新 key 只存设备 `/env.cfg` +
+  `data/env.cfg`（均 gitignored）；`config_keys.h` 清空为模板（OWM key/深圳坐标
+  同日迁入 env.cfg）。旧→新 commit 映射：`.git/filter-repo/commit-map`
+- **菜单幽灵页修复**（`de78338`，issue_list §8.1）：`page_num` 由页数改最大下标
+  语义 `(MENU_BTN_NUM-1)/9`——18 项时第 2 页再左滑不再进入不存在的页 2
+  （k3 设计评审 §1.1 顺带揭出的存量 bug）；申请已递交
+- **笔友 App 设计两轮评审 → v2**：Codex 首轮（C 部分接受，已归档）+ Kimi k3
+  二轮独立复核（C 部分接受，`8019da8` 归档，含对首轮 3 处失实引用的勘误）；
+  v2 修订 `97e5d2f` 落实 3 条前置（菜单页数公式最大下标语义 / LLM 超时 180s /
+  `s_pp_busy_gen`）+ 同批 8 项（结果 type 字段、env.cfg 容量、数据模型三处等）。
+  **待复审**，通过后按 §9 预案实现
+- **GPT 跟进评审到达**（`b4082ff`，`pda2-review-result-2026-08-07-21-gpt.md`）：
+  3 项 P2 **待修（2026-08-22 批次）**——weather 部分刷新误存成功（issue_list §9.1）、
+  CI paths 漏 `script/**`（§9.2）、factory.ino TLS extern 声明不一致（§9.3）；
+  CA bundle 6 根 + NVS 双槽 11/11 复核通过
+
 ## 2026-08-19
 
 - **收尾批次 1**（`764e7bf`/`6ce2b4b`/`980b6df`，第 31 轮 A 接受）：
