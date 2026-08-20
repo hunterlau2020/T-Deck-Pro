@@ -1,6 +1,8 @@
 # 笔友（PenPal）App 设计文档
 
-> 状态：**v1 草案，待设计评审**（2026-08-21）。评审通过后按 §9 commit 拆分预案实施。
+> 状态：**v2 修订稿，待复审**（2026-08-21）。v1 经两轮评审
+> （`penpal-design-review-result.md`、`penpal-design-review-result-k3.md`）；
+> 本版落实 k3 的 3 条前置条件与建议同批项（见变更历史）。复审通过后按 §9 拆分预案实施。
 > 参考实现接口：`scripts/remote_api_demo.py`；API schema 于 2026-08-21 对本地测试服务器
 > `http://127.0.0.1:8000` 实测确认（curl GET 探测，见 §2）。
 
@@ -22,7 +24,9 @@
 
 认证：所有请求带 `X-API-Key: <key>` 头。基础路径 `<base>/api/v1`。
 LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可达分钟级**
-（demo 脚本 timeout 180s）→ 客户端这三类用 **120s** 超时，其余 CRUD 用 **20s**。
+（demo 脚本实测 `timeout=180`，即服务端耗时的上界证据，`remote_api_demo.py:47`）
+→ 客户端这三类用 **180s** 超时（与服务端上界对齐：waitbox Close 取消已兜底体验，
+超时宁可偏长——若按 120s 设限，被截断的恰是最慢、往往也最长的信，k3 §1.2），其余 CRUD 用 **20s**。
 
 | # | 端点 | 方法 | 用途 |
 |---|---|---|---|
@@ -35,6 +39,7 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
 | ⑦ | `/emails`（subject 带 `Re: ` 前缀） | POST | 回信 |
 | ⑧ | `/emails/{id}/tips` | POST | 回信建议（基于最近一封收到的信） |
 | ⑨ | `/emails/mailbox` | GET | 信箱线程概览（首页列表） |
+| ⑩ | `/users/me/profile` | GET | 本人资料（name/age_band/level/city/interests，demo `:51` 有演示）。**v1 暂不接入**：PROFILE 页按 §4.6 由 ①+⑨ 合成的是**笔友**资料，此端点是**本人**资料；留作后续廉价增量（k3 §1.8/T1） |
 
 ### 2.1 实测响应 schema（2026-08-21）
 
@@ -97,7 +102,8 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
 ### 3.1 单屏多页（不用 scr_mgr push/pop）
 
 一个 `SCREEN_PENPAL_ID`，内部 7 个页面用 `LV_OBJ_FLAG_HIDDEN` 切换
-（weather 三页模式的扩展，符合 README "Use pagination, not scrolling"）：
+（weather 三页模式的扩展，符合 `examples/pda2/README.md:78` 的
+"Use pagination, not scrolling"）：
 
 | 页 | 内容 | 进入 |
 |---|---|---|
@@ -115,20 +121,30 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
 ### 3.2 异步模型（完全遵守 `docs/async_ipc_contract.md`）
 
 - 整个 app 共用：1 个结果队列 `s_pp_q`（深度 4）+ 1 个 `s_pp_busy`（仅 UI 线程读写）
-  + 1 个页面代次 `s_pp_gen`（entry/destroy/取消时 +1）。
+  + **busy 所属代次 `s_pp_busy_gen`**（契约规则 3）+ 1 个页面代次 `s_pp_gen`
+  （entry/destroy/取消时 +1）。**busy 释放规则：结果仅在 `res->gen ==
+  s_pp_busy_gen` 时才允许清 `s_pp_busy`**——迟到结果不得解锁新请求
+  （先例 `s_wifi_test_busy_gen`，`ui_deckpro.cpp:1479`，k3 §1.3）。
 - 每次请求 `xTaskCreate`（栈 1024×8、优先级 1，契约 §2.6）：任务持有**自有快照**
   （base/key/参数全部拷贝，`new` → 任务内 `delete`），JSON 解析也在任务线程完成，
   结果结构体 `new` 后 `xQueueSend` 移交 UI，UI 消费后 `delete`。
-- 结果首字段 `gen`；代次不匹配一律丢弃（迟到结果、离屏结果、取消后结果）。
+- 结果结构体：首字段 `gen`，**第二字段 `type`**（枚举
+  `PP_RES_PALS / MAILBOX / THREAD / SEND / TOPICS / FIX / POLISH / TIPS`）——
+  单队列复用 8 类请求，UI 消费端按 `type` 分派处理路径与 `delete`，缺它则 8 类
+  结果的释放/分发只能实现期临场发明（k3 §1.4）。
+- 页面代次不匹配（迟到结果、离屏结果、取消后结果）一律丢弃，且**不得**触碰
+  `s_pp_busy`；busy 释放只认 `s_pp_busy_gen`。
 - UI busy 期间拒绝新请求；队列创建失败 → 提示、不置 busy、不启动任务。
-- waitbox（chat 同款秒级倒计时，EPD 友好）：所有网络请求弹出；
-  **加 Close 按钮 = 取消**（gen++、busy=false、迟到结果丢弃）——correction/polish
-  可能耗时 120s，不能锁死输入。
-- 请求类型：`PALS / MAILBOX / THREAD / SEND / TOPICS / FIX / POLISH / TIPS`。
-  HOME 进入时合并触发 PALS+MAILBOX 两个任务（busy 检查放宽为"同类请求 busy"
-  才允许并发两条？**不**——契约 §2.7 以"UI busy 期间拒绝新请求"保证同一时刻
-  最多 1 个在飞结果。HOME 刷新改为**串行两段**：先 PALS，结果回来后再发 MAILBOX，
-  状态行提示两步进度。）
+- waitbox（`ui_ai_chat.cpp` 同款秒级倒计时，EPD 友好）：所有网络请求弹出；
+  **加 Close 按钮 = 取消**（`s_pp_gen++`、`busy=false`、任务不杀、迟到结果按
+  代次丢弃）——correction/polish 可能耗时 180s，不能锁死输入。**这是全仓首例
+  waitbox 可取消交互**（现有 chat waitbox 打开时吞噬全部输入），commit 4 评审
+  申请书将显式标注（k3 §1.9/T2）。
+- **偏差说明（单队列）**：契约先例为每任务一队列（`s_wifi_test_q`/`s_chat_q`…，
+  契约表格 `async_ipc_contract.md:13-18`）；penpal 8 类请求共用 `s_pp_q`——同屏同类生命周期、结果以
+  `type` 字段分派，属登记过的合理偏差（k3 §1.4）。
+- HOME 刷新为**串行两段**：先 PALS，结果回来后再发 MAILBOX，以满足契约 §2.7
+  "UI busy 期间拒绝新请求"保证的同一时刻最多 1 个在飞结果；状态行提示两步进度。
 
 ### 3.3 网络层：明文 HTTP 支持（不改 http_utils）
 
@@ -148,21 +164,32 @@ URL 前缀 https:// → WiFiClientSecure（按 http_get_tls_mode() 现行策略�
 
 ```
 NVS 命名空间 "penpal"（键 base / key）
-  → SPIFFS /env.cfg（PENPAL_BASE=... / PENPAL_KEY=...，env_secrets 解析，8 槽够用）
+  → SPIFFS /env.cfg（PENPAL_BASE=... / PENPAL_KEY=...，env_secrets 解析）
   → gitignored config_keys.h（PENPAL_BASE_DEFAULT_DEV / PENPAL_KEY_DEFAULT_DEV，
     本地开发填 PC 局域网 IP + hunter 测试 key）
   → 空默认（Cfg 页引导填写）
 ```
 
 - 设备端通过 **CFG 页**修改（两个 textarea + Save + 状态行）。
-- **偏差说明**：penpal 配置用单槽 NVS 写 + 错误提示，**不做** AI Config 的双槽原子
-  保存——该项是测试服务器地址/非敏感 key，写失败重存即可，无"半新半旧配置可见"
-  风险（base/key 无组合一致性要求）。评审申请中注明此偏差及理由。
+- **容量说明（k3 §1.5/T4）**：`env_secrets` 8 槽上限（`ENV_MAX_ENTRIES`，
+  `env_secrets.cpp:21`；第 9 条起**静默丢弃**，`:48`）+ 值上限 95 字符
+  （`val[96]`）。现有有意义键最多 7 个（`OPENROUTER_KEY`/`OWM_KEY`/
+  `WEATHER_COORDS` + 4 个 AI provider key），加 `PENPAL_BASE`/`PENPAL_KEY`
+  理论上限 9 > 8——provider 键与 penpal 键同配时 env.cfg 末条静默失效；NVS 优先
+  （Cfg 页 Save 即写 NVS，此后不依赖 env.cfg）故实际影响有限。Base URL textarea
+  限长 **≤95**（§4.7），与 env.cfg 值上限对齐（96 字符的 base 无法经 env.cfg
+  完整往返）。
+- **单槽 NVS**：penpal 配置用单槽写 + 错误提示，**不做** AI Config 的双槽原子
+  保存——测试服务器地址/非敏感 key，写失败重存即可，无"半新半旧配置可见"风险
+  （base/key 无组合一致性要求）。单槽早有先例：weather key/coords
+  （`ui_weather.cpp:294-295`）、per-provider AI key（`ui_ai_cfg.cpp:316-321`）
+  均单槽 `putString`，SECURITY.md 也仅 `ai` 标注双槽——故此为**遵循既有先例**，
+  非待评审偏差（k3 §1.7 勘误了前次评审的"weather 双槽"误读）。
 
 ## 4. 页面交互设计
 
 通用：`lv_font_montserrat_14`、黑白配色、顶栏 y=0..32（Back 按钮 + 标题 + 页内
-功能按钮，尺寸沿用 chat 的 54×30）。**键盘驱动导航 + 触摸可用**（现有各屏同级别：
+功能按钮，尺寸沿用 `ui_ai_chat.cpp` 顶栏按钮的 54×30）。**键盘驱动导航 + 触摸可用**（现有各屏同级别：
 按钮可触摸点击，键盘负责文本/翻页/返回）。
 
 ### 4.1 HOME（首页）
@@ -175,7 +202,7 @@ NVS 命名空间 "penpal"（键 base / key）
 │ └─────┘ └─────┘ └─────┘              │
 │ status line（同步状态 / 错误）        │
 │ ┌──────────────────────────────────┐ │
-│ │ Mei          08-20 15:10  [1new] │ │  行1：counterpart + last_at + unread
+│ │ Mei          08-20 15:10  [1new] │ │  行1：last_sender（回落 counterpart）+ last_at + unread
 │ │ Learning English: my story  pend  │ │  行2：subject + state
 │ ├──────────────────────────────────┤ │  5 行 × 34px；点行→THREAD
 │ │ terry        08-20 14:33         │ │
@@ -186,12 +213,17 @@ NVS 命名空间 "penpal"（键 base / key）
 └──────────────────────────────────────┘
 ```
 
-- 数据：mailbox 上限 **24 行**，每页 5 行；`last_at` 显示 `MM-DD HH:MM`
+- 数据：mailbox 上限 **24 行**，每页 5 行；行 1 名称显示 `last_sender`
+  （最后一封的发件人，= 我时显示自己名字），空/缺失回落 `counterpart`
+  （§5 结构体两字段都有）；`last_at` 显示 `MM-DD HH:MM`
   （ISO 串截取，不转时区——服务端时间即本地时间）；
 - 状态列：`unread>0` 显示 `[Nnew]`；`state` 缩写 `pend/repl/sent`；
 - `pen_pal_id=null` 的行照常显示（THREAD 内只读）；
 - 键盘：`+/-`（Sym/Alt 层）= 翻页，`\n` = Sync，`\b` = 返回菜单；
 - Sync = 串行 PALS→MAILBOX 刷新（NPC 回信后手动拉取）。
+- **base/key 未配置**（解析链全空）时：HOME 正常进入，icon 行/列表区显示空、
+  状态行 `configure server in Cfg` 引导；Sync 同文案直接报错，不发网络请求
+  （k3 §1.11.4）。
 
 ### 4.2 COMPOSE（写信，new / reply 两模式）
 
@@ -213,10 +245,10 @@ NVS 命名空间 "penpal"（键 base / key）
 - **new 模式**：收件人 = 点 icon 的笔友；topic 可选；title 手填或由 TOPICS 带入。
 - **reply 模式**：subject 预填 `Re: <线程 subject>`（服务端聚合已实测），无 Topic
   行，多 **Tips** 按钮（§4.2.1）。
-- 发送门槛：title 非空、**body ≥50 字节**（英语信件按字符计；不足时状态行
-  `Need 50+ chars (now N)`，不弹网络请求）；
+- 发送门槛：title 非空、**body ≥50 字符**（英语信件按**字符**计数，与状态行
+  `Need 50+ chars (now N)` 的 N 单位一致；k3 §1.11.3）；不足时不弹网络请求；
 - 键盘：打字进当前焦点框；`\t`（Alt+Enter）切换 Title/Body 焦点；Body 内 `\n` =
-  换行；**发送只走 Send 按钮**（chat 屏既定语义）；`\b` 在空框时返回 HOME；
+  换行；**发送只走 Send 按钮**（`ui_ai_chat.cpp` 既定语义）；`\b` 在空框时返回 HOME；
 - 发送成功：清空 COMPOSE、回 HOME、自动触发 Sync（查看 NPC 回信需再等 ~2 分钟，
   用户手动 Sync）。
 
@@ -244,7 +276,7 @@ NVS 命名空间 "penpal"（键 base / key）
   `[Use] [Cancel]`；
   - Use → 返回 COMPOSE，`topic_id` 记录、Title 自动填入 topic title（可再编辑）；
   - Cancel / `\b` → 返回 COMPOSE，保持原状（**不选主题也允许发送**）；
-- 键盘：`+/-` 翻页，`\b` 返回；msgbox 打开时 `\n`=Use、其他键=Cancel（chat 确认框
+- 键盘：`+/-` 翻页，`\b` 返回；msgbox 打开时 `\n`=Use、其他键=Cancel（`ui_ai_chat.cpp` 确认框
   同款键盘语义）。
 
 ### 4.4 THREAD（对话界面，Gmail 式主题聚合）
@@ -256,7 +288,7 @@ NVS 命名空间 "penpal"（键 base / key）
 │ ┌──────────────────────────────────┐ │
 │ │ Dear Hunter,                     │ │  信正文（滚动容器）
 │ │ Thank you for telling me about   │ │  触摸滚动 redraw-on-release +
-│ │ Momo—what a wonderful name...    │ │  +/- 键滚动（chat 同款）
+│ │ Momo—what a wonderful name...    │ │  +/- 键滚动（`ui_ai_chat.cpp` 同款）
 │ │                                  │ │
 │ └──────────────────────────────────┘ │
 │ [Fix] [Polish]        （我的信才有） │  底部条件按钮
@@ -267,11 +299,12 @@ NVS 命名空间 "penpal"（键 base / key）
 - 数据：线程信件**时间逆序**分页，**每页 1 封**，index 0 = 最新（首页）；
 - `|◀ Start` = 回到 index 0；`< Prev` = 更旧一封；`Next ▶` = 更新一封；
   到边界时按钮置灰；
-- `pen_pal_id <= 0`（null 行）：信头下提示 `pal removed - read only`，隐藏 Reply；
-- **我的信**（`sender_user_id != null`）→ `Fix` / `Polish` → FB 页（异步 120s）；
+- `pal_id == 0`（null→0 哨兵，§5；笔友已删线程残留行）：信头下提示
+  `pal removed - read only`，隐藏 Reply；
+- **我的信**（`sender_user_id != null`）→ `Fix` / `Polish` → FB 页（异步 180s）；
 - **第 1 页**（index 0）→ `Reply` → COMPOSE(reply)；
 - 键盘：`+/-` 滚动正文，`\b` 返回 HOME；
-- 单信正文 >4KB 截断加 `(truncated)`（UTF-8 边界，chat 同款）。
+- 单信正文 >4KB 截断加 `(truncated)`（UTF-8 边界，`ui_ai_chat.cpp` 同款）。
 
 ### 4.5 FB（纠错/润色结果）
 
@@ -303,14 +336,14 @@ NVS 命名空间 "penpal"（键 base / key）
 ```
 ┌──────────────────────────────────────┐
 │ [Back] PenPal Cfg                    │
-│ Base URL: [http://192.168.x.x:8000 ] │  textarea（≤96 字符）
+│ Base URL: [http://192.168.x.x:8000 ] │  textarea（≤95 字符，§3.4 对齐 env.cfg 值上限）
 │ API key:  [89rg35eua2            ]   │  textarea（≤16 字符）
 │ [Save]     status line（保存结果/    │
 │            当前解析链来源）           │
 └──────────────────────────────────────┘
 ```
 
-- Save = NVS `penpal` 写 + 状态行报错（单槽，§3.4 偏差说明）；
+- Save = NVS `penpal` 写 + 状态行报错（单槽，§3.4）；
 - 打开时 textarea 预填当前生效值；键盘与 COMPOSE 一致（`\t` 切换焦点）。
 
 ## 5. 数据模型与内存预算
@@ -319,13 +352,18 @@ NVS 命名空间 "penpal"（键 base / key）
 typedef struct { int id; bool is_npc; char name[24]; char status[12]; } pp_pal_t;        // ≤3+2
 typedef struct { int id; char title[64]; char tag[12];
                  char background[96]; char guiding[192]; } pp_topic_t;                   // ≤16
-typedef struct { int pal_id; char subject[64]; char from[24]; char state[12];
-                 int unread; int count; char last_at[20]; } pp_thread_row_t;             // ≤24
+typedef struct { int pal_id; char subject[64]; char from[24]; char last_sender[24];
+                 char state[12]; int unread; int count; char last_at[20]; } pp_thread_row_t;  // ≤24
 typedef struct { int id; bool mine; char sender[24];
                  char time[20]; string content; } pp_letter_t;  // 线程总预算 16KB、单信 4KB
 ```
 
-- 静态数组 + `std::string` 正文（chat 同款堆分配）；估算峰值 <32KB，PSRAM/堆充足；
+- **null 哨兵**：mailbox 的 `pen_pal_id == null` 解析为 `pal_id = 0`（服务端 id
+  从 1 起，0 不做合法 id 使用）；§4.4 以 `pal_id == 0` 判只读线程（k3 §1.6）。
+- **线程预算与逐出**：总预算 16KB、单信正文 4KB 截断加 `(truncated)`（UTF-8
+  边界）；累计超 16KB 时**丢弃最旧信**（emails 升序数组前部），THREAD 顶栏计数
+  相应减少，首次逐出状态行提示 `oldest dropped (size limit)`（k3 §1.6/T3）。
+- 静态数组 + `std::string` 正文（`ui_ai_chat.cpp` 同款堆分配）；估算峰值 <32KB，PSRAM/堆充足；
 - 无本地持久化：mailbox/线程状态以服务端为准（薄客户端），断电无损失语义；
   COMPOSE 草稿 v1 **不落盘**（RAM 内跨页保留；退出屏即丢——评审如要求再按
   chat.draft 模式补 `/penpal.draft`）。
@@ -339,14 +377,14 @@ typedef struct { int id; bool mine; char sender[24];
 | `examples/pda2/ui_penpal.cpp` | 屏生命周期 + HOME + CFG + 异步框架（队列/busy/代次/waitbox） | ~620 |
 | `examples/pda2/ui_penpal_write.cpp` | COMPOSE + TOPICS | ~450 |
 | `examples/pda2/ui_penpal_read.cpp` | THREAD + FB + PROFILE | ~450 |
-| `examples/pda2/src/img_penpal.c` + `scripts/gen_img_penpal.py` | 信封图标 50×50（2 字节/像素，`LV_IMG_CF_TRUE_COLOR_ALPHA`），脚本可复再生 | ~60 |
+| `examples/pda2/src/img_penpal.c` + `scripts/gen_img_penpal.py` | 信封图标 50×50（`LV_IMG_CF_TRUE_COLOR_ALPHA`；2 字节/像素**仅因本构建 `LV_COLOR_DEPTH=1`**，depth 16 时为 3——k3 §2 核实，勿照抄到彩色构建）。`gen_img_penpal.py` 为**新增**脚本：`scripts/` 与 `examples/pda2/scripts/` 均无 `gen_img_*.py` 先例（k3 §1.11.2），非复用既有约定 | ~60 |
 
 集成点（改动现有文件）：
 
 | 文件 | 改动 |
 |---|---|
 | `ui_deckpro.h` | enum 追加 `SCREEN_PENPAL_ID` |
-| `ui_deckpro.cpp` | ① menu_btn_list 追加第 19 项 `{SCREEN_PENPAL_ID, &img_penpal, "PenPal", 23, 13}`；② **菜单第 3 页**：新增 `menu_screen3`（复制 screen2 样式、默认 HIDDEN）、`page_num = MENU_BTN_NUM/9` 改为向上取整 `(MENU_BTN_NUM+8)/9`、`menu_get_gesture_dir` 加 `page_curr==2` 分支、ui_Panel4 页点 2→3；③ `scr_mgr_register(SCREEN_PENPAL_ID, &screen_penpal)` |
+| `ui_deckpro.cpp` | ① menu_btn_list 追加第 19 项 `{SCREEN_PENPAL_ID, &img_penpal, "PenPal", 23, 13}`；② **菜单第 3 页**（4 处配套，缺一不可，k3 §1.1）：新增 `menu_screen3`（复制 screen2 样式、默认 HIDDEN）；页数公式**保持最大下标语义** `page_num = (MENU_BTN_NUM-1)/9`（18 项存量的 off-by-one 已由 `de78338` 修复；**不可**用 `(MENU_BTN_NUM+8)/9`——门控 `page_curr < page_num` 会放行到不存在的第 4 页）；**按钮创建循环** `if(i < 9) screen1 else screen2`（:453-458）改为按 `i/9` 三路分派到 screen1/2/3；`menu_get_gesture_dir` 加 `page_curr==2` 分支 + `ui_Panel4` 页点 2→3（现有页点按 child 下标寻址 :306-307，第 3 点需新建定位）；③ `scr_mgr_register(SCREEN_PENPAL_ID, &screen_penpal)` |
 | `factory.ino` | `loop()` 追加 `penpal_keyboard_poll()` |
 | `env.cfg.example` | 追加 `#PENPAL_BASE=` / `#PENPAL_KEY=` 注释行 |
 | `src/assets.h` | `LV_IMG_DECLARE(img_penpal)` |
@@ -367,6 +405,8 @@ typedef struct { int id; bool mine; char sender[24];
    - THREAD：3 个导航按钮、Fix/Polish（我的信）、第 1 页 Reply
    - 发信后 ~2 分钟 Sync → NPC 回信出现 → 开线程 → Reply + Tips
    - `pen_pal_id=null` 行（Sophie）只读
+   - 菜单第 3 页：第 19 项图标显示；左右滑 3 页往返；第 3 页继续左滑**不越界**
+     （k3 §1.1 回归——18 项存量幽灵页已由 `de78338` 修复，19 项后同款验证）
    - 断网（关热点）下各操作报错不卡死；waitbox Close 可取消
 5. **互通**（可选）：Cfg 改 terry key，重复关键路径。
 
@@ -376,10 +416,10 @@ typedef struct { int id; bool mine; char sender[24];
 |---|---|---|
 | R1 | 后端字段后续变化（非合同化 API） | 解析全部防御式（字段缺失→默认值+串口日志），显示层降级不崩溃 |
 | R2 | 无 profile 端点 | PROFILE 页合成（§4.6），后端补端点后升级 |
-| R3 | 配置单槽 NVS（偏离 AI Config 双槽先例） | 设计决策已记录（§3.4），评审重点确认项 |
+| R3 | 配置单槽 NVS | **遵循既有单槽先例**（weather/provider key，k3 §1.7 核实 SECURITY.md 仅 `ai` 标注双槽）——非待评审偏差（§3.4） |
 | R4 | montserrat_14 无 CJK 字形 | 信件/界面按英语设计（KET/IELTS 场景），terry 若写中文显示为方块——与其他屏现状一致 |
 | R5 | mailbox 服务端无界增长 | 客户端 24 行上限 + 分页，超出提示 `more on web` |
-| R6 | LLM 端点 120s 阻塞体验 | waitbox 秒级倒计时 + Close 取消（代次丢弃） |
+| R6 | LLM 端点 180s 阻塞体验 | waitbox 秒级倒计时 + Close 取消（代次丢弃，`s_pp_busy_gen` 释放规则见 §3.2） |
 | R7 | COMPOSE 草稿不落盘 | v1 取舍（§5）；真机试用后决定是否补 `/penpal.draft` |
 | R8 | 明文 http 传输 key/信件 | 测试环境接受；生产部署换 https（客户端已支持，TLS 策略复用现有开关） |
 
@@ -389,9 +429,24 @@ typedef struct { int id; bool mine; char sender[24];
 2. `penpal: screen UI - mailbox/compose/thread pages` —— ui_penpal×3 + poll 挂接
 3. `penpal: menu icon + third menu page` —— img_penpal + ui_deckpro 菜单
 4. `docs: penpal implementation notes + review request` —— README/TODO/CHANGELOG +
-   `docs/reviews/wifi-config-keyboard-review-request-<首>..<末>.md`（含 R3 偏差说明
-   与 §7 回归清单）
+   `docs/reviews/wifi-config-keyboard-review-request-<首>..<末>.md`（含 §3.2 单队列
+   偏差与 waitbox Close=取消首例说明、§7 回归清单）
 
 ## 变更历史
 
 - 2026-08-21 v1 初稿（待评审）。
+- 2026-08-21 v2 修订（落实 k3 评审 `penpal-design-review-result-k3.md` 的
+  **C 部分接受**结论）：
+  - **前置 1（§1.1）**：§6 菜单页数公式改最大下标语义 `(MENU_BTN_NUM-1)/9`，
+    补登按钮创建循环 `i/9` 三路分派与第 3 页点两处连带改动；18 项存量 off-by-one
+    同日由 `de78338` 独立修复（评审申请 `de78338`）。
+  - **前置 2（§1.2）**：LLM 端点客户端超时 120s → **180s**（§2/§3.2/§4.4/R6）。
+  - **前置 3（§1.3）**：§3.2 增 `s_pp_busy_gen` 与 busy 释放规则。
+  - 同批：§1.4 结果 `type` 字段 + 单队列偏差登记（§3.2）；§1.5 env.cfg 8 槽容量
+    说明 + base 限长 96→95（§3.4/§4.7）；§1.6 数据模型三处（`last_sender[24]`、
+    null→0 哨兵、16KB 逐出规则，§5）；§1.8 ⑩ profile 端点登记暂不接入（§2）；
+    §1.9 waitbox Close=取消全仓首例标注（§3.2，commit 4 申请书复标）；§1.10
+    §3.2 草稿文字定稿为直陈句；§1.11 五处措辞（README 归因 `examples/pda2/
+    README.md:78`、图标脚本"新增"而非"复用"、≥50 单位统一为字符、HOME 未配置
+    行为、chat 指代落实为 `ui_ai_chat.cpp`）；R3 由"待评审偏差"降级为"遵循
+    单槽先例"（§1.7 勘误）。跟踪项 T1-T5 全部落入正文，T6 已由 k3 文件本身登记。
