@@ -114,6 +114,39 @@ bool openai_save_config(const char *base, const char *model, const char *key,
     return true;
 }
 
+/* ---- TLS trust toggle (review 2026-08-07-20, P2 "TLS bypass control") ----
+ * One independent NVS key "tls_insecure" (uchar) in namespace "ai" —
+ * deliberately NOT part of the dual-slot base/model/key config: it is a
+ * device-level transport setting shared by every http_utils consumer, and
+ * folding it into the slots would make it ride along with the Test-gated
+ * Save flow. Applies globally via http_set_tls_mode(). */
+bool openai_tls_insecure(void)
+{
+    Preferences p;
+    p.begin("ai", true);
+    const bool insecure = p.getUChar("tls_insecure", 0) != 0;
+    p.end();
+    return insecure;
+}
+
+void openai_tls_apply(void)
+{
+    http_set_tls_mode(openai_tls_insecure() ? HTTP_TLS_INSECURE
+                                            : HTTP_TLS_CA_VERIFY);
+}
+
+bool openai_tls_set(bool insecure)
+{
+    Preferences p;
+    p.begin("ai", false);
+    const bool ok = p.putUChar("tls_insecure", insecure ? 1 : 0) > 0;
+    p.end();
+    if (ok) {
+        http_set_tls_mode(insecure ? HTTP_TLS_INSECURE : HTTP_TLS_CA_VERIFY);
+    }
+    return ok;
+}
+
 static cJSON *ai_msg_add(cJSON *msgs, const char *role, const char *content)
 {
     cJSON *m = cJSON_CreateObject();

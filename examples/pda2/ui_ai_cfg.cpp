@@ -23,7 +23,8 @@
  * Keypad map:
  *   \n : commit the active field -> next field; on the last field -> save
  *   \b : delete char; empty -> previous field; on first -> exit
- *   '\t' (Alt+Enter) / '\v' (volume): ignored
+ *   '\t' (Alt+Enter): cycle the provider dropdown
+ *   '\v' (volume): toggle the "Trust" self-signed TLS switch
  */
 #include "Arduino.h"
 #include "ui_deckpro.h"
@@ -51,6 +52,7 @@ static lv_obj_t *ai_key_lab = NULL;
 static lv_obj_t *ai_key_ta = NULL;
 static lv_obj_t *ai_status_lab = NULL;
 static lv_obj_t *ai_provider_dd = NULL;
+static lv_obj_t *ai_tls_sw = NULL;         /* "Trust" self-signed TLS switch */
 static bool ai_cfg_kbd_active = false;
 static int  ai_cfg_field = 0;            /* 0=base 1=model 2=key */
 static char ai_base[160] = {0};
@@ -333,6 +335,32 @@ static void ai_cfg_save(void)
     }
 }
 
+/* "Trust self-signed" switch (review 2026-08-07-20, P2 TLS bypass control):
+ * persists + applies the device-level TLS mode used by EVERY http_utils
+ * request, not just AI ones. Fired by touch AND by the volume key (which
+ * flips LV_STATE_CHECKED then sends VALUE_CHANGED manually - programmatic
+ * state changes alone don't raise the event). */
+static void ai_tls_sw_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    const bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    if (openai_tls_set(on)) {
+        lv_label_set_text(ai_status_lab,
+                          on ? "TLS: trust self-signed (ON)"
+                             : "TLS: CA verify (OFF)");
+        Serial.printf("[AICfg] tls insecure=%d\n", on ? 1 : 0);
+    } else {
+        /* NVS failure: revert the control to the persisted state */
+        if (openai_tls_insecure()) {
+            lv_obj_add_state(sw, LV_STATE_CHECKED);
+        } else {
+            lv_obj_clear_state(sw, LV_STATE_CHECKED);
+        }
+        ai_msgbox_show("Save failed:\nNVS error");
+        Serial.println("[AICfg] tls save failed");
+    }
+}
+
 /* Touch focus keeps the keypad editing the box the user sees. */
 static void ai_ta_focus_cb(lv_event_t *e)
 {
@@ -521,7 +549,17 @@ void ai_cfg_keyboard_poll(void)
         ai_provider_next();                     /* Alt+Enter: cycle the provider */
         continue;
     }
-    if (c == '\v') continue;                    /* volume key */
+    if (c == '\v') {
+        /* volume key: flip the Trust switch. State changes alone don't raise
+         * VALUE_CHANGED, so send it manually - the callback persists+applies. */
+        if (lv_obj_has_state(ai_tls_sw, LV_STATE_CHECKED)) {
+            lv_obj_clear_state(ai_tls_sw, LV_STATE_CHECKED);
+        } else {
+            lv_obj_add_state(ai_tls_sw, LV_STATE_CHECKED);
+        }
+        lv_event_send(ai_tls_sw, LV_EVENT_VALUE_CHANGED, NULL);
+        continue;
+    }
 
     lv_obj_t *ta = ai_cfg_field_ta(ai_cfg_field);
 
@@ -563,6 +601,21 @@ static void ai_cfg_back_cb(lv_event_t *e)
 static void ai_cfg_create(lv_obj_t *parent)
 {
     scr_back_btn_create(parent, "AI Config", ai_cfg_back_cb);
+
+    /* Trust self-signed switch in the title bar (top-right): toggling takes
+     * effect immediately - no Save needed - because it is an independent
+     * NVS key, not part of the Test-gated base/model/key draft. */
+    lv_obj_t *tls_lab = lv_label_create(parent);
+    lv_label_set_text(tls_lab, "Trust");
+    lv_obj_set_style_text_font(tls_lab, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(tls_lab, LV_ALIGN_TOP_RIGHT, -50, 9);
+    ai_tls_sw = lv_switch_create(parent);
+    lv_obj_set_size(ai_tls_sw, 44, 24);
+    lv_obj_align(ai_tls_sw, LV_ALIGN_TOP_RIGHT, -2, 4);
+    if (openai_tls_insecure()) {
+        lv_obj_add_state(ai_tls_sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(ai_tls_sw, ai_tls_sw_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     lv_obj_t *cont = lv_obj_create(parent);
     lv_obj_set_size(cont, 232, 274);

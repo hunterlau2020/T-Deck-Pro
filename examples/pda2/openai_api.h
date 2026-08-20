@@ -100,3 +100,14 @@ void openai_stats_text(char *buf, int buf_len);
  *  @return true when the new slot was fully staged AND committed. */
 bool openai_save_config(const char *base, const char *model, const char *key,
                         const char **err = NULL);
+
+/** @brief TLS trust mode ("trust self-signed") persisted as ONE independent
+ *  NVS key "tls_insecure" in namespace "ai" — NOT part of the dual-slot
+ *  config: it is a device-level transport setting applied globally via
+ *  http_set_tls_mode() to every http_utils consumer.
+ *  openai_tls_apply() runs once in setup(); openai_tls_set() persists +
+ *  applies and returns false on NVS failure (caller should revert the UI
+ *  control to the persisted state). */
+bool openai_tls_insecure(void);
+void openai_tls_apply(void);
+bool openai_tls_set(bool insecure);
