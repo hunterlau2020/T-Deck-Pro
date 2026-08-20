@@ -19,18 +19,28 @@ for that key.
 
 ## Git history warning
 
-Older commits (before 2026-08-17) contain a real OpenRouter key string
-in `examples/pda2/openai_api.h`. It has been removed from HEAD and
-should be treated as COMPROMISED:
+Older commits (before 2026-08-17) contained a real OpenRouter key string
+in `examples/pda2/openai_api.h` (plus quotes in some review docs). It has
+been removed from HEAD and **treated as COMPROMISED**:
 
 - The key was revoked / must be rotated on OpenRouter before any use.
-- Before pushing to a PUBLIC remote, run `git filter-repo` (or
-  `git filter-branch`) to purge the string from history, then force
-  push; a plain push is also blocked by GitHub push protection.
+- **Local history purged 2026-08-21** via `git filter-repo --replace-text`
+  (rules: full-key literal, `sk-or-v1-<64hex>` regex, bare-hex literal →
+  `REDACTED-OPENROUTER-KEY`). Verified: every blob in the object database
+  scanned — 0 occurrences of the key fragment. Old→new commit map kept at
+  `.git/filter-repo/commit-map` (docs cite pre-rewrite hashes).
+- The GitHub remote (`origin/HD-V2-250915`, `origin/master`) was verified
+  to ALREADY be clean (all reachable blobs scanned, 0 hits) — it had been
+  rewritten from another machine before 2026-08-21. Local rewrite produced
+  different hashes, so pushing HD-V2-250915 requires `--force` (expected).
+- Full pre-rewrite backup (contains the key): keep offline, delete only
+  after the remote force-push is verified:
+  `E:\cpp_works\T-Deck-Pro-pre-filter-backup-2026-08-21.bundle`
 - `config_keys.h` and `/env.cfg` must never be added to git.
 
 ## Release checklist
 
 - [ ] No secrets in `git diff HEAD` (run `git grep` for key patterns)
-- [ ] History purged (filter-repo) if pushing publicly
+- [x] History purged (filter-repo, 2026-08-21)
 - [ ] OpenRouter / OpenWeatherMap keys rotated
+- [ ] Force-push rewritten `HD-V2-250915` after review rounds land

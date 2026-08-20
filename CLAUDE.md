@@ -16,7 +16,7 @@ These come from prior session memory and review rounds; treat them as hard rules
    - Existing review result files are **never overwritten** — superseded request files can be merged into a range request, but results stand.
 2. **Secrets chain** (no real key in tracked source since 2026-08-17):
    - Lookup order: NVS → SPIFFS `/env.cfg` (parsed by `examples/pda2/env_secrets.cpp`) → gitignored `config_keys.h` → empty default. `env.cfg.example` is tracked; the real `/env.cfg` never is.
-   - OLDER COMMITS still contain a real OpenRouter key string in `openai_api.h` history — treat it as compromised; `git filter-repo` before any public push (GitHub push protection also blocks plain pushes). See `SECURITY.md`.
+   - History **purged 2026-08-21** (`git filter-repo`; key → `REDACTED-OPENROUTER-KEY`, verified 0 hits across all objects — remote was already clean). The key stays compromised/revoked. Pre-rewrite commit ids cited in docs/review filenames are historical; old→new map at `.git/filter-repo/commit-map`. Pushing the rewritten `HD-V2-250915` needs `--force`. See `SECURITY.md`.
 3. **Documentation vs hardware discrepancies**: `docs/issue_list.md` is the **canonical fix log** (each entry: status, committish fixing it). When you spot a doc/assumption vs HD-V2 reality mismatch, add an entry there — don't argue from first principles. Many "this can't work" comments predate commits that already resolved the issue.
 
 ## Where to find things
