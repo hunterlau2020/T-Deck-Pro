@@ -90,9 +90,11 @@
       通道，改为 HOME 过滤 + R9 服务端需求。
 - [ ] **R9 服务端需求**（交服务端排期）：`GET /emails` 的 `pen_pal_id` 改
       可选——`thread_root_id` 单独给出时按 `X-API-Key` 用户授权读取。
-- [ ] **设计 v3.1 复审**（Kimi/Codex 再走一轮；通过后进入实现）。
+- [x] **设计 v3.1 复审**（2026-08-22 Codex 到达）：**A 全量接受**——P1 编辑锁 /
+      P2 null 行过滤+R9 均确认，"v3.1 可作为 PenPal 实现基线"。
+- [ ] **（可选）Kimi 对 v3.1 再走一轮**——Codex 已 A，是否加评由用户定。
 - [ ] **实现 commit 1**：`penpal: API client`（penpal_api + 配置链 + env.cfg.example；
-      含幂等键生成/复用/作废 + thread_root_id 锚点封装）。
+      含幂等键生成/复用/作废 + thread_root_id 锚点封装）。**设计基线已批准，可开工**。
 - [ ] **实现 commit 2**：`penpal: screen UI`（ui_penpal×3 + poll 挂接）。
 - [ ] **实现 commit 3**：`penpal: menu icon + third menu page`（注意 §6 的 4 处配套，
       幽灵页存量已由 `de78338` 修复）。
