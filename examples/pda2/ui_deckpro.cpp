@@ -4227,12 +4227,17 @@ static void indev_get_gesture_dir(lv_timer_t *t)
     lv_indev_t * touch_indev = lv_indev_get_next(NULL);
     lv_dir_t dir = lv_indev_get_gesture_dir(touch_indev);
 
-    if(dir == LV_DIR_RIGHT) { // right
-        ui_get_gesture_dir(LV_DIR_RIGHT);
-    } 
-    else if(dir == LV_DIR_LEFT) { // left
-        ui_get_gesture_dir(LV_DIR_LEFT);
+    /* LVGL latches gesture_dir from detection until the next press resets
+     * it to NONE (lv_indev.c press-start reset; gesture_sent makes the
+     * detection itself one-shot per press). A plain poll therefore re-fires
+     * every 30ms tick while the finger is still down - with the 3-page menu
+     * one swipe skipped a page (2 pages had masked it via the bounds clamp).
+     * Fire only on the NONE -> dir edge, once per gesture. */
+    static lv_dir_t s_last_gesture_dir = LV_DIR_NONE;
+    if((dir == LV_DIR_RIGHT || dir == LV_DIR_LEFT) && dir != s_last_gesture_dir) {
+        if(ui_get_gesture_dir) ui_get_gesture_dir(dir);
     }
+    s_last_gesture_dir = dir;
 }
 
 static void menu_keypay_get_event(lv_timer_t *t)
