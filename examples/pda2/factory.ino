@@ -22,7 +22,9 @@
 #include <WiFi.h>
 #include <freertos/semphr.h>
 #include "config_keys.h"
-#include "penpal_api.h"   /* LDF link hook for penpal_api.cpp (PenPal UI lands in a later commit) */
+#include "penpal_api.h"   /* PenPal API client + (via ui_penpal*.cpp, polled in
+                           * loop()) the screen UI - registered on the menu in
+                           * the menu-page commit */
 
 Adafruit_DRV2605 drv;
 
@@ -786,6 +788,8 @@ void loop()
     ai_chat_keyboard_poll();
     extern void ai_cfg_keyboard_poll();
     ai_cfg_keyboard_poll();
+    extern void penpal_keyboard_poll();
+    penpal_keyboard_poll();
     extern void shutdown_keyboard_poll();
     shutdown_keyboard_poll();
     bq25896_runtime_maintain();
