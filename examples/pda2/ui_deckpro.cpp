@@ -1417,6 +1417,7 @@ static lv_obj_t *scr4_lab_buf[20];
 
 // --------------------- WIFI Test (list item, no separate screen) ----------
 #include "http_utils.h"
+#include <WiFi.h>          /* WiFi.localIP() next to the public IP in Test */
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -1577,9 +1578,15 @@ static void wifi_page_timer_cb(lv_timer_t *t)
                     *--endp = '\0';
                 }
                 if (wifi_test_ip_valid(ip)) {
-                    Serial.printf("[WiFiTest] public ip: %s\n", ip);
-                    char msg[96];
-                    snprintf(msg, sizeof(msg), "Public IP:\n%s", ip);
+                    /* LAN IP alongside the public one (user request
+                     * 2026-08-22): shows which subnet the device sits on -
+                     * handy when a PC-side server must be reachable from it */
+                    char lan[24];
+                    strncpy(lan, WiFi.localIP().toString().c_str(), sizeof(lan) - 1);
+                    lan[sizeof(lan) - 1] = '\0';
+                    Serial.printf("[WiFiTest] public ip: %s lan ip: %s\n", ip, lan);
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "Public IP:\n%s\nLAN IP:\n%s", ip, lan);
                     wifi_test_show_result("WiFi Test OK", msg);
                 } else {
                     Serial.printf("[WiFiTest] unexpected response: %s\n", ip);
