@@ -50,6 +50,17 @@ volatile bool s_pp_busy = false;
 uint32_t s_pp_busy_gen = 0;
 bool s_pp_active = false;
 
+/* P2 (Codex): tasks that already left pp_start are NOT abortable - a READ
+ * Close only stops the UI from waiting. Cap the number of live workers
+ * (one cancelled zombie + one new request) so repeated Close/retry cannot
+ * pile up 8 KiB-stack tasks; the counter is RMW'd from both cores. */
+#define PP_TASK_MAX_CONCURRENCY 2
+static volatile int s_pp_inflight = 0;
+
+/* P1 (Codex): screens are created at scr_mgr REGISTER time (boot), long
+ * before entry - the entry auto-sync must not re-run on every visit. */
+static bool s_pp_autosynced = false;
+
 /* ---- file-internal forward decls (define-order dependencies) ------------ */
 static void pp_home_pal_cb(lv_event_t *e);
 static void pp_home_cfg_back_cb(lv_event_t *e);
@@ -396,6 +407,7 @@ static void pp_task_func(void *param)
     } else {
         delete res;
     }
+    __atomic_sub_fetch(&s_pp_inflight, 1, __ATOMIC_RELAXED);  /* P2 cap */
     vTaskDelete(NULL);
 }
 
@@ -441,11 +453,22 @@ bool pp_start(const pp_task_req_t *tmpl, bool chained)
         pp_status_set("Out of memory");
         return false;
     }
+    /* P2 cap (chained legs belong to the single flight that already passed) */
+    if (!chained &&
+        __atomic_load_n(&s_pp_inflight, __ATOMIC_RELAXED) >=
+            PP_TASK_MAX_CONCURRENCY) {
+        pp_status_set("wait - previous request closing");
+        return false;
+    }
     pp_task_req_t *rq = new pp_task_req_t(*tmpl);  /* full string copies */
     rq->base = base;
     rq->key = key;
+    /* count BEFORE create: the worker may finish on the other core before
+     * xTaskCreate returns here (P2) */
+    __atomic_add_fetch(&s_pp_inflight, 1, __ATOMIC_RELAXED);
     TaskHandle_t h = NULL;
     if (xTaskCreate(pp_task_func, "penpal", 1024 * 8, rq, 1, &h) != pdPASS) {
+        __atomic_sub_fetch(&s_pp_inflight, 1, __ATOMIC_RELAXED);
         delete rq;
         pp_status_set("Cannot start task");
         return false;
@@ -478,6 +501,13 @@ static void pp_consume(pp_result_t *res)
 {
     if (res->gen != s_pp_gen || !s_pp_active) {
         Serial.printf("[PenPal] stale result type=%d dropped\n", res->type);
+        /* P1 (Codex): this dropped request may OWN s_pp_busy (e.g. a
+         * background SEND whose result arrived after the user left the
+         * screen - exit hides the box but does not clear busy). No other
+         * consumer exists, so the drop must release it. */
+        if (s_pp_busy && res->gen == s_pp_busy_gen) {
+            s_pp_busy = false;
+        }
         return;
     }
     pp_task_req_t rq = {};
@@ -909,6 +939,7 @@ static void pp_cfg_save_cb(lv_event_t *e)
         pp_status_set("save failed (NVS)");
     } else {
         pp_status_set("saved");
+        s_pp_autosynced = false;   /* next visit syncs with the new config */
     }
 }
 
@@ -1072,17 +1103,9 @@ static void pp_create(lv_obj_t *parent)
     pp_set_page(PP_PAGE_HOME);
     pp_home_render_pals();
     pp_home_render_rows();
-
-    /* auto-sync on entry when configured (§4.1); the unconfigured guide is
-     * set in pp_entry (config may change between create and entry is not a
-     * real flow - one visit = one create) */
-    char base[PP_BASE_MAX], key[PP_KEY_MAX];
-    pp_cfg_load(base, sizeof(base), key, sizeof(key));
-    if (base[0] && key[0]) {
-        pp_home_sync(false);
-    } else {
-        pp_status_set("configure server in Cfg");
-    }
+    /* widgets only - scr_mgr runs create() at REGISTER time (boot), any
+     * request started here would be invalidated by entry()'s gen++ before
+     * its result arrives (Codex P1). Auto-sync lives in pp_entry(). */
 }
 
 static void pp_entry(void)
@@ -1090,6 +1113,18 @@ static void pp_entry(void)
     ui_disp_full_refr();
     s_pp_gen++;                           /* invalidate prior-visit results */
     s_pp_active = true;
+    /* auto-sync on the FIRST entry of a visit, after gen++ so the request
+     * carries the generation that will consume it (§4.1, Codex P1) */
+    if (!s_pp_autosynced) {
+        s_pp_autosynced = true;
+        char base[PP_BASE_MAX], key[PP_KEY_MAX];
+        pp_cfg_load(base, sizeof(base), key, sizeof(key));
+        if (base[0] && key[0]) {
+            pp_home_sync(false);
+        } else {
+            pp_status_set("configure server in Cfg");
+        }
+    }
 }
 
 static void pp_exit(void)
@@ -1116,6 +1151,7 @@ static void pp_destroy(void)
     s_pp_busy = false;
     pp = pp_state_t();                    /* strings released; state re-zeroed */
     s_home_note[0] = 0;
+    s_pp_autosynced = false;              /* next visit auto-syncs again */
     memset(s_pages, 0, sizeof(s_pages));
     memset(s_status_lab, 0, sizeof(s_status_lab));
 }

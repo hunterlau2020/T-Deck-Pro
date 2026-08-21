@@ -556,7 +556,7 @@ bool penpal_send_email(const char *base, const char *key,
 bool penpal_correction(const char *base, const char *key, int email_id,
                        pp_fix_t *out, string *err)
 {
-    memset(out, 0, sizeof(*out));
+    *out = pp_fix_t{};      /* value-init (memset is reserved for POD-free) */
     if (!pp_cfg_ok(base, key, err)) return false;
 
     char path[48];
@@ -603,7 +603,8 @@ bool penpal_correction(const char *base, const char *key, int email_id,
 bool penpal_polish(const char *base, const char *key, int email_id,
                    pp_polish_t *out, string *err)
 {
-    memset(out, 0, sizeof(*out));
+    /* value-init, NOT memset - the struct holds std::string (Codex P1) */
+    *out = pp_polish_t{};
     if (!pp_cfg_ok(base, key, err)) return false;
 
     char path[48];
@@ -666,7 +667,7 @@ bool penpal_polish(const char *base, const char *key, int email_id,
 bool penpal_tips(const char *base, const char *key, int email_id,
                  pp_tips_t *out, string *err)
 {
-    memset(out, 0, sizeof(*out));
+    *out = pp_tips_t{};     /* value-init (uniform with the string structs) */
     if (!pp_cfg_ok(base, key, err)) return false;
 
     char path[48];

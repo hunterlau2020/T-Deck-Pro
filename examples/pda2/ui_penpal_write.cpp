@@ -103,7 +103,8 @@ static bool ppw_payload_eq(const pp_send_req_t *a, const pp_send_req_t *b)
 /* Build the canonical payload from the CURRENT UI + state. */
 static void ppw_payload_build(pp_send_req_t *out)
 {
-    memset(out, 0, sizeof(*out));
+    /* value-init, NOT memset - the struct holds std::string (Codex P1) */
+    *out = pp_send_req_t{};
     const char *t = lv_textarea_get_text(s_title_ta);
     const char *b = lv_textarea_get_text(s_body_ta);
     out->pen_pal_id = pp.comp_pal_id;
