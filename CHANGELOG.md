@@ -5,6 +5,12 @@
 
 ## 2026-08-22
 
+- **Low 收尾批次两份 Codex 结果到达**：`c8f62f3` **A 全量接受**（a924c4e
+  环路闭合）；`71fa528..a58a73c` **C 部分接受**——P2：forecast JSON 仅有
+  `list` 就置 `data_valid` 过宽，空列表/全过期/缺 `dt` 时零条也判有效、
+  零值天气上屏 → `141942d` 收窄为 `hourly_count > 0 || daily_count > 0`
+  门控（0 条返回 false → partial/失败分支，不推进时间戳不落缓存）；
+  解析测试要求登记为验证缺口（无实机测试框架）。申请 `141942d`
 - **双评审 Low 收尾批次**（服务端幂等键排期期间）：`71fa528` weather 仅
   forecast 成功也置 `data_valid`（冷启动 current 失败时 forecast 上屏 +
   partial 提示复通，issue_list §9.4）；`a58a73c` Trust 开关状态行拼出作用域
