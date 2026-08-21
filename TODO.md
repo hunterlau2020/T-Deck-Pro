@@ -78,12 +78,20 @@
       引用同步更新）。
 - [x] **设计 v2 修订**（`97e5d2f`）：k3 三前置（页数公式最大下标语义 / LLM 超时
       180s / `s_pp_busy_gen`）+ 同批 8 项全部落实。
-- [ ] **设计 v2 复审**（Kimi/Codex 再走一轮；通过后进入实现）。
-- [ ] **实现 commit 1**：`penpal: API client`（penpal_api + 配置链 + env.cfg.example）。
+- [x] **设计 v2 复审**（2026-08-22 到达）：Codex **C 部分接受**（P1 发信幂等 /
+      P2 subject 缓冲）、Kimi **A**（4 Low 已预铺入设计稿）。
+- [x] **设计 v3 修订**（服务端 `Idempotency-Key` 落地后，2026-08-22）：P1 =
+      §2.2 幂等契约 + Close 按类型拆分（SEND 后台继续）+ RAM key 生命周期；
+      P2 = Title 56 字节 UTF-8 预算；跟进 `thread_root_id` 精确锚点（修 v2
+      同题多线程取数错误）。
+- [ ] **设计 v3 复审**（Kimi/Codex 再走一轮；通过后进入实现）。
+- [ ] **实现 commit 1**：`penpal: API client`（penpal_api + 配置链 + env.cfg.example；
+      含幂等键生成/复用/作废 + thread_root_id 锚点封装）。
 - [ ] **实现 commit 2**：`penpal: screen UI`（ui_penpal×3 + poll 挂接）。
 - [ ] **实现 commit 3**：`penpal: menu icon + third menu page`（注意 §6 的 4 处配套，
       幽灵页存量已由 `de78338` 修复）。
-- [ ] **实现 commit 4**：docs + 评审申请（含单队列偏差与 waitbox Close=取消首例标注）。
+- [ ] **实现 commit 4**：docs + 评审申请（含单队列偏差与 waitbox Close 拆分
+      语义首例标注：SEND=后台继续，读/算型=取消）。
 - 前置环境（用户侧）：测试服务器可达 + Windows 防火墙放行 8000 入站。
 
 ## 阶段 1：~~实现 `examples/allinone`~~（2026-08-19 用户决策：不再新开 allinone）

@@ -5,6 +5,14 @@
 
 ## 2026-08-22
 
+- **笔友设计 v3**（服务端幂等键落地后修订，待复审）：新增 §2.2
+  `Idempotency-Key` 契约（32 hex、重放 200 + `Idempotent-Replayed: true`，
+  demo 实证）；§3.2 waitbox Close 按类型拆分——SEND"不再等待后台继续"
+  （busy 保持），读/算型维持取消；幂等键 RAM 生命周期（快照比对复用、编辑
+  换新、确认作废）；P2：Title 限长 60 字符→**56 字节**（UTF-8 边界，
+  `Re: `+56=60 ≤ 显示缓冲）；跟进服务端线程模型——取线程/回信改
+  **`thread_root_id` 精确锚点**（subject 兼容通道会合并同题多线程，v2 取数
+  错误的正确性修复）；⑩ 本人 profile 端点已上线仍暂不接入
 - **Low 收尾批次两份 Codex 结果到达**：`c8f62f3` **A 全量接受**（a924c4e
   环路闭合）；`71fa528..a58a73c` **C 部分接受**——P2：forecast JSON 仅有
   `list` 就置 `data_valid` 过宽，空列表/全过期/缺 `dt` 时零条也判有效、

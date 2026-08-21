@@ -1,10 +1,12 @@
 # 笔友（PenPal）App 设计文档
 
-> 状态：**v2 修订稿，待复审**（2026-08-21）。v1 经两轮评审
-> （`penpal-design-review-result.md`、`penpal-design-review-result-kimi.md`）；
-> 本版落实 kimi 的 3 条前置条件与建议同批项（见变更历史）。复审通过后按 §9 拆分预案实施。
-> 参考实现接口：`scripts/remote_api_demo.py`；API schema 于 2026-08-21 对本地测试服务器
-> `http://127.0.0.1:8000` 实测确认（curl GET 探测，见 §2）。
+> 状态：**v3 修订稿，待复审**（2026-08-22）。v1/v2 经三轮评审
+> （`penpal-design-review-result.md`、`penpal-design-review-result-kimi.md`、
+> Codex/Kimi v2 复审各一份）；本版关闭 Codex v2 复审的 P1（发信幂等键——服务端
+> 已实现，见 §2.2）与 P2（canonical subject，§4.2/§5），并跟进服务端 2026-08-21
+> 线程锚点演进（§2/§4.4）。复审通过后按 §9 拆分预案实施。
+> 参考实现接口：`scripts/remote_api_demo.py`；API schema 于 2026-08-21/22 对本地测试服务器
+> `http://127.0.0.1:8000` 实测确认（curl GET 探测 + demo 全流程，见 §2）。
 
 ## 1. 背景与目标
 
@@ -32,14 +34,14 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
 |---|---|---|---|
 | ① | `/pen-pals` | GET | 笔友列表（首页 icon 行） |
 | ② | `/topics/suggestions` | GET | 推荐写作主题（按年龄段题库） |
-| ③ | `/emails` | POST | 写信（body 带 `topic_id` 可选） |
-| ④ | `/emails?pen_pal_id&subject` | GET | 读同主题往来信（线程） |
+| ③ | `/emails` | POST | 写信（body 带 `topic_id` 可选；**可带 `Idempotency-Key` 头**，§2.2） |
+| ④ | `/emails?pen_pal_id&thread_root_id` | GET | 读线程（**按首信锚点精确取**，v3 起；`subject` 参数为兼容通道——跨线程合并同主题返回，仅旧客户端用） |
 | ⑤ | `/emails/{id}/correction` | POST | 纠错（仅自己的信） |
 | ⑥ | `/emails/{id}/polish` | POST | 润色（仅自己的信） |
-| ⑦ | `/emails`（subject 带 `Re: ` 前缀） | POST | 回信 |
+| ⑦ | `/emails`（body 带 `thread_root_id` 锚点） | POST | 回信（subject 仍带 `Re: ` 前缀——锚点缺失时的服务端兜底，v3 起双保险） |
 | ⑧ | `/emails/{id}/tips` | POST | 回信建议（基于最近一封收到的信） |
-| ⑨ | `/emails/mailbox` | GET | 信箱线程概览（首页列表） |
-| ⑩ | `/users/me/profile` | GET | 本人资料（name/age_band/level/city/interests，demo `:51` 有演示）。**v1 暂不接入**：PROFILE 页按 §4.6 由 ①+⑨ 合成的是**笔友**资料，此端点是**本人**资料；留作后续廉价增量（kimi §1.8/T1） |
+| ⑨ | `/emails/mailbox` | GET | 信箱线程概览（首页列表，行含 `thread_root_id`） |
+| ⑩ | `/users/me/profile` | GET | 本人资料（name/age_band/level/city/interests，demo `:74-81` 步骤⓪ 有演示，已上线）。**v1 暂不接入**：PROFILE 页按 §4.6 由 ①+⑨ 合成的是**笔友**资料，此端点是**本人**资料；留作后续廉价增量（kimi §1.8/T1） |
 
 ### 2.1 实测响应 schema（2026-08-21）
 
@@ -61,31 +63,40 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
 
 **⑨ mailbox**（按 `last_at` 降序，服务端已排好）：
 ```json
-[{"pen_pal_id":14,"subject":"Learning English: my story","counterpart":"Mei",
-  "counterpart_kind":"npc","count":2,"unread":1,"state":"pending",
-  "last_sender":"Mei","last_at":"2026-08-20T15:10:01","snippet":"Dear Hunter,..."}]
+[{"thread_root_id":57,"pen_pal_id":14,"subject":"Learning English: my story",
+  "counterpart":"Mei","counterpart_kind":"npc","count":2,"unread":1,
+  "state":"pending","last_sender":"Mei","last_at":"2026-08-20T15:10:01",
+  "snippet":"Dear Hunter,..."}]
 ```
+- **`thread_root_id` = 线程锚点**（首信 id，v3 起取线程/回信都用它，demo `:126`
+  `root_id = email["thread_root_id"]`）；**同主题可以有多条线程**（demo `:224-238`
+  步骤⑨：同 subject 再写 = 新线程，各自成行）→ 按行 `subject` 显示、按
+  `thread_root_id` 寻址；
 - `state` 实测取值：`pending`（等回信）/ `replied`（已回）/ `sent`（已发出）；
 - `counterpart` = 对端显示名（首页行的"发送者名称"用它 + `last_sender`）；
 - **`pen_pal_id` 可为 `null`**（笔友关系已删但线程残留，实测 Sophie 行）→
   线程打开时只读、隐藏回信按钮（§4.4）。
 
-**④ thread**：
+**④ thread**（`?pen_pal_id&thread_root_id` 精确锚点查询）：
 ```json
 {"pen_pal_id":14,"emails":[
   {"id":50,"sender_user_id":1,"receiver_user_id":null,"npc_id":3,
    "subject":"Learning English: my story","content":"Dear friend, ...",
    "parent_email_id":null,"is_npc_reply":false,"sender_name":"hunter",
-   "created_at":"2026-08-20T14:11:11","read_at":null,"topic_id":7}, ...]}
+   "created_at":"2026-08-20T14:11:11","read_at":null,"topic_id":7,
+   "thread_root_id":57}, ...]}
 ```
 - `sender_user_id != null` → 我写的信（纠错/润色按钮的判定依据）；
-- **`Re: ` 前缀线程服务端聚合**（实测：以 `"Learning English: my story"` 查询，
-  返回了 subject 为 `"Re: Learning English: my story"` 的信）→ 客户端不需要
-  双查询/前缀归并，直接按 mailbox 行的 `subject` 取线程；
+- **v2 曾按 mailbox 行 `subject` 查线程**（服务端 `Re: ` 聚合）——该通道现为
+  **兼容通道，会跨线程合并同主题信**（demo `:21-22`）：同主题多线程（⑨ 场景）
+  下取到混合结果。v3 改按 `thread_root_id` 精确取，`Re: ` 归并交给服务端
+  锚点逻辑，客户端不做 subject 双查询/前缀归并；
 - emails 数组**升序**（旧→新）→ UI 侧反转后 index 0 = 最新。
 
-**③ send 请求/响应**：`{"pen_pal_id":N,"subject":"...","topic_id":N|null,"content":"..."}`
-→ `{"email":{"id":N,"topic_id":N,...},"reply_pending":bool}`。
+**③ send 请求/响应**：`{"pen_pal_id":N,"subject":"...","topic_id":N|null,
+"content":"...","thread_root_id":N?}`（回信带锚点，demo `:185-193`）→
+`{"email":{"id":N,"topic_id":N,"thread_root_id":N,...},"reply_pending":bool}`
+（新线程首信的 `thread_root_id` = 自身 id，demo `:126`）。
 
 **⑤ correction**：`{"degraded":false,"corrections":[{"type":"...","from":"...",
 "to":"...","explanation":"..."}]}`
@@ -96,6 +107,24 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
 **⑧ tips**：`{"degraded":false,"tips":["..."]}`
 
 - `degraded=true` 表示服务端 LLM 降级，FB 页/ msgbox 标注 `(degraded)`。
+
+### 2.2 发信幂等键（服务端 2026-08-22 已实现，Codex v2 P1 的关闭依据）
+
+创建型 POST（发信 ③/⑦）可带 `Idempotency-Key: <32 位 hex>` 请求头
+（demo `:24-30` 演示、`:53-56` 生成惯例、`:121-143` 重放实证）：
+
+- **首次**：`201` 新建；**同 key 重发**（上次结果未确认：关等待框/超时/断连）：
+  `200` + 响应头 `Idempotent-Replayed: true`，正文返回**同一封信**（id 不变，
+  线程不多出第二封，demo `:139-142` 有断言）；
+- 服务端按 **(用户, key)** 判重，key 只在**投递语义**上绑定一次发送；
+  **收到确认成功后 key 作废；草稿内容变化必须换新 key**（重放返回的是服务端
+  已存正文，与新草稿无关，demo `:29`）；
+- 不带该头 = 与旧版完全一致的行为。
+
+客户端职责（§3.2/§4.2 落实）：投递前生成并保存 key；结果未确认期间的重试
+**复用同一把**；确认成功后丢弃。penpal_api 自有请求函数需透传响应头，把
+`Idempotent-Replayed` 识别为成功（SEND 结果带 `replayed` 标志，状态行区分
+`sent ok` / `sent ok (replayed)`）。
 
 ## 3. 总体架构
 
@@ -135,11 +164,28 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
 - 页面代次不匹配（迟到结果、离屏结果、取消后结果）一律丢弃，且**不得**触碰
   `s_pp_busy`；busy 释放只认 `s_pp_busy_gen`。
 - UI busy 期间拒绝新请求；队列创建失败 → 提示、不置 busy、不启动任务。
-- waitbox（`ui_ai_chat.cpp` 同款秒级倒计时，EPD 友好）：所有网络请求弹出；
-  **加 Close 按钮 = 取消**（`s_pp_gen++`、`busy=false`、任务不杀、迟到结果按
-  代次丢弃）——correction/polish 可能耗时 180s，不能锁死输入。**这是全仓首例
-  waitbox 可取消交互**（现有 chat waitbox 打开时吞噬全部输入），commit 4 评审
-  申请书将显式标注（kimi §1.9/T2）。
+- waitbox（`ui_ai_chat.cpp` 同款秒级倒计时，EPD 友好）：所有网络请求弹出，
+  **加 Close 按钮**——v3 起按请求类型分两种语义（Codex v2 P1 修复）：
+  - **读/算型**（PALS/MAILBOX/THREAD/TOPICS 与 FIX/POLISH/TIPS）：Close =
+    **取消**（`s_pp_gen++`、`busy=false`、任务不杀、迟到结果按代次丢弃）——
+    correction/polish 可能耗时 180s，不能锁死输入。重试无副作用（FIX/POLISH/
+    TIPS 是派生结果，服务端不建信）；
+  - **创建型**（SEND）：Close = **不再等待，后台继续**——仅隐藏 waitbox，
+    `s_pp_gen` **不**递增、busy 保持（契约 §2.7 单在飞不破；SEND 超时 20s，
+    busy 最多再占 20s）。结果照常按代次消费：状态行 `sent ok (replayed)?`，
+    busy 释放。v2 的"Close=取消"会把已发出的 POST 变成结果未确认，用户重按
+    Send 即双发（Codex P1 原案）；幂等键（§2.2）+ 后台继续双保险后，重按
+    Send 也只重放同一封。
+  - **这是全仓首例 waitbox 可取消/可收起交互**（现有 chat waitbox 打开时吞噬
+    全部输入），commit 4 评审申请书将显式标注（kimi §1.9/T2）。
+- **幂等键生命周期（客户端，RAM）**：Send 按下 → 校验通过 → `esp_fill_random`
+  16 字节生成 32 hex key，与 **payload 快照**（pal_id/subject/topic_id/
+  content/thread_root_id）一起存入屏级 `s_pp_idem`（~1.2KB RAM）→ 发起 POST。
+  结果确认成功 → 清 `s_pp_idem`、清空 COMPOSE（v2 语义不变）；未确认（超时/
+  断连/离屏丢结果）→ **保留**，下次按 Send 时比对：payload 与快照一致 →
+  复用同一把 key（重放安全）；任何编辑（含 TOPICS 重选）→ 换新 key。**不落
+  NVS**：断电即丢草稿（§5 薄客户端取舍），重写的内容本就是新投递，新 key
+  语义正确；与 COMPOSE 草稿不落盘（R7）一致。
 - **偏差说明（单队列）**：契约先例为每任务一队列（`s_wifi_test_q`/`s_chat_q`…，
   契约表格 `async_ipc_contract.md:13-18`）；penpal 8 类请求共用 `s_pp_q`——同屏同类生命周期、结果以
   `type` 字段分派，属登记过的合理偏差（kimi §1.4）。
@@ -237,7 +283,7 @@ NVS 命名空间 "penpal"（键 base / key）
 │ [Back] Write / Reply                 │
 │ To: Mei                     [View]→PROFILE │
 │ Topic: Learning English...   [Pick]→TOPICS │  (new 模式；topic 可不选)
-│ Title: [____________________]        │  单行 textarea（≤60 字符）
+│ Title: [____________________]        │  单行 textarea（≤56 字节，UTF-8 边界）
 │ ┌──────────────────────────────┐ ┌──┐│
 │ │ Body (multi-line)            │ │Sen││  多行 textarea（≤1000 字符）
 │ │                              │ │d  ││
@@ -248,14 +294,23 @@ NVS 命名空间 "penpal"（键 base / key）
 ```
 
 - **new 模式**：收件人 = 点 icon 的笔友；topic 可选；title 手填或由 TOPICS 带入。
-- **reply 模式**：subject 预填 `Re: <线程 subject>`（服务端聚合已实测），无 Topic
-  行，多 **Tips** 按钮（§4.2.1）。
+- **reply 模式**：记录所在线程的 `thread_root_id`（发送 body 带锚点，§2 ⑦），
+  subject 预填 `Re: <线程 subject>`（锚点缺失时的服务端兜底，双保险），
+  无 Topic 行，多 **Tips** 按钮（§4.2.1）。
+- **Title 限长 56 字节（按字节，非字符）**（Codex v2 P2 修复）：v2 的
+  "≤60 字符"按 ASCII 假设，60 个非 ASCII 字符 UTF-8 可达 240 字节，超出
+  §5 显示缓冲 `subject[64]`；改按**字节**在输入侧截断（UTF-8 边界回退，
+  `ui_ai_chat.cpp` 同款），状态行字数标签随 Title 焦点显示 `NN/56 bytes`。
+  56 的取值使 `Re: `（4 字节）+ 56 = 60 ≤ 64——回信标题必落在显示缓冲内。
+  发送正文用 **canonical `std::string`** 组 JSON，不经定长缓冲拷贝。
 - 发送门槛：title 非空、**body ≥50 字符**（英语信件按**字符**计数，与状态行
   `Need 50+ chars (now N)` 的 N 单位一致；kimi §1.11.3）；不足时不弹网络请求；
 - 键盘：打字进当前焦点框；`\t`（Alt+Enter）切换 Title/Body 焦点；Body 内 `\n` =
   换行；**发送只走 Send 按钮**（`ui_ai_chat.cpp` 既定语义）；`\b` 在空框时返回 HOME；
 - 发送成功：清空 COMPOSE、回 HOME、自动触发 Sync（查看 NPC 回信需再等 ~2 分钟，
-  用户手动 Sync）。
+  用户手动 Sync）；成功状态行区分 `sent ok` / `sent ok (replayed)`（§2.2 幂等
+  重放识别），失败/未确认则 COMPOSE 保留原文，重按 Send 走 §3.2 幂等键
+  复用/换新逻辑。
 
 #### 4.2.1 Tips（reply 模式）
 
@@ -305,6 +360,8 @@ NVS 命名空间 "penpal"（键 base / key）
   不 hide——避免按钮增删引起布局跳动），不弹提示；Reply 可见性不受影响，
   维持"第 1 页才有"（kimi v2 §3.1）。
 
+- 进入即按 HOME 行的 `thread_root_id` 精确取线程（§2 ④，v3 起——同主题多线程
+  不再被 subject 兼容通道合并）；
 - 数据：线程信件**时间逆序**分页，**每页 1 封**，index 0 = 最新（首页）；
 - `|◀ Start` = 回到 index 0；`< Prev` = 更旧一封；`Next ▶` = 更新一封；
   到边界时按钮置灰；
@@ -339,8 +396,9 @@ FB 页 `entry()` 按 §3.2 结果 `type`（FIX / POLISH）选择渲染布局—�
 
 ### 4.6 PROFILE（笔友资料，合成）
 
-- 服务端无详情端点（§2.1）→ 由 ①+⑨ 合成：`name`、`NPC pen pal` / `pen pal`
-  （`is_npc`）、`status`、线程数（⑨ 中该 pal 的行数）、未读合计；
+- 服务端无**笔友**详情端点（⑩ 是**本人**资料端点，已上线但对象不同，§2）→
+  由 ①+⑨ 合成：`name`、`NPC pen pal` / `pen pal`（`is_npc`）、`status`、
+  线程数（⑨ 中该 pal 的行数）、未读合计；
 - 键盘：`\b` 返回 COMPOSE。
 
 ### 4.7 CFG（配置）
@@ -364,14 +422,19 @@ FB 页 `entry()` 按 §3.2 结果 `type`（FIX / POLISH）选择渲染布局—�
 typedef struct { int id; bool is_npc; char name[24]; char status[12]; } pp_pal_t;        // ≤3+2
 typedef struct { int id; char title[64]; char tag[12];
                  char background[96]; char guiding[192]; } pp_topic_t;                   // ≤16
-typedef struct { int pal_id; char subject[64]; char from[24]; char last_sender[24];
-                 char state[12]; int unread; int count; char last_at[20]; } pp_thread_row_t;  // ≤24
+typedef struct { int root_id; int pal_id; char subject[64]; char from[24];
+                 char last_sender[24]; char state[12]; int unread; int count;
+                 char last_at[20]; } pp_thread_row_t;  // ≤24；root_id = thread_root_id 锚点（§2 ⑨）
 typedef struct { int id; bool mine; char sender[24];
                  char time[20]; string content; } pp_letter_t;  // 线程总预算 16KB、单信 4KB
 ```
 
 - **null 哨兵**：mailbox 的 `pen_pal_id == null` 解析为 `pal_id = 0`（服务端 id
   从 1 起，0 不做合法 id 使用）；§4.4 以 `pal_id == 0` 判只读线程（kimi §1.6）。
+- **subject 的两副面孔（Codex v2 P2）**：定长 `subject[64]` 只是**显示拷贝**
+  （超长按 UTF-8 边界截断加 `...`）；**发送侧 canonical 副本走
+  `std::string`**（§4.2 输入限 56 字节，`Re: `+56=60 恒在显示缓冲内，
+  实际不会触截断——缓冲上限是防御，不是常态路径）。
 - **线程预算与逐出**：总预算 16KB、单信正文 4KB 截断加 `(truncated)`（UTF-8
   边界）；累计超 16KB 时**丢弃最旧信**（emails 升序数组前部），THREAD 顶栏计数
   相应减少，首次逐出状态行提示 `oldest dropped (size limit)`（kimi §1.6/T3）。
@@ -414,8 +477,15 @@ typedef struct { int id; bool mine; char sender[24];
    - Cfg 保存 → 状态行确认；重进屏值保留（NVS 生效）
    - HOME 自动/手动 Sync：icon 行 + 线程列表正确显示（对照网页端）
    - 点 Mei icon → COMPOSE：不选 topic 直接写；body <50 字被拒；≥50 发出成功
+   - Title 输入中文/CJK 到 56 字节上限截断（UTF-8 边界不切半个字），
+     `NN/56 bytes` 标签跟随
    - 选 topic → suggestion msgbox → Use 后 Title 自动带入
+   - **幂等重放**：发送后（未确认路径）重按 Send / 断网重连后重发 → 线程只有
+     一封信、状态行 `sent ok (replayed)`（对照网页端线程计数）；编辑一字后
+     重发 = 新信（新 key）
    - THREAD：3 个导航按钮、Fix/Polish（我的信）、第 1 页 Reply
+   - **同题双线程**（网页端同 subject 再写一封）：HOME 两行各自可开、互不
+     混信（thread_root_id 锚点回归）；Reply 落在正确线程
    - 发信后 ~2 分钟 Sync → NPC 回信出现 → 开线程 → Reply + Tips
    - `pen_pal_id=null` 行（Sophie）只读
    - 菜单第 3 页：第 19 项图标显示；左右滑 3 页往返；第 3 页继续左滑**不越界**
@@ -428,7 +498,7 @@ typedef struct { int id; bool mine; char sender[24];
 | # | 风险/问题 | 处置 |
 |---|---|---|
 | R1 | 后端字段后续变化（非合同化 API） | 解析全部防御式（字段缺失→默认值+串口日志），显示层降级不崩溃 |
-| R2 | 无 profile 端点 | PROFILE 页合成（§4.6），后端补端点后升级 |
+| R2 | 无**笔友** profile 端点（⑩ 本人资料端点已上线，对象不同） | PROFILE 页合成（§4.6），后端补笔友端点后升级 |
 | R3 | 配置单槽 NVS | **遵循既有单槽先例**（weather/provider key，kimi §1.7 核实 SECURITY.md 仅 `ai` 标注双槽）——非待评审偏差（§3.4） |
 | R4 | montserrat_14 无 CJK 字形 | 信件/界面按英语设计（KET/IELTS 场景），terry 若写中文显示为方块——与其他屏现状一致 |
 | R5 | mailbox 服务端无界增长 | 客户端 24 行上限 + 分页，超出提示 `more on web` |
@@ -439,6 +509,8 @@ typedef struct { int id; bool mine; char sender[24];
 ## 9. commit 拆分预案（实现阶段）
 
 1. `penpal: API client for the pen-pal service` —— penpal_api + 配置链 + env.cfg.example
+   （含 §2.2 幂等键生成/复用/作废、thread_root_id 锚点封装、响应头
+   `Idempotent-Replayed` 透传）
 2. `penpal: screen UI - mailbox/compose/thread pages` —— ui_penpal×3 + poll 挂接
 3. `penpal: menu icon + third menu page` —— img_penpal + ui_deckpro 菜单
 4. `docs: penpal implementation notes + review request` —— README/TODO/CHANGELOG +
@@ -469,3 +541,19 @@ typedef struct { int id; bool mine; char sender[24];
   §6 `config_keys.h.example` 模板行。Codex v2 复审
   （`penpal-design-review-result-codex.md`，**C 部分接受**）P1 发信幂等键 /
   P2 canonical subject 待 v3 修订处理——幂等键方案已提交服务端排期。
+- 2026-08-22 **v3 修订**（关闭 Codex v2 复审两项 + 跟进服务端演进）：
+  - **P1（发信幂等）**：服务端已实现 `Idempotency-Key`（32 hex，重放 200 +
+    `Idempotent-Replayed: true`，demo `:24-30/:121-143` 实证）→ 新增 §2.2
+    契约小节；§3.2 waitbox Close 按类型拆分——SEND 为"不再等待，后台继续"
+    （busy 保持、结果照常消费），读/算型维持取消；幂等键客户端生命周期
+    （RAM 快照比对复用、编辑换新、确认作废、不落 NVS）。
+  - **P2（canonical subject）**：§4.2 Title 限长"60 字符"→"**56 字节**，
+    UTF-8 边界"（`Re: `+56=60 ≤ 64 显示缓冲）；§5 subject[64] 明确为显示
+    拷贝、发送侧 canonical `std::string`。
+  - **服务端演进跟进（2026-08-21 线程模型）**：线程取数/回信锚点从
+    subject 通道改 **`thread_root_id`**（subject = 兼容通道、会跨线程合并——
+    同题多线程场景 v2 设计取数错误，属正确性修复）；§2 表/§2.1 schema ⑨④③
+    补 `thread_root_id` 字段；⑦ 回信 body 带锚点 + `Re: ` 双保险；
+    §5 `pp_thread_row_t` 加 `root_id`。
+  - ⑩ `/users/me/profile` 已上线（demo 步骤⓪），仍暂不接入（本人≠笔友，
+    §4.6/R2 措辞同步）；§7 回归补幂等重放/同题双线程/Title 字节截断三项。
