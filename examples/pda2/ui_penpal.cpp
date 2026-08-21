@@ -790,10 +790,25 @@ static void pp_home_next_cb(lv_event_t *e)
     }
 }
 
+/* Click-back runs deep inside LVGL's event dispatch; running scr_mgr_pop
+ * synchronously there (exit + destroy + menu re-entry + lv_obj_del of the
+ * whole 7-page tree) tripped the loopTask stack canary - serial evidence
+ * 2026-08-22: "Stack canary watchpoint triggered (loopTask)" right after
+ * scr_mgr_pop's keypad_clear_chars() log line, from a title-bar click.
+ * Defer the pop to the next lv_timer_handler pass so the click stack
+ * unwinds first - the same context the keypad '\b' handler uses. A second
+ * queued pop is harmless: scr_mgr_pop refuses when top == stack root. */
+static void pp_pop_async(void *arg)
+{
+    (void)arg;
+    scr_mgr_pop(false);
+}
+
 static void pp_back_cb(lv_event_t *e)
 {
-    s_pp_active = false;
-    scr_mgr_pop(false);
+    s_pp_active = false;             /* a queued result must drop even if it
+                                      * lands before the deferred pop runs */
+    lv_async_call(pp_pop_async, NULL);
 }
 
 static void pp_home_build(lv_obj_t *parent)
@@ -1137,6 +1152,47 @@ static void pp_exit(void)
     s_pp_active = false;
 }
 
+/* In-place reset of the screen state. pp_state_t is ~15KB (24 mailbox rows
+ * + 16 topics + 64 letters + scratch) - the old "pp = pp_state_t()" built a
+ * temporary of that size ON THE STACK and tripped the loopTask 8KB canary
+ * on EVERY Back press (serial evidence 2026-08-22: "Stack canary watchpoint
+ * triggered (loopTask)", inside scr_mgr_pop -> pp_destroy). Reset per field
+ * instead: each per-element temp is <= ~370B. Strings must go through
+ * per-element value-init (element dtor + empty init), never memset. */
+static void pp_state_reset(void)
+{
+    for (int i = 0; i < PP_PAL_MAX; i++) pp.pals[i] = pp_pal_t{};
+    pp.pals_cnt = 0;
+    for (int i = 0; i < PP_MAILBOX_MAX; i++) pp.rows[i] = pp_thread_row_t{};
+    pp.rows_cnt = 0;
+    pp.mailbox_truncated = false;
+    pp.home_page = 0;
+    pp.reply_mode = false;
+    pp.comp_pal_id = 0;
+    pp.comp_pal_name[0] = 0;
+    pp.comp_has_topic = false;
+    pp.comp_topic_id = 0;
+    pp.comp_topic_title[0] = 0;
+    pp.comp_root_id = 0;
+    pp.idem_valid = false;
+    pp.idem_key[0] = 0;
+    pp.idem_snap = pp_send_req_t{};       /* small (~100B) - stack-safe */
+    pp.send_lock = false;
+    for (int i = 0; i < PP_TOPIC_MAX; i++) pp.topics[i] = pp_topic_t{};
+    pp.topics_cnt = 0;
+    pp.topics_page = 0;
+    pp.topics_sel = -1;
+    for (int i = 0; i < PP_THREAD_MAX; i++) pp.letters[i] = pp_letter_t{};
+    pp.letters_cnt = 0;
+    pp.thr_root = 0;
+    pp.thr_pal = 0;
+    pp.thr_subject[0] = 0;
+    pp.thr_idx = 0;
+    pp.thr_dropped = 0;
+    pp.fb_degraded = false;
+    pp.fmt[0] = 0;
+}
+
 static void pp_destroy(void)
 {
     s_pp_active = false;
@@ -1149,11 +1205,12 @@ static void pp_destroy(void)
      * result is dropped by gen (chat pattern). Screen rebuild makes the
      * idempotency payload != snapshot, so the key cannot be misused. */
     s_pp_busy = false;
-    pp = pp_state_t();                    /* strings released; state re-zeroed */
+    pp_state_reset();                     /* strings released; state re-zeroed */
     s_home_note[0] = 0;
     s_pp_autosynced = false;              /* next visit auto-syncs again */
-    memset(s_pages, 0, sizeof(s_pages));
-    memset(s_status_lab, 0, sizeof(s_status_lab));
+    memset(s_pages, 0, sizeof(s_pages));           /* lv_obj_t* array: POD */
+    memset(s_status_lab, 0, sizeof(s_status_lab)); /* lv_obj_t* array: POD */
+    Serial.println("[PenPal] destroy done");       /* back-press regression marker */
 }
 
 scr_lifecycle_t screen_penpal = {
