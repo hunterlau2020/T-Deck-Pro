@@ -193,8 +193,9 @@ static const char *CA_BUNDLE =
 void http_set_tls_mode(http_tls_mode_t mode) { s_tls_mode = mode; }
 http_tls_mode_t http_get_tls_mode(void) { return s_tls_mode; }
 
-/* Configure a WiFiClientSecure instance per the current TLS mode. */
-static void apply_tls(WiFiClientSecure &client)
+/* Configure a WiFiClientSecure instance per the current TLS mode.
+ * Exported (additive) for penpal_api's own https transport - see header. */
+void http_apply_tls(WiFiClientSecure &client)
 {
     if (s_tls_mode == HTTP_TLS_INSECURE) {
         client.setInsecure();
@@ -211,7 +212,7 @@ bool http_require_wifi(const char *feature_name)
 /* TLS cert validation needs a sane system clock; pool.ntp.org is often
  * unreachable in CN networks, so prefer cn.pool.ntp.org and fail requests
  * with a clear message instead of a generic TLS verify error. */
-static bool http_ensure_time(uint32_t max_wait_ms)
+bool http_ensure_time(uint32_t max_wait_ms)
 {
     if (time(nullptr) > 1700000000) {           /* after 2023-11-14 */
         return true;
@@ -254,7 +255,7 @@ http_response_t http_get_ua(const char *url, const char *user_agent, uint32_t ti
         return resp;
     }
     WiFiClientSecure client;
-    apply_tls(client);
+    http_apply_tls(client);
     HTTPClient http;
 
     http.setTimeout(timeout_ms);
@@ -292,7 +293,7 @@ http_response_t http_get_auth(const char *url, const char *auth_header, uint32_t
         return resp;
     }
     WiFiClientSecure client;
-    apply_tls(client);
+    http_apply_tls(client);
     HTTPClient http;
 
     http.setTimeout(timeout_ms);
@@ -333,7 +334,7 @@ http_response_t http_post(const char *url, const string &body,
         return resp;
     }
     WiFiClientSecure client;
-    apply_tls(client);
+    http_apply_tls(client);
     HTTPClient http;
 
     http.setTimeout(timeout_ms);
@@ -373,7 +374,7 @@ http_response_t http_post_large(const char *url, const uint8_t *data, size_t dat
         return resp;
     }
     WiFiClientSecure client;
-    apply_tls(client);
+    http_apply_tls(client);
     HTTPClient http;
 
     http.setTimeout(timeout_ms);
@@ -418,9 +419,12 @@ char *base64_encode_psram(const uint8_t *data, size_t len, size_t *out_len)
 
 #else
 // Desktop stubs
+class WiFiClientSecure;   /* reference param only */
 void http_set_tls_mode(http_tls_mode_t mode) {}
 http_tls_mode_t http_get_tls_mode(void) { return HTTP_TLS_INSECURE; }
 bool http_require_wifi(const char *feature_name) { return false; }
+void http_apply_tls(WiFiClientSecure &client) {}
+bool http_ensure_time(uint32_t max_wait_ms) { return true; }
 http_response_t http_get(const char *url, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
 http_response_t http_get_ua(const char *url, const char *user_agent, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }
 http_response_t http_get_auth(const char *url, const char *auth_header, uint32_t timeout_ms) { return {0, "Not supported on desktop", false, ""}; }

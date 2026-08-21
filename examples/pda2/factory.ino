@@ -22,6 +22,7 @@
 #include <WiFi.h>
 #include <freertos/semphr.h>
 #include "config_keys.h"
+#include "penpal_api.h"   /* LDF link hook for penpal_api.cpp (PenPal UI lands in a later commit) */
 
 Adafruit_DRV2605 drv;
 

@@ -13,6 +13,8 @@
 
 using namespace std;
 
+class WiFiClientSecure;   /* reference params below only */
+
 typedef enum {
     HTTP_TLS_CA_VERIFY = 0,   /* validate chain against built-in CA bundle */
     HTTP_TLS_INSECURE  = 1,   /* skip verification (user opted in) */
@@ -49,6 +51,24 @@ http_tls_mode_t http_get_tls_mode(void);
  * @return true if WiFi is connected.
  */
 bool http_require_wifi(const char *feature_name);
+
+/**
+ * @brief Configure a WiFiClientSecure per the current TLS mode (built-in CA
+ *        bundle, or insecure when the user opted in).
+ *        Exported for penpal_api's own https transport (design §3.3) so both
+ *        paths share ONE CA bundle and policy instead of a drifting copy.
+ *        ADDITIVE export: every existing http_* caller is unchanged.
+ */
+void http_apply_tls(WiFiClientSecure &client);
+
+/**
+ * @brief Wait (bounded) for NTP time sync - TLS cert validation needs a sane
+ *        clock. Exported for penpal_api's https path, same single-policy
+ *        rationale as http_apply_tls(). ADDITIVE export.
+ * @param max_wait_ms Upper bound on the wait.
+ * @return true when system time is past the 2023-11 sanity threshold.
+ */
+bool http_ensure_time(uint32_t max_wait_ms);
 
 /**
  * @brief Perform an HTTPS GET request.
