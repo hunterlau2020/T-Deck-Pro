@@ -19,15 +19,13 @@
       provider 下拉 ✅ 已过；剩余 3 项：Save 后 key 恢复（#6）、失败重试路径（关热点，14）、
       长回答 `(truncated)`（15）。
 
-### 第四批评审（GPT 跟进评审，2026-08-21 到达，待修——**2026-08-22 批次**）
+### 第四批评审（GPT 跟进评审，2026-08-21 到达 —— ✅ 2026-08-22 全部修复，申请 `c27cb39..3475c9b`）
 
-- [ ] **Weather 部分刷新误存成功**（issue_list §9.1）：current/forecast 结果分开跟踪，
-      仅完整刷新推进 `last_fetch_time`，部分刷新允许更早重试（`ui_weather.cpp:428`）。
-- [ ] **CI paths 补 `script/**`**（issue_list §9.2）：单独改 `set_srcdir.py` 目前会
-      跳过 CI（`.github/workflows/platformio.yml:7-10`）。
-- [ ] **factory.ino TLS extern 声明改 `void`**（issue_list §9.3，`950fcfe` 笔误）：
-      或直接 include `openai_api.h`。
-- 修完按惯例：编译烧录 → 拆模块 commit → 评审申请（weather / CI / TLS 三模块）。
+- [x] **Weather 部分刷新误存成功**（issue_list §9.1，`c27cb39`）：current/forecast
+      结果分开跟踪，仅完整刷新推进 `last_fetch_time`/落盘；部分刷新即失效可重试
+      + 状态行提示。
+- [x] **CI paths 补 `script/**`**（issue_list §9.2，`153eef7`）。
+- [x] **factory.ino TLS extern 声明改 `void`**（issue_list §9.3，`3475c9b`）。
 
 ### 预研收尾（评审跟踪项）
 

@@ -215,28 +215,33 @@
 
 ## 9. 第四批评审发现（GPT 跟进评审 `pda2-review-result-2026-08-07-21-gpt.md`，2026-08-21 到达，⬜ 待修）
 
-### 9.1 Weather 部分刷新被缓存为成功 ⬜
+### 9.1 Weather 部分刷新被缓存为成功 ✅
 
-- **差异**：`ui_weather.cpp:428` 只看 `data_valid`——current 请求失败但旧缓存保持
+- **差异**：`ui_weather.cpp` fetch 任务结尾只看 `data_valid`——该标志既被本次
+  解析置位、也被更早的缓存加载置位。current 请求失败但旧缓存保持
   `data_valid=true`、或 current 成功而 forecast 失败时，仍推进 `last_fetch_time`
   并 `save_cache()` 把新旧混合状态存盘 → 界面报成功、1 小时内不再重试
-- **修法（评审建议）**：两个请求结果分开跟踪；只在**完整刷新**成功后推进
-  新鲜度时间戳；部分刷新后允许更早重试
+- **修复**：`c27cb39` — 两个端点结果分开跟踪（`parse_current_weather`/
+  `parse_forecast` 改返回是否解析成功）：**完整刷新**才推进时间戳 + 城市名 +
+  落盘；**部分刷新**不推进、不落盘（下次进屏即重试，不再等满 1 小时），并经
+  `partial_refresh` 标志（任务写/LVGL 定时器读）在状态行保留
+  `Partial data - press r to retry` 提示；**全失败**缓存不动（原行为）
 
-### 9.2 CI 路径过滤不含 `script/**` ⬜
+### 9.2 CI 路径过滤不含 `script/**` ✅
 
 - **差异**：`script/set_srcdir.py` 决定矩阵实际编译哪个示例（第三批 7.1 刚修过它的
-  优先级 bug），但 `.github/workflows/platformio.yml:7-10` 的 `on.push.paths` 只有
+  优先级 bug），但 `.github/workflows/platformio.yml` 的 `on.push.paths` 只有
   `examples/**`、workflow 自身、`platformio.ini`——单独改 set_srcdir.py 会**完全
   跳过 CI**，上次那类"矩阵全绿但编错源目录"的问题可再次静默发生
-- **修法**：paths 加 `script/**`（或至少 `script/set_srcdir.py`）
+- **修复**：`153eef7` — paths 追加 `script/**`（带注释说明缘由）
 
-### 9.3 `factory.ino` 的 TLS 初始化声明与头文件不一致 ⬜
+### 9.3 `factory.ino` 的 TLS 初始化声明与头文件不一致 ✅
 
 - **差异**：`factory.ino:757` 局部声明 `extern bool openai_tls_apply(void);`，而
   `openai_api.h:112` 实为 `void openai_tls_apply(void);`——跨翻译单元声明不兼容
   （`950fcfe` 引入的笔误；当前调用丢弃返回值通常能链接，但属 UB 邻域）
-- **修法**：include `openai_api.h` 或改局部声明为 `extern void ...`
+- **修复**：`3475c9b` — 局部声明改 `extern void openai_tls_apply(void);`
+  （与相邻 `extern void openai_stats_poll();` 风格一致）
 
 ## 附：键盘实测记录
 
