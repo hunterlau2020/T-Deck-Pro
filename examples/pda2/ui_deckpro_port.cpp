@@ -339,7 +339,9 @@ bool ui_sd_test_run(ui_sd_test_result_t *out)
 void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used, int *state)
 {
     /* state: 0 = mounted OK, 1 = no card, 2 = card present but the
-     * filesystem is not FAT16/FAT32 (mount rejected it). */
+     * mount failed - typically a non-FAT16/32 filesystem, but SPI or
+     * init errors on a FAT32 card land here too (the cause is only in
+     * the serial log, so callers must not treat 2 as a diagnosis). */
     if (total) {
         *total = 0;
     }
@@ -360,8 +362,9 @@ void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used, int *state)
 
     if (!mounted) {
         /* cardType() still reports the detected type after a failed
-         * f_mount (the card answered the init commands), which is how
-         * an exFAT/NTFS card is told apart from an empty slot. */
+         * f_mount (the card answered the init commands), which tells
+         * "card present" apart from an empty slot - but it does NOT
+         * prove the failure is the filesystem type. */
         uint8_t ct = SD.cardType();
         if (state) {
             *state = (ct == CARD_NONE) ? 1 : 2;

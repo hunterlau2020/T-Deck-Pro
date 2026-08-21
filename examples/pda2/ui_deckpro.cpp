@@ -984,9 +984,15 @@ static void create2_1(lv_obj_t *parent)
     str += line_full_format(28, "SD used:", (const char *)buf);
     str += "\n                           \n";
 
-    /* tell the user WHY the card shows 0MB instead of leaving it cryptic */
+    /* tell the user WHY the card shows 0MB instead of leaving it cryptic.
+     * State 2 only proves the card answered init commands - usually an
+     * exFAT/NTFS card, but SPI/init errors on a fine FAT32 card land
+     * here too, so state the failure and offer FAT32 as advice, not a
+     * diagnosis (review a924c4e P2). */
     if (sd_state == 2) {
-        str += line_full_format(28, "SD hint:", "need FAT32");
+        str += line_full_format(28, "SD hint:", "mount failed");
+        str += "\n                           \n";
+        str += line_full_format(28, "", "try FAT16/FAT32?");
         str += "\n                           \n";
     } else if (sd_state == 1) {
         str += line_full_format(28, "SD hint:", "no card");
