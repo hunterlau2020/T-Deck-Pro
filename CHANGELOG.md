@@ -5,6 +5,12 @@
 
 ## 2026-08-22
 
+- **双评审 Low 收尾批次**（服务端幂等键排期期间）：`71fa528` weather 仅
+  forecast 成功也置 `data_valid`（冷启动 current 失败时 forecast 上屏 +
+  partial 提示复通，issue_list §9.4）；`a58a73c` Trust 开关状态行拼出作用域
+  `TLS: ALL HTTPS …`（§7.4）；issue_list §4.1 复核闭合（build doc §8 已于
+  08-16 修好，登记滞后）；Kimi v2 四项 Low 预铺入 `penpal-design.md`（给
+  v3 铺路）。申请 `71fa528..a58a73c`
 - **第四批评审修复**（GPT 跟进评审 3 项 P2 全部关闭，Codex 结果 **A**）：
   `c27cb39` Weather 部分刷新不再缓存为成功（current/forecast 分别跟踪，
   仅双 ok 推进时间戳/落盘，部分刷新失效可重试 + 状态行提示）；

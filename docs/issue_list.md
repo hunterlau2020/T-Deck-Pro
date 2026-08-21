@@ -126,11 +126,13 @@
 
 ## 4. 文档与构建环境偏差
 
-### 4.1 `build-and-code-structure.md` §8 的 pio 路径是另一台机器 ⬜
+### 4.1 `build-and-code-structure.md` §8 的 pio 路径是另一台机器 ✅（2026-08-22 复核闭合）
 
 - **文档现状**：`C:\Users\asdfo\.platformio\penv\Scripts\pio.exe`；称"git 不在当前会话 PATH 中"
 - **本机实际**：用户目录为 `hunter`；pio 未加入 PATH，用 `python -m platformio` 调用（PlatformIO Core 6.1.19，pip 安装）；git 可用
 - **建议**：§8 改为通用说明（`python -m platformio` 或用户目录 `%USERPROFILE%\.platformio\penv\Scripts`）
+- **状态**：§8 已于 2026-08-16 文档更新时改为通用说明（`python -m platformio` +
+  hunter 缓存路径 + 备查注记），本条登记滞后于修复——2026-08-22 复核确认后闭合
 
 ---
 
@@ -210,15 +212,16 @@
 - **差异**：`http_utils.h` 注释指引自签/私有 CA 用户去 "AI Cfg screen 'Trust self-signed' toggle"，但该屏根本没有这个控件，也无人调 `http_set_tls_mode()`——自签端点永远走 CA 校验、必然失败
 - **修复**：`a06a1f9` — AI Config 标题栏右上新增 Trust 开关（`lv_switch`，触摸/音量键 `\v` 均可切换）；`openai_api` 新增 `openai_tls_insecure()/openai_tls_apply()/openai_tls_set()`，存 NVS `ai`/`tls_insecure`（独立单键，**不进**双槽——它是设备级传输设置，不应跟随 Test 门控的 Save 流程）；`factory.ino` setup() 末尾 `openai_tls_apply()` 使开机即生效；NVS 写失败时开关回滚到持久值并弹错误框
 
-### 7.4 Trust 开关影响面未在 UI 注明 ⬜（Low，登记待办）
+### 7.4 Trust 开关影响面未在 UI 注明 ✅（2026-08-22 `a58a73c`）
 
 - **来源**：Kimi 双评审 `wifi-config-keyboard-review-result-kimi-3f654a5..4c3a331.md`
   §1.3 影响面提示（A 全量接受，不阻塞）
 - **差异**：开关作用于**全设备所有** http_utils 消费者（天气、词典、WiFi Test
   等）——ON 即全设备 HTTPS 放弃 CA 校验，影响面大于控件所在屏（AI Config）的
   直觉范围，而 UI 文案仅 "Trust"
-- **预案**：开关旁或文档注明 "affects all HTTPS requests"——下次动
-  `ui_ai_cfg.cpp` 时顺手做
+- **修复**：`a58a73c` — 状态行文案改为 `TLS: ALL HTTPS trust self-signed` /
+  `TLS: ALL HTTPS CA verify`（拼出作用域），串口日志同步注明
+  `(applies to ALL HTTPS)`
 
 ## 8. 菜单翻页 off-by-one（kimi 设计评审 §1.1 顺带揭出，2026-08-21 修复）
 
@@ -227,7 +230,7 @@
 - **差异**：`ui_deckpro.cpp` 的 `page_num = MENU_BTN_NUM / 9` 算的是**页数**，但手势门控 `if(page_curr < page_num)` 把它当**最大下标**用——18 项时 page_num=2，第 2 页再左滑 `page_curr` 进入不存在的页 2：分支只处理 `==0/==1`，画面停在原处，且下一次右滑先被"空滑"用于把状态收回下标 1
 - **修复**：`de78338` — 改为 `(MENU_BTN_NUM - 1) / 9`（最大下标语义），18 项 → 下标 0..1，幽灵页不可达；`MENU_BTN_NUM <= 9` 单页早退不变。Setting/Test/A7682/PCM 页同款 `n/9` 写法未动（各自条目数未踩中 9 的整倍数），penpal 菜单第 3 页批次再统一换共享 ceil helper
 
-## 9. 第四批评审发现（GPT 跟进评审 `pda2-review-result-2026-08-07-21-gpt.md`，2026-08-21 到达；9.1-9.3 已于 2026-08-22 修复，9.4 Low 登记待办）
+## 9. 第四批评审发现（GPT 跟进评审 `pda2-review-result-2026-08-07-21-gpt.md`，2026-08-21 到达；9.1-9.4 已于 2026-08-22 全部修复）
 
 ### 9.1 Weather 部分刷新被缓存为成功 ✅
 
@@ -257,7 +260,7 @@
 - **修复**：`3475c9b` — 局部声明改 `extern void openai_tls_apply(void);`
   （与相邻 `extern void openai_stats_poll();` 风格一致）
 
-### 9.4 冷启动 + 仅 forecast 成功时无 partial 提示 ⬜（Low，登记待办）
+### 9.4 冷启动 + 仅 forecast 成功时无 partial 提示 ✅（2026-08-22 `71fa528`）
 
 - **来源**：Kimi 双评审 `wifi-config-keyboard-review-result-kimi-c27cb39..3475c9b.md`
   §1.1 Low 登记（A 全量接受，不阻塞）
@@ -267,8 +270,8 @@
   但不上屏
 - **影响**：需"设备首次使用 + current 端点单独故障"同时成立，概率低；时间戳
   未推进，下次进屏重试自愈
-- **预案**：`parse_forecast` 成功时也置 `data_valid = true`，或 partial 提示
-  路径不依赖 `data_valid`——下次动 `ui_weather.cpp` 时顺手做
+- **修复**：`71fa528` — `parse_forecast` 尾部置 `data_valid = true`（解析出的
+  forecast 本身就是值得上屏的数据；partial 提示路径随之复通）
 
 ## 附：键盘实测记录
 

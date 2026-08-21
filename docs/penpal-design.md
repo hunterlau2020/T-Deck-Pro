@@ -144,7 +144,12 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
   契约表格 `async_ipc_contract.md:13-18`）；penpal 8 类请求共用 `s_pp_q`——同屏同类生命周期、结果以
   `type` 字段分派，属登记过的合理偏差（kimi §1.4）。
 - HOME 刷新为**串行两段**：先 PALS，结果回来后再发 MAILBOX，以满足契约 §2.7
-  "UI busy 期间拒绝新请求"保证的同一时刻最多 1 个在飞结果；状态行提示两步进度。
+  "UI busy 期间拒绝新请求"保证的同一时刻最多 1 个在飞结果；状态行两段文案：
+  PALS 成功后 `PALS OK, syncing mailbox…`，MAILBOX 成功后 `Mailbox OK`
+  （哪步失败就止于哪步的报错）（kimi v2 §3.1）。**串行两段期间 busy 保持到
+  MAILBOX 结果消费完毕才释放**——第二段在 PALS 结果消费路径内直接链式发起、
+  busy 不清；若中间清 busy，用户此刻插入第三请求会挤占 busy，MAILBOX 链发起
+  被拒、HOME 停在"有笔友无列表"状态（kimi v2 §3.4）。
 
 ### 3.3 网络层：明文 HTTP 支持（不改 http_utils）
 
@@ -291,10 +296,14 @@ NVS 命名空间 "penpal"（键 base / key）
 │ │ Momo—what a wonderful name...    │ │  +/- 键滚动（`ui_ai_chat.cpp` 同款）
 │ │                                  │ │
 │ └──────────────────────────────────┘ │
-│ [Fix] [Polish]        （我的信才有） │  底部条件按钮
+│ [Fix] [Polish]     （非我信 DISABLED）│  底部条件按钮
 │ [Reply]               （第 1 页才有）│
 └──────────────────────────────────────┘
 ```
+
+- 非我信（NPC 来信）→ Fix/Polish 置 `LV_STATE_DISABLED`（灰显、**位置稳定**
+  不 hide——避免按钮增删引起布局跳动），不弹提示；Reply 可见性不受影响，
+  维持"第 1 页才有"（kimi v2 §3.1）。
 
 - 数据：线程信件**时间逆序**分页，**每页 1 封**，index 0 = 最新（首页）；
 - `|◀ Start` = 回到 index 0；`< Prev` = 更旧一封；`Next ▶` = 更新一封；
@@ -307,6 +316,9 @@ NVS 命名空间 "penpal"（键 base / key）
 - 单信正文 >4KB 截断加 `(truncated)`（UTF-8 边界，`ui_ai_chat.cpp` 同款）。
 
 ### 4.5 FB（纠错/润色结果）
+
+FB 页 `entry()` 按 §3.2 结果 `type`（FIX / POLISH）选择渲染布局——correction
+列表 vs polish 三段，两布局切换时全量重建（kimi v2 §3.2）。
 
 ```
 ┌──────────────────────────────────────┐
@@ -387,6 +399,7 @@ typedef struct { int id; bool mine; char sender[24];
 | `ui_deckpro.cpp` | ① menu_btn_list 追加第 19 项 `{SCREEN_PENPAL_ID, &img_penpal, "PenPal", 23, 13}`；② **菜单第 3 页**（4 处配套，缺一不可，kimi §1.1）：新增 `menu_screen3`（复制 screen2 样式、默认 HIDDEN）；页数公式**保持最大下标语义** `page_num = (MENU_BTN_NUM-1)/9`（18 项存量的 off-by-one 已由 `de78338` 修复；**不可**用 `(MENU_BTN_NUM+8)/9`——门控 `page_curr < page_num` 会放行到不存在的第 4 页）；**按钮创建循环** `if(i < 9) screen1 else screen2`（:453-458）改为按 `i/9` 三路分派到 screen1/2/3；`menu_get_gesture_dir` 加 `page_curr==2` 分支 + `ui_Panel4` 页点 2→3（现有页点按 child 下标寻址 :306-307，第 3 点需新建定位）；③ `scr_mgr_register(SCREEN_PENPAL_ID, &screen_penpal)` |
 | `factory.ino` | `loop()` 追加 `penpal_keyboard_poll()` |
 | `env.cfg.example` | 追加 `#PENPAL_BASE=` / `#PENPAL_KEY=` 注释行 |
+| `config_keys.h.example` | 同步追加两行注释模板 `// #define PENPAL_BASE_DEFAULT_DEV ...` / `// #define PENPAL_KEY_DEFAULT_DEV ...`——首次 clone 不改文件也能直接编过（kimi v2 §3.3） |
 | `src/assets.h` | `LV_IMG_DECLARE(img_penpal)` |
 | `config_keys.h`（本地） | 追加两个 `*_DEV` 定义（gitignored，不入库） |
 
@@ -450,3 +463,9 @@ typedef struct { int id; bool mine; char sender[24];
     README.md:78`、图标脚本"新增"而非"复用"、≥50 单位统一为字符、HOME 未配置
     行为、chat 指代落实为 `ui_ai_chat.cpp`）；R3 由"待评审偏差"降级为"遵循
     单槽先例"（§1.7 勘误）。跟踪项 T1-T5 全部落入正文，T6 已由 kimi 文件本身登记。
+- 2026-08-22 低危补句（kimi v2 复审 `penpal-design-review-result-kimi-v2.md`
+  **A 全量接受**，§3 四项 Low 预铺入文）：§3.2 两段状态行文案 + 串行两段 busy
+  保持窗口；§4.4 非我信 Fix/Polish DISABLED；§4.5 FB 页按 `type` 选布局；
+  §6 `config_keys.h.example` 模板行。Codex v2 复审
+  （`penpal-design-review-result-codex.md`，**C 部分接受**）P1 发信幂等键 /
+  P2 canonical subject 待 v3 修订处理——幂等键方案已提交服务端排期。
