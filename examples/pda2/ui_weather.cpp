@@ -297,10 +297,17 @@ static bool parse_forecast(const char *json)
      * endpoint failed: without this, a cold start with current down
      * left the screen blank AND silent (no partial hint either),
      * because refresh_cb/update_ui are gated on data_valid
-     * (review kimi-c27cb39 Low, issue_list 9.4) */
-    data_valid = true;
+     * (review kimi-c27cb39 Low, issue_list 9.4). But the JSON merely
+     * HAVING a list is not enough: an empty list, slots all in the
+     * past, or slots missing dt leave both counts at 0 - that is a
+     * failed parse, not partial data, or update_ui would paint
+     * zero-valued weather behind a Partial hint
+     * (review 71fa528..a58a73c Codex P2) */
+    bool have_forecast = (hourly_count > 0 || daily_count > 0);
+    if (have_forecast) data_valid = true;
+    else Serial.printf("[Weather] forecast parse: 0 usable slots - rejected\n");
     cJSON_Delete(root);
-    return true;
+    return have_forecast;
 }
 
 // --- Cache ---
