@@ -5,6 +5,15 @@
 
 ## 2026-08-22
 
+- **PenPal 实现评审结果 + 修复**：Codex 对 `b48f584..5329383` 出
+  **C 部分接受**（2×P1 + P2）——P1 memset 清零含 `std::string` 的
+  payload/polish 结构（首次 Send/Polish 即 UB）；P1 create 期自动同步被
+  entry gen++ 作废且 stale 分支不释放 busy（已配置设备进入即永久卡死，
+  根因=scr_mgr 注册期就 create）；P2 READ Close 不中止任务、连续重试
+  无界堆积。`acc3893` 全部修复：值初始化替代 memset、自动同步移 entry
+  （+同族"后台 SEND 退屏 busy 泄漏"顺带关闭）、`s_pp_inflight` 原子
+  计数并发上限 2。编译/烧录/冒烟通过；修复路径真机回归 ⏸；申请
+  `acc3893`
 - **笔友 App 实现落地**（§9 预案四个模块 commit，`b48f584..5329383`）：
   `b48f584` API client（8 端点 + 幂等键 + `thread_root_id` 锚点 + 配置链；
   http_utils 增量导出共享 TLS 策略）；`16c13e3` R9 落地后的客户端恢复

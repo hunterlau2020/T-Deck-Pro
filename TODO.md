@@ -109,16 +109,12 @@
 - [x] **实现 commit 4**：docs + 评审申请（含单队列偏差与 waitbox Close 拆分
       语义首例标注：SEND=后台继续，读/算型=取消）。
       → 本 commit；申请 `b48f584..5329383`（§7 回归清单已列入）。
+- [x] **实现评审结果处理**（Codex **C 部分接受**，2×P1+P2）：memset UB /
+      entry 自动同步 + busy 泄漏 / 僵尸任务并发 → 全部修复 `acc3893`
+      （issue_list §10），申请 `acc3893` 待复审。
 - [x] **设计 v3.1 复审**（2026-08-22 Codex 到达）：**A 全量接受**——P1 编辑锁 /
       P2 null 行过滤+R9 均确认，"v3.1 可作为 PenPal 实现基线"。
 - [ ] **（可选）Kimi 对 v3.1 再走一轮**——Codex 已 A，是否加评由用户定。
-- [ ] **实现 commit 1**：`penpal: API client`（penpal_api + 配置链 + env.cfg.example；
-      含幂等键生成/复用/作废 + thread_root_id 锚点封装）。**设计基线已批准，可开工**。
-- [ ] **实现 commit 2**：`penpal: screen UI`（ui_penpal×3 + poll 挂接）。
-- [ ] **实现 commit 3**：`penpal: menu icon + third menu page`（注意 §6 的 4 处配套，
-      幽灵页存量已由 `de78338` 修复）。
-- [ ] **实现 commit 4**：docs + 评审申请（含单队列偏差与 waitbox Close 拆分
-      语义首例标注：SEND=后台继续，读/算型=取消）。
 - 前置环境（用户侧）：测试服务器可达 + Windows 防火墙放行 8000 入站。
 
 ## 阶段 1：~~实现 `examples/allinone`~~（2026-08-19 用户决策：不再新开 allinone）

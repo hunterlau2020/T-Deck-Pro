@@ -279,6 +279,24 @@
   门控（0 条返回 false → 归入 partial/失败，不推进时间戳不落缓存，
   下次进屏重试）
 
+## 10. PenPal 实现评审发现（Codex 结果 `wifi-config-keyboard-review-result-b48f584..5329383-codex.md`，2026-08-22 到达；当日全部修复 `acc3893`）
+
+- **P1-a**：`ppw_payload_build`/`penpal_polish` 对含 `std::string` 的
+  `pp_send_req_t`/`pp_polish_t` 用 `memset` 清零——破坏已构造 string，
+  首次 Send/Polish 即 UB。修复：一律值初始化 `*out = T{};`
+  （`pp_fix_t`/`pp_tips_t` 本是 POD，顺带统一；规则=任何 `pp_*_t` 不 memset）
+- **P1-b**：`scr_mgr_register` 在**开机注册时**就调 `create()`（本仓
+  屏幕生命周期语义，penpal 首个依赖此事实的屏），create 期自动同步的
+  代次必被 `pp_entry()` gen++ 作废，stale 分支又不释放 busy → 已配置
+  设备每次进入永久卡 busy。修复：自动同步移 entry（gen++/active 之后），
+  `s_pp_autosynced` 一次访问一次 + destroy/Cfg 保存复位；**同族路径**
+  （后台 SEND 期间退屏）由 stale 丢弃分支补释放 busy
+- **P2**：READ Close 不中止任务（LLM 最长 180s），连续 Close/重试无界
+  堆积 8KiB 栈任务。修复：`s_pp_inflight` 原子计数 + 非链式请求上限 2
+  （1 僵尸 + 1 新）；可中止传输登记为可选后续
+- 修复路径真机回归（自动同步/busy 释放/并发上限/保存后重同步）⏸ 待用户
+  实测；申请 `acc3893`
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：
