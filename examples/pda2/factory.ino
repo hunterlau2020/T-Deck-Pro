@@ -754,7 +754,7 @@ void setup()
 
     /* TLS trust mode (AI Cfg "trust self-signed" toggle, review 2026-08-07-20
      * P2): apply the persisted setting before any http_utils consumer runs. */
-    extern bool openai_tls_apply(void);
+    extern void openai_tls_apply(void);
     openai_tls_apply();
 }
 
