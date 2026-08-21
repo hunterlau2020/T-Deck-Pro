@@ -107,6 +107,11 @@ static int daily_count = 0;
 static int32_t tz_offset = 0;
 static bool data_valid = false;
 static uint32_t last_fetch_time = 0;
+/* written by the fetch task after a PARTIAL refresh (one endpoint
+ * failed); read by refresh_cb (LVGL context) to keep a stale-data hint
+ * on screen. Cleared only by the next COMPLETE refresh - it describes
+ * the on-screen data, not the last attempt. */
+static bool partial_refresh = false;
 
 // --- UI state ---
 static lv_timer_t *refresh_timer = NULL;
@@ -138,10 +143,13 @@ static const lv_img_dsc_t *weather_icon_img(const char *ic)
 // --- JSON parsing (free 2.5 endpoints; One Call 3.0 requires a paid
 // subscription and is being sunset, user report: weather broke) ---
 
-static void parse_current_weather(const char *json)
+/* both parsers return true only when the payload parsed into a usable
+ * document - the fetch task uses that to tell a real outcome apart from
+ * "HTTP 200 with garbage" (review 2026-08-07-21 P2) */
+static bool parse_current_weather(const char *json)
 {
     cJSON *root = cJSON_Parse(json);
-    if (!root) return;
+    if (!root) return false;
 
     cJSON *tz = cJSON_GetObjectItem(root, "timezone");
     if (tz) tz_offset = tz->valueint;
@@ -174,12 +182,13 @@ static void parse_current_weather(const char *json)
     }
     data_valid = true;
     cJSON_Delete(root);
+    return true;
 }
 
-static void parse_forecast(const char *json)
+static bool parse_forecast(const char *json)
 {
     cJSON *root = cJSON_Parse(json);
-    if (!root) return;
+    if (!root) return false;
     const char *day_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
     cJSON *city = cJSON_GetObjectItem(root, "city");
@@ -190,7 +199,7 @@ static void parse_forecast(const char *json)
     cJSON *list = cJSON_GetObjectItem(root, "list");
     if (!list) {
         cJSON_Delete(root);
-        return;
+        return false;
     }
 
     hourly_count = 0;
@@ -285,6 +294,7 @@ static void parse_forecast(const char *json)
         strncpy(d->desc, day_desc, 15);
     }
     cJSON_Delete(root);
+    return true;
 }
 
 // --- Cache ---
@@ -406,9 +416,14 @@ static void weather_fetch_task(void *param)
     snprintf(url, sizeof(url),
              "https://api.openweathermap.org/data/2.5/weather?lat=%.4f&lon=%.4f&units=metric&appid=%s",
              lat, lon, key);
+    /* track the two endpoints separately (review 2026-08-07-21 P2):
+     * only a COMPLETE refresh may advance the freshness timestamp or
+     * persist the cache - a partial refresh used to cache a mixed
+     * old/new state as fresh and silence retries for a full hour */
+    bool cur_ok = false, fc_ok = false;
     http_response_t resp = http_get(url, 15000);
     if (resp.success && resp.status_code == 200) {
-        parse_current_weather(resp.body.c_str());
+        cur_ok = parse_current_weather(resp.body.c_str());
     } else {
         Serial.printf("[Weather] current fetch failed: HTTP %d %s\n",
                       resp.status_code, resp.error.c_str());
@@ -419,13 +434,14 @@ static void weather_fetch_task(void *param)
              lat, lon, key);
     resp = http_get(url, 15000);
     if (resp.success && resp.status_code == 200) {
-        parse_forecast(resp.body.c_str());
+        fc_ok = parse_forecast(resp.body.c_str());
     } else {
         Serial.printf("[Weather] forecast fetch failed: HTTP %d %s\n",
                       resp.status_code, resp.error.c_str());
     }
 
-    if (data_valid) {
+    if (cur_ok && fc_ok) {
+        partial_refresh = false;
         last_fetch_time = millis();
         /* re-resolve the city EVERY fetch so the name follows the
          * coordinates - a cached name from the previous location (e.g.
@@ -433,6 +449,15 @@ static void weather_fetch_task(void *param)
         fetch_city_name(lat, lon, key);
         save_cache();
         Serial.printf("[Weather] ok: %d hourly, %d daily\n", hourly_count, daily_count);
+    } else if (cur_ok || fc_ok) {
+        /* partial: keep whatever data is on screen, but do NOT advance
+         * last_fetch_time and do NOT save_cache() - the next screen
+         * entry retries instead of waiting out the 1 h window */
+        partial_refresh = true;
+        Serial.printf("[Weather] partial refresh (cur=%d fc=%d) - not cached, will retry\n",
+                      cur_ok, fc_ok);
+    } else {
+        Serial.printf("[Weather] refresh failed completely - cache untouched\n");
     }
     fetch_task = NULL;
     vTaskDelete(NULL);
@@ -523,7 +548,13 @@ static void update_ui()
 
 static void refresh_cb(lv_timer_t *t)
 {
-    if (data_valid && !fetch_task) update_ui();
+    if (data_valid && !fetch_task) {
+        update_ui();
+        /* AFTER update_ui (it clears the status line): if the on-screen
+         * data is a partial mix, say so instead of looking successful */
+        if (partial_refresh && status_label)
+            lv_label_set_text(status_label, "Partial data - press r to retry");
+    }
 }
 
 // --- Pagination ---
