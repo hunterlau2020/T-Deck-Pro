@@ -534,11 +534,19 @@ typedef struct { int id; bool mine; char sender[24];
 
 ## 9. commit 拆分预案（实现阶段）
 
+> **落地记录（2026-08-22）**：实际 5 个 commit——R9 服务端中途上线，在 1/2
+> 之间插入了客户端恢复 commit。真机回归（§7）与评审申请
+> `b48f584..5329383` 待办/在途。
+
 1. `penpal: API client for the pen-pal service` —— penpal_api + 配置链 + env.cfg.example
    （含 §2.2 幂等键生成/复用/作废、thread_root_id 锚点封装、响应头
-   `Idempotent-Replayed` 透传）
+   `Idempotent-Replayed` 透传）✅ `b48f584`
+   - 插入 `16c13e3`：R9 上线后的客户端恢复（§4.1/§4.4/§5 null 行"显示 +
+     只读"），设计同步 v3.2
 2. `penpal: screen UI - mailbox/compose/thread pages` —— ui_penpal×3 + poll 挂接
+   ✅ `b231dd3`
 3. `penpal: menu icon + third menu page` —— img_penpal + ui_deckpro 菜单
+   ✅ `5329383`
 4. `docs: penpal implementation notes + review request` —— README/TODO/CHANGELOG +
    `docs/reviews/wifi-config-keyboard-review-request-<首>..<末>.md`（含 §3.2 单队列
    偏差与 waitbox Close=取消首例说明、§7 回归清单）
@@ -602,3 +610,9 @@ typedef struct { int id; bool mine; char sender[24];
     两参皆缺 400）→ §2/§2.1 契约更新；v3.1 的"HOME 过滤 null 行"过渡方案
     退役，恢复"**显示 + 只读**"（§4.1/§4.4/§5/§7 同步、§8 R9 关闭）；随实现
     commit 2 落地（`penpal_get_thread` 在 `pen_pal_id<=0` 时省略该参数）。
+- 2026-08-22 **实现落地**（§9 全部完成，代码不再变 Design-follow）：
+  `b48f584`（API client）→ `16c13e3`（R9 恢复，即上条）→ `b231dd3`
+  （屏幕 UI 三件）→ `5329383`（菜单第 3 页 + 图标）+ docs/评审申请 commit。
+  编译/烧录/开机冒烟通过；§7 真机回归清单与评审申请
+  `docs/reviews/wifi-config-keyboard-review-request-b48f584..5329383.md`
+  待用户实测/评审在途。

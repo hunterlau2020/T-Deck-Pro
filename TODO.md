@@ -69,7 +69,7 @@
 - [x] `git filter-repo` 清理历史 + 仓库通告（2026-08-21：清洗 + force-push + 远程
       blob 验证干净，SECURITY.md 记录；`config_keys.h` 同日清空为模板）。
 
-## 笔友（PenPal）App（进行中，2026-08-21 起）
+## 笔友（PenPal）App（实现落地，待真机回归 + 评审，2026-08-21 起）
 
 - [x] **设计文档 v1**（`docs/penpal-design.md`，API schema 对本地测试服务器实测）。
 - [x] **两轮设计评审**：Codex 首轮（C 部分接受）+ Kimi k3 二轮（C 部分接受，
@@ -88,8 +88,27 @@
 - [x] **P2 实测定稿**（服务器恢复运行，2026-08-22 GET-only）：锚点单查 422 /
       `pen_pal_id=0` 400 / subject 单查 422 / 正常锚点 200 → null 行无读取
       通道，改为 HOME 过滤 + R9 服务端需求。
-- [ ] **R9 服务端需求**（交服务端排期）：`GET /emails` 的 `pen_pal_id` 改
+- [x] **R9 服务端需求**（交服务端排期）：`GET /emails` 的 `pen_pal_id` 改
       可选——`thread_root_id` 单独给出时按 `X-API-Key` 用户授权读取。
+      **服务端 2026-08-22 上线**（`scripts/remote_api_demo.py` 步骤 ⑪）；
+      GET-only 复测：root 50 → 200 / envelope `pen_pal_id=null` /
+      emails `[50,56]`；双参缺 → 400。
+- [x] **实现 commit 1**：`penpal: API client`（penpal_api + 配置链 + env.cfg.example；
+      含幂等键生成/复用/作废 + thread_root_id 锚点封装）。**设计基线已批准，可开工**。
+      → `b48f584`（含 http_utils 增量导出 `http_apply_tls`/`http_ensure_time`）。
+- [x] **R9 客户端恢复**（插在 1/2 之间）：`penpal_get_thread` `pen_pal_id<=0`
+      时省参（残留线程单参只读）+ 设计 v3.2 → `16c13e3`（HOME 恢复显示
+      null 行、THREAD 只读形态）。
+- [x] **实现 commit 2**：`penpal: screen UI`（ui_penpal×3 + poll 挂接）。
+      → 已完成 `b231dd3`（7 内部页、单队列异步框架、发送幂等+编辑锁、
+      R9 只读形态）。
+- [x] **实现 commit 3**：`penpal: menu icon + third menu page`（注意 §6 的 4 处配套，
+      幽灵页存量已由 `de78338` 修复）。
+      → 已完成 `5329383`（menu_screen3 + menu_page_apply 统一切页 +
+      循环页点 + img_penpal 生成脚本）。
+- [x] **实现 commit 4**：docs + 评审申请（含单队列偏差与 waitbox Close 拆分
+      语义首例标注：SEND=后台继续，读/算型=取消）。
+      → 本 commit；申请 `b48f584..5329383`（§7 回归清单已列入）。
 - [x] **设计 v3.1 复审**（2026-08-22 Codex 到达）：**A 全量接受**——P1 编辑锁 /
       P2 null 行过滤+R9 均确认，"v3.1 可作为 PenPal 实现基线"。
 - [ ] **（可选）Kimi 对 v3.1 再走一轮**——Codex 已 A，是否加评由用户定。
