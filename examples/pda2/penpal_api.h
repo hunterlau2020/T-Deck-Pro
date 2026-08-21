@@ -1,6 +1,6 @@
 /**
  * @file      penpal_api.h
- * @brief     Pen-pal service API client (design: docs/penpal-design.md v3.1).
+ * @brief     Pen-pal service API client (design: docs/penpal-design.md v3.2).
  *
  *            Own http/https transport (design §3.3): the LAN test server is
  *            plain http://, which http_utils cannot do - so this module
@@ -59,7 +59,7 @@ typedef struct {
 
 typedef struct {
     int root_id;             /* thread_root_id anchor - read/reply addressing (§2 ⑨) */
-    int pal_id;              /* pen_pal_id; null -> 0 sentinel, filtered by HOME (§5) */
+    int pal_id;              /* pen_pal_id; null -> 0 sentinel, read-only residual row (§5, R9) */
     char subject[64];        /* display copy (send side uses pp_send_req_t, §5) */
     char from[24];           /* mailbox "counterpart" */
     char last_sender[24];
@@ -166,9 +166,11 @@ bool penpal_get_mailbox(const char *base, const char *key,
                         pp_thread_row_t *out, int max, int *count,
                         bool *truncated, string *err);
 
-/** @brief Fetch one thread by its first-letter anchor (§2 ④): pen_pal_id is
- *         REQUIRED by the server (422/400 otherwise - live-tested 2026-08-22);
- *         null-pal rows have no read channel and are filtered by HOME (§4.1).
+/** @brief Fetch one thread by its first-letter anchor (§2 ④). pen_pal_id > 0
+ *         goes into the query; <= 0 (null-pal residual row sentinel) OMITS it -
+ *         the server's R9 channel reads participant-authorized by
+ *         thread_root_id alone (live-verified 2026-08-22; response
+ *         pen_pal_id is null on that path).
  *  Letters come back in server order (ascending/oldest-first); per-letter
  *  content is truncated to PP_LETTER_MAX and the oldest letters are dropped
  *  to fit PP_THREAD_BUDGET (§5) - *dropped reports how many (0 = none). */

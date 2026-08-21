@@ -402,7 +402,8 @@ bool penpal_get_mailbox(const char *base, const char *key,
             break;
         }
         /* pen_pal_id may be null on deleted-pal leftovers: keep the 0
-         * sentinel defensively; HOME filters those rows (§5, R9 pending). */
+         * sentinel; HOME shows those rows and THREAD opens them read-only
+         * via the residual channel (§5, R9 live since 2026-08-22). */
         out[n].root_id = j_int(it, "thread_root_id", 0);
         out[n].pal_id = j_int(it, "pen_pal_id", 0);
         s_copy_disp(out[n].subject, sizeof(out[n].subject), j_str(it, "subject"));
@@ -429,9 +430,16 @@ bool penpal_get_thread(const char *base, const char *key,
     if (dropped) *dropped = 0;
     if (!pp_cfg_ok(base, key, err)) return false;
 
+    /* pen_pal_id optional since server R9 (2026-08-22, live-verified): when
+     * omitted the thread is read participant-authorized by thread_root_id
+     * alone - the residual channel for deleted-pal leftovers (pal_id 0
+     * sentinel). Both params missing is still a 400. */
     char path[64];
-    snprintf(path, sizeof(path), "/emails?pen_pal_id=%d&thread_root_id=%d",
-             pen_pal_id, thread_root_id);
+    if (pen_pal_id > 0)
+        snprintf(path, sizeof(path), "/emails?pen_pal_id=%d&thread_root_id=%d",
+                 pen_pal_id, thread_root_id);
+    else
+        snprintf(path, sizeof(path), "/emails?thread_root_id=%d", thread_root_id);
     pp_http_t r = pp_request("GET", pp_url(base, path), NULL, NULL,
                              key, PP_TIMEOUT_CRUD_MS);
     if (!r.ok) {

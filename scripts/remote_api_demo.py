@@ -14,12 +14,19 @@
   ⑧ 回信 Tips       POST /api/v1/emails/{id}/tips (基于最近一封收到的信)
   ⑨ 同主题再写      POST /api/v1/emails → 新线程  (线程按首信分组演示)
   ⑩ 信箱概览        GET  /api/v1/emails/mailbox
+  ⑪ 残留线程读取    GET  /api/v1/emails?thread_root_id  (R9: 无 pen_pal_id)
 
 线程模型 (2026-08-21 线程按首信分组):
 - 每个线程由**首信**标识,锚点是 `EmailOut.thread_root_id` (首信即自身);
 - 精确取线程: `GET /emails?pen_pal_id&thread_root_id`;
 - `subject` 参数是**兼容通道** —— 跨线程合并同首信主题返回 (旧客户端);
 - `Re:` 回信未带锚点时自动接同对方同主题的最近线程;**裸标题一律新线程**。
+
+残留线程读取 (R9, 2026-08-22):
+- `GET /emails` 的 `pen_pal_id` **可选** —— 缺省时须给 `thread_root_id`,
+  按**参与者授权**读取 (线程首信收发双方须包含当前用户);
+- 解绑笔友后信箱的残留行 (`pen_pal_id=null`) 用此通道"显示 + 只读"
+  (客户端 HOME null 行);他人线程 403;响应 `pen_pal_id` 为 null。
 
 幂等重试 (2026-08-21 (十八),ESP32 客户端语义):
 - 创建型 POST 可带 `Idempotency-Key` 头 (客户端生成,惯例 32 位 hex):
@@ -253,6 +260,21 @@ def main() -> None:
     step(10, "GET /api/v1/emails/mailbox — 信箱线程概览")
     for row in rows:
         print(f"  pen_pal={row['pen_pal_id']} {row['subject']!r} {row['state']} 未读{row['unread']}")
+
+    # ⑪ R9: 残留线程读取 —— 仅凭 thread_root_id,不带 pen_pal_id --------------
+    # 解绑笔友 (网页端) 后信箱残留行 pen_pal_id=null,客户端用此通道"显示 +
+    # 只读";授权只看线程首信参与者 (与笔友是否解绑无关),故对任何自己的
+    # 线程都可直接演示。他人线程 → 403。
+    step(11, "R9 — GET /api/v1/emails?thread_root_id (无 pen_pal_id)")
+    r = client.get("/api/v1/emails", params={"thread_root_id": root_id})
+    r.raise_for_status()
+    residual = r.json()
+    ids = [e["id"] for e in residual["emails"]]
+    assert residual["pen_pal_id"] is None
+    assert email["id"] in ids  # 与步骤④同一线程 (③ 的首信在内)
+    print(f"  HTTP {r.status_code}  pen_pal_id={residual['pen_pal_id']}  emails={ids}")
+    print("  (残留线程读取通道: 响应 pen_pal_id 为 null,客户端据此渲染只读形态;")
+    print("   两参皆缺 → 400;他人线程 → 403)")
 
     print("\n演示完成 ✅  (远程 API 仅凭一个 X-API-Key 头完成全部笔友读写)")
 
