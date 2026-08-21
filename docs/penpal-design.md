@@ -34,7 +34,7 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
 | ① | `/pen-pals` | GET | 笔友列表（首页 icon 行） |
 | ② | `/topics/suggestions` | GET | 推荐写作主题（按年龄段题库） |
 | ③ | `/emails` | POST | 写信（body 带 `topic_id` 可选；**可带 `Idempotency-Key` 头**，§2.2） |
-| ④ | `/emails?pen_pal_id&thread_root_id` | GET | 读线程（**按首信锚点精确取**，v3 起；`subject` 参数为兼容通道——跨线程合并同主题返回，仅旧客户端用；**null 笔友残留行**不带 `pen_pal_id`、仅 `thread_root_id`，未实测见 §2.1） |
+| ④ | `/emails?pen_pal_id&thread_root_id` | GET | 读线程（**按首信锚点精确取**，v3 起；`subject` 参数为兼容通道——跨线程合并同主题返回，仅旧客户端用；**`pen_pal_id` 必填且 0 被拒**——2026-08-22 实测：缺参 422、`=0` 400、正常锚点查询 200，故 null 笔友残留行暂无读取通道，HOME 隐藏 §4.1，服务端需求见 §8 R9） |
 | ⑤ | `/emails/{id}/correction` | POST | 纠错（仅自己的信） |
 | ⑥ | `/emails/{id}/polish` | POST | 润色（仅自己的信） |
 | ⑦ | `/emails`（body 带 `thread_root_id` 锚点） | POST | 回信（subject 仍带 `Re: ` 前缀——锚点缺失时的服务端兜底，v3 起双保险） |
@@ -73,8 +73,14 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
   `thread_root_id` 寻址；
 - `state` 实测取值：`pending`（等回信）/ `replied`（已回）/ `sent`（已发出）；
 - `counterpart` = 对端显示名（首页行的"发送者名称"用它 + `last_sender`）；
-- **`pen_pal_id` 可为 `null`**（笔友关系已删但线程残留，实测 Sophie 行）→
-  线程打开时只读、隐藏回信按钮（§4.4）。
+- **`pen_pal_id` 可为 `null`**（笔友关系已删但线程残留，实测 Sophie 行
+  `thread_root_id=1`）。**2026-08-22 实测**（hunter 账号，GET-only）：
+  `?thread_root_id=1` 缺 `pen_pal_id` → **422**（`"Field required"`）；
+  `?pen_pal_id=0&thread_root_id=1` → **400**；`?subject=…` 缺 `pen_pal_id`
+  同 422；带 pal 的 `?pen_pal_id=14&thread_root_id=50` → 200。**结论：null
+  行当前无任何可用的读取通道**（精确路与 subject 回落路都要 `pen_pal_id`）
+  → HOME 过滤 null 行（§4.1）；服务端把 `pen_pal_id` 改可选（§8 R9）后
+  恢复"显示 + 只读"。
 
 **④ thread**（`?pen_pal_id&thread_root_id` 精确锚点查询）：
 ```json
@@ -275,7 +281,9 @@ NVS 命名空间 "penpal"（键 base / key）
   （§5 结构体两字段都有）；`last_at` 显示 `MM-DD HH:MM`
   （ISO 串截取，不转时区——服务端时间即本地时间）；
 - 状态列：`unread>0` 显示 `[Nnew]`；`state` 缩写 `pend/repl/sent`；
-- `pen_pal_id=null` 的行照常显示（THREAD 内只读）；
+- `pen_pal_id=null` 的行**过滤不显示**（服务端无读取通道，2026-08-22 实测
+  §2.1；显示打不开的行违背"可读"直觉——Codex v3 P2 处置）。服务端上线
+  R9 后改回"显示 + 只读"；
 - 键盘：`+/-`（Sym/Alt 层）= 翻页，`\n` = Sync，`\b` = 返回菜单；
 - Sync = 串行 PALS→MAILBOX 刷新（NPC 回信后手动拉取）。
 - **base/key 未配置**（解析链全空）时：HOME 正常进入，icon 行/列表区显示空、
@@ -371,9 +379,10 @@ NVS 命名空间 "penpal"（键 base / key）
 - 数据：线程信件**时间逆序**分页，**每页 1 封**，index 0 = 最新（首页）；
 - `|◀ Start` = 回到 index 0；`< Prev` = 更旧一封；`Next ▶` = 更新一封；
   到边界时按钮置灰；
-- `pal_id == 0`（null→0 哨兵，§5；笔友已删线程残留行）：信头下提示
-  `pal removed - read only`，隐藏 Reply；取数按 §2.1——仅
-  `thread_root_id` 查询（未实测），拒绝则回落 subject 兼容通道只读展示；
+- `pal_id == 0`（null→0 哨兵，§5；笔友已删线程残留行）：**HOME 已过滤
+  null 行（§4.1），正常不出现**——哨兵解析保留作防御（服务端字段回归
+  null 时 UI 不崩）；R9 上线后此处恢复"信头提示 `pal removed - read only`
+  + 隐藏 Reply"的只读形态；
 - **我的信**（`sender_user_id != null`）→ `Fix` / `Polish` → FB 页（异步 180s）；
 - **第 1 页**（index 0）→ `Reply` → COMPOSE(reply)；
 - 键盘：`+/-` 滚动正文，`\b` 返回 HOME；
@@ -437,12 +446,11 @@ typedef struct { int id; bool mine; char sender[24];
 ```
 
 - **null 哨兵**：mailbox 的 `pen_pal_id == null` 解析为 `pal_id = 0`（服务端 id
-  从 1 起，0 不做合法 id 使用）；§4.4 以 `pal_id == 0` 判只读线程（kimi §1.6）。
-  **null 行的线程取数**（Codex v3 复审 P2）：不带 `pen_pal_id`，仅
-  `?thread_root_id=<root>`（按 `X-API-Key` 用户授权读取；**该形态未实测**——
-  实现前置 §7-2）；若服务端拒绝（4xx），**回落 subject 兼容通道**
-  `?pen_pal_id&subject`（残留行 subject 必在）只读展示——合并同题多线程的
-  语义缺陷在残留行上可接受；两路皆拒则登记服务端补 deleted-pal 查询。
+  从 1 起，0 不做合法 id 使用；kimi §1.6）。**null 行的处置（Codex v3 复审
+  P2，2026-08-22 实测定稿）**：服务端 `GET /emails` 的 `pen_pal_id` 必填
+  （缺参 422）且拒 0（400）→ null 行无读取通道，HOME 渲染时**过滤**
+  `pal_id == 0` 的行；哨兵解析保留作防御（字段意外为 null 时 UI 不崩）。
+  R9 上线（§8）后恢复"显示 + 只读"。
 - **subject 的两副面孔（Codex v2 P2）**：定长 `subject[64]` 只是**显示拷贝**
   （超长按 UTF-8 边界截断加 `...`）；**发送侧 canonical 副本走
   `std::string`**（§4.2 输入限 56 字节，`Re: `+56=60 恒在显示缓冲内，
@@ -483,10 +491,9 @@ typedef struct { int id; bool mine; char sender[24];
 1. **编译**：`python -m platformio run -e pda2`。
 2. **服务端预验**（PC 侧，**GET-only，不写测试数据**）：
    `curl -H "X-API-Key: <key>" http://<PC 局域网 IP>:8000/api/v1/pen-pals` 通过；
-   **v3.1 新增**：mailbox 找到 `pen_pal_id=null` 行后
-   `curl -H "X-API-Key: <key>" ".../api/v1/emails?thread_root_id=<root>"`——
-   200 返回该线程则 §2.1 主路成立；4xx 则确认回落路径并在 §8 登记服务端
-   需求（Codex v3 P2，实现前置）。后端监听 0.0.0.0、Windows 防火墙 8000
+   **null 行查询已于 2026-08-22 实测完毕**（§2.1：锚点单查 422 / `pen_pal_id=0`
+   400 / 正常锚点 200 → R9 处置）；R9 上线后重跑
+   `?thread_root_id=1` 应 200。后端监听 0.0.0.0、Windows 防火墙 8000
    入站放行（**用户侧动作**）。
 3. **烧录** COM5（先停串口监控——既定流程）。
 4. **真机回归清单**（评审申请 §验证状态）：
@@ -506,7 +513,8 @@ typedef struct { int id; bool mine; char sender[24];
    - **同题双线程**（网页端同 subject 再写一封）：HOME 两行各自可开、互不
      混信（thread_root_id 锚点回归）；Reply 落在正确线程
    - 发信后 ~2 分钟 Sync → NPC 回信出现 → 开线程 → Reply + Tips
-   - `pen_pal_id=null` 行（Sophie）只读
+   - `pen_pal_id=null` 行（Sophie）**不出现在 HOME**（过滤，§4.1）；R9 上线后
+     重验：显示 + 只读 + 隐藏 Reply
    - 菜单第 3 页：第 19 项图标显示；左右滑 3 页往返；第 3 页继续左滑**不越界**
      （kimi §1.1 回归——18 项存量幽灵页已由 `de78338` 修复，19 项后同款验证）
    - 断网（关热点）下各操作报错不卡死；waitbox Close 可取消
@@ -524,6 +532,7 @@ typedef struct { int id; bool mine; char sender[24];
 | R6 | LLM 端点 180s 阻塞体验 | waitbox 秒级倒计时 + Close 取消（代次丢弃，`s_pp_busy_gen` 释放规则见 §3.2） |
 | R7 | COMPOSE 草稿不落盘 | v1 取舍（§5）；真机试用后决定是否补 `/penpal.draft` |
 | R8 | 明文 http 传输 key/信件 | 测试环境接受；生产部署换 https（客户端已支持，TLS 策略复用现有开关） |
+| R9 | **null 笔友残留线程不可读**（`pen_pal_id` 必填且 0 被拒，2026-08-22 实测 §2.1） | 客户端基线：HOME 过滤 null 行；**服务端需求**（交服务端排期，同幂等键流程）：`GET /emails` 把 `pen_pal_id` 改为可选——`thread_root_id` 单独给出时按 `X-API-Key` 用户授权读取（删除笔友的残留线程仍属该用户）。上线后客户端恢复"显示 + 只读"（§4.1/§4.4） |
 
 ## 9. commit 拆分预案（实现阶段）
 
@@ -585,3 +594,7 @@ typedef struct { int id; bool mine; char sender[24];
   - **P2（null 笔友残留行无已定义查询）**：null 行不带 `pen_pal_id`、仅
     `thread_root_id` 查询（按 key 授权），**未实测**——登记为 §7-2 服务端
     预验前置；拒绝则回落 subject 兼容通道只读展示，两路皆拒登记服务端需求。
+    **同日实测定稿**（服务器恢复运行，GET-only）：锚点单查 422（`pen_pal_id`
+    "Field required"）、`pen_pal_id=0` 400、subject 单查同样 422、正常锚点
+    查询 200 → 主路与回落路均不可用，改为 **HOME 过滤 null 行 + R9 服务端
+    需求**（`pen_pal_id` 改可选，§8）；§4.1/§4.4/§5/§7 同步。

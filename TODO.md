@@ -85,6 +85,11 @@
 - [x] **设计 v3.1 修订**（2026-08-22）：P1 = SEND 在飞 COMPOSE 编辑锁 +
       消费时快照比对；P2 = null 行仅 `thread_root_id` 查询（未实测，登记
       §7-2 服务端预验前置；拒绝回落 subject 兼容通道）。
+- [x] **P2 实测定稿**（服务器恢复运行，2026-08-22 GET-only）：锚点单查 422 /
+      `pen_pal_id=0` 400 / subject 单查 422 / 正常锚点 200 → null 行无读取
+      通道，改为 HOME 过滤 + R9 服务端需求。
+- [ ] **R9 服务端需求**（交服务端排期）：`GET /emails` 的 `pen_pal_id` 改
+      可选——`thread_root_id` 单独给出时按 `X-API-Key` 用户授权读取。
 - [ ] **设计 v3.1 复审**（Kimi/Codex 再走一轮；通过后进入实现）。
 - [ ] **实现 commit 1**：`penpal: API client`（penpal_api + 配置链 + env.cfg.example；
       含幂等键生成/复用/作废 + thread_root_id 锚点封装）。

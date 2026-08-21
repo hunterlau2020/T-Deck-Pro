@@ -5,6 +5,10 @@
 
 ## 2026-08-22
 
+- **P2 实测定稿**（服务器恢复运行，GET-only）：`GET /emails` 的 `pen_pal_id`
+  必填（缺 422）且拒 0（400），null 笔友残留行主路与 subject 回落路均不可用
+  → v3.1 改为 HOME 过滤 null 行 + **R9 服务端需求**（`pen_pal_id` 改可选，
+  `thread_root_id` 单查按 key 授权；上线后恢复"显示 + 只读"）
 - **笔友设计 v3 复审 → v3.1**（Codex 结果 `…-8109c9e.md` **C 部分接受**，
   两项边界定稿）：P1 后台 SEND 期间误清新编辑草稿 → SEND 在飞 COMPOSE
   编辑锁（Close 不解锁）+ 消费时 payload 快照比对；P2 `pen_pal_id=null`
