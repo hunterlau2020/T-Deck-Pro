@@ -237,6 +237,7 @@ static ui_indev_read_cb ui_get_gesture_dir = NULL;
 
 static lv_obj_t *menu_screen1;
 static lv_obj_t *menu_screen2;
+static lv_obj_t *menu_screen3;
 static lv_obj_t *ui_Panel4;
 
 static lv_obj_t * menu_taskbar = NULL;
@@ -271,12 +272,36 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN8_ID,           &img_A7682E,     "A7682E",  23,   189},
     {SCREEN9_ID,           &img_lora,       "Shutdown",95,   189},
     {SCREEN12_ID,          &img_motor,      "Motor",   167,  189},
+    /* Page three: pen-pal letters (alone, 9/9/1) */
+    {SCREEN_PENPAL_ID,     &img_penpal,     "PenPal",  23,   13},
 };
 
 static void menu_btn_event_cb(lv_event_t *e)
 {
     struct menu_btn *tgr = (struct menu_btn *)e->user_data;
     scr_mgr_push(tgr->idx, false);
+}
+
+/* Show menu page `page_curr`, hide the others, repaint the dots. Shared by
+ * the gesture handler and create0()'s initial state (3 pages since PenPal,
+ * page 3 = menu_screen3). */
+static void menu_page_apply(void)
+{
+    lv_obj_t *pages[3] = {menu_screen1, menu_screen2, menu_screen3};
+
+    for(int i = 0; i <= page_num && i < 3; i++) {
+        if(i == page_curr) {
+            lv_obj_clear_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if(ui_Panel4 == NULL) return;      /* no dots when the menu is single-page */
+    for(int i = 0; i <= page_num; i++) {
+        lv_color_t c = (i == page_curr) ? lv_color_hex(0x000000) : lv_color_hex(0xFFFFFF);
+        lv_obj_set_style_bg_color(lv_obj_get_child(ui_Panel4, i), c, LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
 }
 
 static void menu_get_gesture_dir(int dir)
@@ -298,20 +323,9 @@ static void menu_get_gesture_dir(int dir)
         else{
             return ;
         }
-    }   
-
-    if(page_curr == 1) {
-        lv_obj_clear_flag(menu_screen2, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(menu_screen1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_style_bg_color(lv_obj_get_child(ui_Panel4, 0), lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(lv_obj_get_child(ui_Panel4, 1), lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-
-    } else if(page_curr == 0) {
-        lv_obj_clear_flag(menu_screen1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(menu_screen2, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_style_bg_color(lv_obj_get_child(ui_Panel4, 0), lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(lv_obj_get_child(ui_Panel4, 1), lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
     }
+
+    menu_page_apply();
 }
 
 static void menu_btn_create(lv_obj_t *parent, struct menu_btn *info)
@@ -360,7 +374,24 @@ static void menu_btn_create(lv_obj_t *parent, struct menu_btn *info)
     lv_obj_add_event_cb(btn, menu_btn_event_cb, LV_EVENT_CLICKED, (void *)info);
 }
 
-static void create0(lv_obj_t *parent) 
+/* Menu page container shared by menu_screen1/2/3 (identical styling;
+ * created hidden - create0() shows page 0 via menu_page_apply()). */
+static lv_obj_t *menu_page_create(lv_obj_t *parent, lv_coord_t height)
+{
+    lv_obj_t *page = lv_obj_create(parent);
+    lv_obj_set_size(page, lv_pct(100), height);
+    lv_obj_set_style_bg_color(page, DECKPRO_COLOR_BG, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(page, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_style_border_width(page, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(page, DECKPRO_COLOR_FG, LV_PART_MAIN);
+    lv_obj_set_style_border_side(page, LV_BORDER_SIDE_TOP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(page, 0, LV_PART_MAIN);
+    lv_obj_align(page, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
+    return page;
+}
+
+static void create0(lv_obj_t *parent)
 {
     int status_bar_height = 25;
 
@@ -416,27 +447,9 @@ static void create0(lv_obj_t *parent)
     // (page_curr < page_num), not the page count: N=18 -> index 0..1.
     page_num = (MENU_BTN_NUM - 1) / 9;
 
-    menu_screen1 = lv_obj_create(parent);
-    lv_obj_set_size(menu_screen1, lv_pct(100), LV_VER_RES - status_bar_height);
-    lv_obj_set_style_bg_color(menu_screen1, DECKPRO_COLOR_BG, LV_PART_MAIN);
-    lv_obj_set_scrollbar_mode(menu_screen1, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_style_border_width(menu_screen1, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(menu_screen1, DECKPRO_COLOR_FG, LV_PART_MAIN);
-    lv_obj_set_style_border_side(menu_screen1, LV_BORDER_SIDE_TOP, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(menu_screen1, 0, LV_PART_MAIN);
-    lv_obj_align(menu_screen1, LV_ALIGN_BOTTOM_MID, 0, 0);
-    // lv_obj_add_flag(menu_screen1, LV_OBJ_FLAG_HIDDEN);
-
-    menu_screen2 = lv_obj_create(parent);
-    lv_obj_set_size(menu_screen2, lv_pct(100), LV_VER_RES - status_bar_height);
-    lv_obj_set_style_bg_color(menu_screen2, DECKPRO_COLOR_BG, LV_PART_MAIN);
-    lv_obj_set_scrollbar_mode(menu_screen2, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_style_border_width(menu_screen2, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(menu_screen2, DECKPRO_COLOR_FG, LV_PART_MAIN);
-    lv_obj_set_style_border_side(menu_screen2, LV_BORDER_SIDE_TOP, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(menu_screen2, 0, LV_PART_MAIN);
-    lv_obj_align(menu_screen2, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_add_flag(menu_screen2, LV_OBJ_FLAG_HIDDEN);
+    menu_screen1 = menu_page_create(parent, LV_VER_RES - status_bar_height);
+    menu_screen2 = menu_page_create(parent, LV_VER_RES - status_bar_height);
+    menu_screen3 = menu_page_create(parent, LV_VER_RES - status_bar_height);
 
     if(ui_test_a7682e() == false)
     {
@@ -454,8 +467,10 @@ static void create0(lv_obj_t *parent)
     for(int i = 0; i < MENU_BTN_NUM; i++) {
         if(i < 9) {
             menu_btn_create(menu_screen1, &menu_btn_list[i]);
-        } else {
+        } else if(i < 18) {
             menu_btn_create(menu_screen2, &menu_btn_list[i]);
+        } else {
+            menu_btn_create(menu_screen3, &menu_btn_list[i]);
         }
     }
 
@@ -477,23 +492,21 @@ static void create0(lv_obj_t *parent)
         lv_obj_set_style_shadow_width(ui_Panel4, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
         lv_obj_set_style_shadow_spread(ui_Panel4, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
 
-        lv_obj_t *ui_Button11 = lv_btn_create(ui_Panel4);
-        lv_obj_set_width(ui_Button11, 10);
-        lv_obj_set_height(ui_Button11, 10);
-        lv_obj_add_flag(ui_Button11, LV_OBJ_FLAG_SCROLL_ON_FOCUS);     /// Flags
-        lv_obj_clear_flag(ui_Button11, LV_OBJ_FLAG_CHECKABLE);      /// Flags
-        lv_obj_set_style_radius(ui_Button11, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_width(ui_Button11, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(ui_Button11, DECKPRO_COLOR_FG, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-        lv_obj_t *ui_Button12 = lv_btn_create(ui_Panel4);
-        lv_obj_set_width(ui_Button12, 10);
-        lv_obj_set_height(ui_Button12, 10);
-        lv_obj_add_flag(ui_Button12, LV_OBJ_FLAG_SCROLL_ON_FOCUS);     /// Flags
-        lv_obj_clear_flag(ui_Button12, LV_OBJ_FLAG_CHECKABLE);      /// Flags
-        lv_obj_set_style_radius(ui_Button12, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_width(ui_Button12, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+        /* one dot per menu page (page_num is the max page index) */
+        for(int i = 0; i <= page_num; i++) {
+            lv_obj_t *dot = lv_btn_create(ui_Panel4);
+            lv_obj_set_width(dot, 10);
+            lv_obj_set_height(dot, 10);
+            lv_obj_add_flag(dot, LV_OBJ_FLAG_SCROLL_ON_FOCUS);     /// Flags
+            lv_obj_clear_flag(dot, LV_OBJ_FLAG_CHECKABLE);      /// Flags
+            lv_obj_set_style_radius(dot, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_border_width(dot, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_bg_color(dot, DECKPRO_COLOR_FG, LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
     }
+
+    /* initial page state: show page 0, paint the active dot */
+    menu_page_apply();
 }
 
 static void entry0(void) {
@@ -4414,6 +4427,9 @@ void ui_deckpro_entry(void)
 
     extern scr_lifecycle_t screen_ai_cfg;
     scr_mgr_register(SCREEN_AI_CFG_ID, &screen_ai_cfg);
+
+    extern scr_lifecycle_t screen_penpal;
+    scr_mgr_register(SCREEN_PENPAL_ID, &screen_penpal);
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);
