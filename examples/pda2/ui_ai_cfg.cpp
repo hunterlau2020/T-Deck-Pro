@@ -345,10 +345,14 @@ static void ai_tls_sw_cb(lv_event_t *e)
     lv_obj_t *sw = lv_event_get_target(e);
     const bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
     if (openai_tls_set(on)) {
+        /* the status line spells out the SCOPE: this is a device-level
+         * transport setting applied to every http_utils consumer
+         * (weather, dict, WiFi Test...), not just AI endpoints
+         * (review kimi third-batch Low, issue_list 7.4) */
         lv_label_set_text(ai_status_lab,
-                          on ? "TLS: trust self-signed (ON)"
-                             : "TLS: CA verify (OFF)");
-        Serial.printf("[AICfg] tls insecure=%d\n", on ? 1 : 0);
+                          on ? "TLS: ALL HTTPS trust self-signed"
+                             : "TLS: ALL HTTPS CA verify");
+        Serial.printf("[AICfg] tls insecure=%d (applies to ALL HTTPS)\n", on ? 1 : 0);
     } else {
         /* NVS failure: revert the control to the persisted state */
         if (openai_tls_insecure()) {
