@@ -112,6 +112,13 @@
 - [x] **实现评审结果处理**（Codex **C 部分接受**，2×P1+P2）：memset UB /
       entry 自动同步 + busy 泄漏 / 僵尸任务并发 → 全部修复 `acc3893`
       （issue_list §10），申请 `acc3893` 待复审。
+- [x] **首轮真机回归修复**（issue_list §12）：返回必崩（`pp_state_t` ~15KB
+      临时对象压爆 8KB loopTask 栈，`423b312`）/ 菜单滑动连发跳页
+      （手势边沿触发，`bfa7a16`）/ WiFi Test 显示 LAN IP（`e70b591`）——
+      三处真机复测通过；申请 `423b312..bfa7a16`。
+- [ ] **sync 真机回归**：设备端 env.cfg 已注入（`PENPAL_BASE=192.168.3.186`，
+      writer 固件 `other/env_writer/`）；等服务器重启为 `--host 0.0.0.0` +
+      防火墙放行 8000 后按 HOME Sync 验证。
 - [x] **设计 v3.1 复审**（2026-08-22 Codex 到达）：**A 全量接受**——P1 编辑锁 /
       P2 null 行过滤+R9 均确认，"v3.1 可作为 PenPal 实现基线"。
 - [ ] **（可选）Kimi 对 v3.1 再走一轮**——Codex 已 A，是否加评由用户定。

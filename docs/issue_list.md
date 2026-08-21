@@ -297,6 +297,35 @@
 - 修复路径真机回归（自动同步/busy 释放/并发上限/保存后重同步）⏸ 待用户
   实测；申请 `acc3893`
 
+## 12. PenPal 首轮真机回归发现（2026-08-22，三处同日修复并复测通过）
+
+> 首轮真机回归（acc3893 烧录后）暴露 1 崩溃 + 1 导航缺陷 + 1 易用性需求；
+> 串口证据 + 用户复测全过。相关 commit：`423b312`（penpal）/ `e70b591`
+>（wifi）/ `bfa7a16`（menu）。
+
+- ✅ **P0 返回即重启（每次必现）**：串口 `Stack canary watchpoint triggered
+  (loopTask)`，崩点在 `scr_mgr_pop` 链内（`[KBD] char fifo cleared` 已打印）。
+  根因 = `pp_destroy` 的 `pp = pp_state_t()`：**~15KB 聚合临时对象整体压栈**
+  （mailbox 24 行 + topics 16 + letters 64 + 杂项；loopTask 栈仅 8KB），任何
+  调用深度必炸。修复 `pp_state_reset()` 逐字段原地复位（数组逐元素值初始化，
+  最大元素临时 ~370B；字符串走元素析构，不 memset——§10 规则）；点击返回
+  同时改为 `lv_async_call` 延迟 pop（点击栈先回退，双击有 top==root 保护）。
+  **规则沉淀：UI 线程禁止对大聚合做 `= T()` 整体赋值**（全库扫描其余同款
+  均为 ≤400B 小结构，安全）。复测：点击/键盘返回均正常，
+  `[PenPal] destroy done` 打出，无重启。
+- ✅ **菜单滑动跳页（1→3 跳过 2）**：手势轮询器每 30ms 读
+  `lv_indev_get_gesture_dir`，而 LVGL 的 `gesture_dir` 从检测到下次按下前
+  一直有效（`lv_indev.c` 按下起点才复位 + `gesture_sent` 单发）→ 一次滑动
+  回调连发 N 次；两页时代被边界钳位掩盖，三页暴露。修复 = 边沿触发
+  （NONE→方向 只发一次）+ 回调 NULL 防护。复测：逐页翻，双向正常。
+- ✅ **WiFi Test 增加本机网卡 IP**（用户需求，排查 PenPal 服务器可达性）：
+  结果框 `Public IP:` + `LAN IP:` 两段，串口同步输出。
+- 📌 **配套设备侧操作（无跟踪文件变更）**：SPIFFS `/env.cfg` 注入
+  `PENPAL_BASE=http://192.168.3.186:8000` + hunter 测试 key（一次性 writer
+  固件 `other/env_writer/`，gitignored；不走 uploadfs 避免 SPIFFS 整区擦除，
+  与 /chat.log 等共存）。**sync 真机回归仍 ⏸**：等服务器侧重启为
+  `--host 0.0.0.0`（现为 127.0.0.1，设备连不进）+ 防火墙放行 8000 入站。
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：

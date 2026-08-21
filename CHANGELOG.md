@@ -5,6 +5,15 @@
 
 ## 2026-08-22
 
+- **PenPal 首轮真机回归：1 崩溃 + 1 导航 + 1 需求全修**（`423b312` /
+  `e70b591` / `bfa7a16`，issue_list §12）：返回必崩 = `pp = pp_state_t()`
+  把 ~15KB 聚合临时对象压进 8KB loopTask 栈（改为 `pp_state_reset()` 逐字段
+  原地复位 + 点击返回 `lv_async_call` 延迟 pop）；菜单滑动连发跳页
+  （`gesture_dir` 松手前持续有效，30ms 轮询连发 N 次 → 边沿触发修复）；
+  WiFi Test 结果框增显示设备 LAN IP。三处均真机复测通过；sync 回归待
+  服务器改 `--host 0.0.0.0` + 防火墙放行后进行。设备端 `/env.cfg` 已注入
+  PenPal 测试配置（writer 固件方案，无跟踪文件变更）。申请
+  `423b312..bfa7a16`
 - **PenPal 实现评审结果 + 修复**：Codex 对 `b48f584..5329383` 出
   **C 部分接受**（2×P1 + P2）——P1 memset 清零含 `std::string` 的
   payload/polish 结构（首次 Send/Polish 即 UB）；P1 create 期自动同步被
