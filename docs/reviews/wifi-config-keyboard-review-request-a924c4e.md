@@ -7,6 +7,9 @@
   - `a924c4e` — `pda2: Setting screen explains SD mount failures`
 - **命名说明**：文件名 = 本轮实际覆盖 commit（含两端，非 git 区间记法）；
   评审范围以正文列表为准。
+- **哈希映射**（2026-08-22 补注）：文件名 `a924c4e` 为 filter-repo 历史清洗前
+  id，当前 HEAD 对应 **`23030c9`**（"pda2: Setting screen explains SD mount
+  failures"，Kimi 结果同注）；评审以当前 HEAD 为准。
 - **硬件**：T-Deck-Pro HD-V2（V1.1，25-09-15 批次，COM5，已烧录）
 
 ---

@@ -1,7 +1,7 @@
 # 笔友（PenPal）App 设计文档
 
 > 状态：**v2 修订稿，待复审**（2026-08-21）。v1 经两轮评审
-> （`penpal-design-review-result.md`、`penpal-design-review-result-k3.md`）；
+> （`penpal-design-review-result.md`、`penpal-design-review-result-kimi.md`）；
 > 本版落实 k3 的 3 条前置条件与建议同批项（见变更历史）。复审通过后按 §9 拆分预案实施。
 > 参考实现接口：`scripts/remote_api_demo.py`；API schema 于 2026-08-21 对本地测试服务器
 > `http://127.0.0.1:8000` 实测确认（curl GET 探测，见 §2）。
@@ -435,7 +435,7 @@ typedef struct { int id; bool mine; char sender[24];
 ## 变更历史
 
 - 2026-08-21 v1 初稿（待评审）。
-- 2026-08-21 v2 修订（落实 k3 评审 `penpal-design-review-result-k3.md` 的
+- 2026-08-21 v2 修订（落实 k3 评审 `penpal-design-review-result-kimi.md` 的
   **C 部分接受**结论）：
   - **前置 1（§1.1）**：§6 菜单页数公式改最大下标语义 `(MENU_BTN_NUM-1)/9`，
     补登按钮创建循环 `i/9` 三路分派与第 3 页点两处连带改动；18 项存量 off-by-one

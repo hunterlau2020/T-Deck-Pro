@@ -18,6 +18,12 @@
   不能断言为 FAT32 格式问题——改两行提示 `SD hint: mount failed` +
   `try FAT16/FAT32?`（事实 + 建议），两处过度断言注释同步改准确；
   申请 `c8f62f3`
+- **Kimi 双评审四份结果齐至（全 A）**：第三批 / `a924c4e`（与 Codex P2 意见
+  相反，分歧登记进 `c8f62f3` 申请；`a924c4e` 为清洗前 id，当前 HEAD 对应
+  `23030c9`）/ `de78338` / `c27cb39..3475c9b`；两个 Low 登记待办
+  （issue_list §7.4 Trust 开关影响面未注明、§9.4 冷启动 + 仅 forecast 成功
+  无 partial 提示）；k3 设计评审结果文件改名
+  `penpal-design-review-result-kimi.md`（引用同步，**设计 v2 复审仍未到达**）
 
 ## 2026-08-21
 

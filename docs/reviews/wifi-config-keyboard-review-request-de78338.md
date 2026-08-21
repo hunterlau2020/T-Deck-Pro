@@ -5,7 +5,7 @@
 - **关联分支**：`HD-V2-250915`
 - **关联 commit**（本轮 1 个）：
   - `de78338` — `menu: fix page_num off-by-one ghost page (k3 review 1.1)`
-- **背景**：第二轮笔友设计评审（`penpal-design-review-result-k3.md`，已归档 `8019da8`）
+- **背景**：第二轮笔友设计评审（`penpal-design-review-result-kimi.md`，已归档 `8019da8`）
   §1.1 指出设计稿的页数公式与 `ui_deckpro.cpp` 门控语义矛盾，核对时发现**当前固件
   本身**就带着这个 off-by-one——顺带在本批修复（先于 penpal 实现，独立成 commit）。
 - **已出列范围**（均 Codex 全量接受）：第 29 轮 `d22007d..4c3c9b1`、第 30 轮 `a2ecd7b`、
