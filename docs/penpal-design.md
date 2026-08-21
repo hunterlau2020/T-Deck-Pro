@@ -535,8 +535,12 @@ typedef struct { int id; bool mine; char sender[24];
 ## 9. commit 拆分预案（实现阶段）
 
 > **落地记录（2026-08-22）**：实际 5 个 commit——R9 服务端中途上线，在 1/2
-> 之间插入了客户端恢复 commit。真机回归（§7）与评审申请
-> `b48f584..5329383` 待办/在途。
+> 之间插入了客户端恢复 commit。评审申请 `b48f584..5329383` 已交（`ef975cf`）：
+> Codex **C**（2×P1 + P2）已由 `acc3893` 全修复（issue_list §10，申请待复审）。
+> 首轮探索性真机回归（issue_list §12）发现返回必崩 / 菜单滑页连发 / WiFi Test
+> 缺 LAN IP 三处，同日修复并复测通过（申请 `423b312..bfa7a16`）；**§7 正式
+> 回归清单仍未执行**——待服务器侧就绪（uvicorn `--host 0.0.0.0` 重启 +
+> 防火墙放行 8000，设备端 env.cfg 已注入）后随 acc3893 的 4 项修复路径一起跑。
 
 1. `penpal: API client for the pen-pal service` —— penpal_api + 配置链 + env.cfg.example
    （含 §2.2 幂等键生成/复用/作废、thread_root_id 锚点封装、响应头
@@ -548,8 +552,8 @@ typedef struct { int id; bool mine; char sender[24];
 3. `penpal: menu icon + third menu page` —— img_penpal + ui_deckpro 菜单
    ✅ `5329383`
 4. `docs: penpal implementation notes + review request` —— README/TODO/CHANGELOG +
-   `docs/reviews/wifi-config-keyboard-review-request-<首>..<末>.md`（含 §3.2 单队列
-   偏差与 waitbox Close=取消首例说明、§7 回归清单）
+   `docs/reviews/wifi-config-keyboard-review-request-b48f584..5329383.md`（含 §3.2 单队列
+   偏差与 waitbox Close=取消首例说明、§7 回归清单）✅ `ef975cf`
 
 ## 变更历史
 
