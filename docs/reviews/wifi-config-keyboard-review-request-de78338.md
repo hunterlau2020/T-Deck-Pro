@@ -17,7 +17,7 @@
 
 ## 1. 变更明细
 
-### 1.1 主菜单幽灵页（`de78338`，k3 评审 §1.1）
+### 1.1 主菜单幽灵页（`de78338`，kimi 评审 §1.1）
 
 - **问题**：`ui_deckpro.cpp` 中 `page_num = MENU_BTN_NUM / 9` 算的是**页数**（18 项 → 2），
   但手势门控 `menu_get_gesture_dir()` 的 `if(page_curr < page_num)` 把它当**最大下标**用。
@@ -57,7 +57,7 @@
 
 ## 4. 遗留项（简要）
 
-- 笔友 App：k3 设计评审 3 条 High 前置（页数公式/180s 超时/s_pp_busy_gen）→
+- 笔友 App：kimi 设计评审 3 条 High 前置（页数公式/180s 超时/s_pp_busy_gen）→
   设计文档修订中，修订后再走一轮设计评审
 - 历史申请文件名旧 hash（filter-repo 改写前 id，如 `3f654a5..4c3a331.md`）——
   结果文件永不改写，改名与否待用户定夺
