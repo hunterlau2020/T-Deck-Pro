@@ -115,6 +115,10 @@
 - **修复**：`a924c4e` — 挂载失败时区分"无卡/格式非 FAT"（`cardType()` 在 f_mount
   失败后仍保留检测类型），About System 屏加 `SD hint: need FAT32 / no card`，
   串口打印原因
+- **跟进**（`c8f62f3`，Codex a924c4e 评审 P2）："有卡但挂载失败"不能断言为格式
+  问题（SPI/初始化错误、FAT32 卡自身挂载错误同分支）——提示改两行
+  `SD hint: mount failed` + `try FAT16/FAT32?`（事实 + 建议，不作诊断）；
+  两处过度断言的注释同步改准确
 - **用户操作**：>32GB 卡用 guiformat/Rufus 格成 FAT32（MBR 分区表）后重启机器；
   FAT32 上限 2TB，SDHC/SDXC 均可
 
