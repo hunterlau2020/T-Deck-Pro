@@ -80,11 +80,12 @@
       180s / `s_pp_busy_gen`）+ 同批 8 项全部落实。
 - [x] **设计 v2 复审**（2026-08-22 到达）：Codex **C 部分接受**（P1 发信幂等 /
       P2 subject 缓冲）、Kimi **A**（4 Low 已预铺入设计稿）。
-- [x] **设计 v3 修订**（服务端 `Idempotency-Key` 落地后，2026-08-22）：P1 =
-      §2.2 幂等契约 + Close 按类型拆分（SEND 后台继续）+ RAM key 生命周期；
-      P2 = Title 56 字节 UTF-8 预算；跟进 `thread_root_id` 精确锚点（修 v2
-      同题多线程取数错误）。
-- [ ] **设计 v3 复审**（Kimi/Codex 再走一轮；通过后进入实现）。
+- [x] **设计 v3 复审**（2026-08-22 Codex 到达）：**C 部分接受**——P1 后台 SEND
+      误清新草稿、P2 null 笔友残留行无已定义查询（幂等/锚点/字节预算整改均通过）。
+- [x] **设计 v3.1 修订**（2026-08-22）：P1 = SEND 在飞 COMPOSE 编辑锁 +
+      消费时快照比对；P2 = null 行仅 `thread_root_id` 查询（未实测，登记
+      §7-2 服务端预验前置；拒绝回落 subject 兼容通道）。
+- [ ] **设计 v3.1 复审**（Kimi/Codex 再走一轮；通过后进入实现）。
 - [ ] **实现 commit 1**：`penpal: API client`（penpal_api + 配置链 + env.cfg.example；
       含幂等键生成/复用/作废 + thread_root_id 锚点封装）。
 - [ ] **实现 commit 2**：`penpal: screen UI`（ui_penpal×3 + poll 挂接）。

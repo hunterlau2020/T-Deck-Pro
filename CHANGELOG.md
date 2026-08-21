@@ -5,6 +5,12 @@
 
 ## 2026-08-22
 
+- **笔友设计 v3 复审 → v3.1**（Codex 结果 `…-8109c9e.md` **C 部分接受**，
+  两项边界定稿）：P1 后台 SEND 期间误清新编辑草稿 → SEND 在飞 COMPOSE
+  编辑锁（Close 不解锁）+ 消费时 payload 快照比对；P2 `pen_pal_id=null`
+  残留行查询未定义 → 仅 `thread_root_id` 查询（未实测，登记 §7-2 服务端
+  预验前置，拒绝回落 subject 兼容通道）。幂等键/线程锚点/标题字节预算
+  整改均获通过。v3.1 待复审
 - **笔友设计 v3**（服务端幂等键落地后修订，待复审）：新增 §2.2
   `Idempotency-Key` 契约（32 hex、重放 200 + `Idempotent-Replayed: true`，
   demo 实证）；§3.2 waitbox Close 按类型拆分——SEND"不再等待后台继续"

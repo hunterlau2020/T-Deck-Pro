@@ -1,10 +1,9 @@
 # 笔友（PenPal）App 设计文档
 
-> 状态：**v3 修订稿，待复审**（2026-08-22）。v1/v2 经三轮评审
+> 状态：**v3.1 修订稿，待复审**（2026-08-22）。v1/v2/v3 经四轮评审
 > （`penpal-design-review-result.md`、`penpal-design-review-result-kimi.md`、
-> Codex/Kimi v2 复审各一份）；本版关闭 Codex v2 复审的 P1（发信幂等键——服务端
-> 已实现，见 §2.2）与 P2（canonical subject，§4.2/§5），并跟进服务端 2026-08-21
-> 线程锚点演进（§2/§4.4）。复审通过后按 §9 拆分预案实施。
+> Codex/Kimi v2 复审各一份、Codex v3 复审 `…-8109c9e.md`）；本版关闭 Codex v3
+> 复审两项边界（SEND 在飞编辑锁 / null 笔友残留行查询定义，见变更历史）。
 > 参考实现接口：`scripts/remote_api_demo.py`；API schema 于 2026-08-21/22 对本地测试服务器
 > `http://127.0.0.1:8000` 实测确认（curl GET 探测 + demo 全流程，见 §2）。
 
@@ -35,7 +34,7 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
 | ① | `/pen-pals` | GET | 笔友列表（首页 icon 行） |
 | ② | `/topics/suggestions` | GET | 推荐写作主题（按年龄段题库） |
 | ③ | `/emails` | POST | 写信（body 带 `topic_id` 可选；**可带 `Idempotency-Key` 头**，§2.2） |
-| ④ | `/emails?pen_pal_id&thread_root_id` | GET | 读线程（**按首信锚点精确取**，v3 起；`subject` 参数为兼容通道——跨线程合并同主题返回，仅旧客户端用） |
+| ④ | `/emails?pen_pal_id&thread_root_id` | GET | 读线程（**按首信锚点精确取**，v3 起；`subject` 参数为兼容通道——跨线程合并同主题返回，仅旧客户端用；**null 笔友残留行**不带 `pen_pal_id`、仅 `thread_root_id`，未实测见 §2.1） |
 | ⑤ | `/emails/{id}/correction` | POST | 纠错（仅自己的信） |
 | ⑥ | `/emails/{id}/polish` | POST | 润色（仅自己的信） |
 | ⑦ | `/emails`（body 带 `thread_root_id` 锚点） | POST | 回信（subject 仍带 `Re: ` 前缀——锚点缺失时的服务端兜底，v3 起双保险） |
@@ -176,6 +175,13 @@ LLM 类端点（correction/polish/tips）服务端调用大模型，**耗时可�
     busy 释放。v2 的"Close=取消"会把已发出的 POST 变成结果未确认，用户重按
     Send 即双发（Codex P1 原案）；幂等键（§2.2）+ 后台继续双保险后，重按
     Send 也只重放同一封。
+  - **SEND 在飞期间 COMPOSE 编辑锁**（Codex v3 复审 P1 修复）：Send 按下即把
+    Title/Body textarea 与 Pick/Tips 置 `LV_STATE_DISABLED`，Close（后台继续）
+    **不解锁**，状态行 `sending in background...`——否则用户 Close 后编辑的
+    新草稿会在旧请求成功时被"清空 COMPOSE"语义误清。结果消费时仍**比对
+    payload 快照**才清空（锁下必相等，双保险）；不等等（未来旁路编辑）则
+    保留草稿、状态行单独提示 `previous send ok`。失败/超时 → 不清空、解锁、
+    报错。屏销毁随屏重置（重建后 payload 不可能等于快照，key 自然失效）。
   - **这是全仓首例 waitbox 可取消/可收起交互**（现有 chat waitbox 打开时吞噬
     全部输入），commit 4 评审申请书将显式标注（kimi §1.9/T2）。
 - **幂等键生命周期（客户端，RAM）**：Send 按下 → 校验通过 → `esp_fill_random`
@@ -366,7 +372,8 @@ NVS 命名空间 "penpal"（键 base / key）
 - `|◀ Start` = 回到 index 0；`< Prev` = 更旧一封；`Next ▶` = 更新一封；
   到边界时按钮置灰；
 - `pal_id == 0`（null→0 哨兵，§5；笔友已删线程残留行）：信头下提示
-  `pal removed - read only`，隐藏 Reply；
+  `pal removed - read only`，隐藏 Reply；取数按 §2.1——仅
+  `thread_root_id` 查询（未实测），拒绝则回落 subject 兼容通道只读展示；
 - **我的信**（`sender_user_id != null`）→ `Fix` / `Polish` → FB 页（异步 180s）；
 - **第 1 页**（index 0）→ `Reply` → COMPOSE(reply)；
 - 键盘：`+/-` 滚动正文，`\b` 返回 HOME；
@@ -431,6 +438,11 @@ typedef struct { int id; bool mine; char sender[24];
 
 - **null 哨兵**：mailbox 的 `pen_pal_id == null` 解析为 `pal_id = 0`（服务端 id
   从 1 起，0 不做合法 id 使用）；§4.4 以 `pal_id == 0` 判只读线程（kimi §1.6）。
+  **null 行的线程取数**（Codex v3 复审 P2）：不带 `pen_pal_id`，仅
+  `?thread_root_id=<root>`（按 `X-API-Key` 用户授权读取；**该形态未实测**——
+  实现前置 §7-2）；若服务端拒绝（4xx），**回落 subject 兼容通道**
+  `?pen_pal_id&subject`（残留行 subject 必在）只读展示——合并同题多线程的
+  语义缺陷在残留行上可接受；两路皆拒则登记服务端补 deleted-pal 查询。
 - **subject 的两副面孔（Codex v2 P2）**：定长 `subject[64]` 只是**显示拷贝**
   （超长按 UTF-8 边界截断加 `...`）；**发送侧 canonical 副本走
   `std::string`**（§4.2 输入限 56 字节，`Re: `+56=60 恒在显示缓冲内，
@@ -471,7 +483,11 @@ typedef struct { int id; bool mine; char sender[24];
 1. **编译**：`python -m platformio run -e pda2`。
 2. **服务端预验**（PC 侧，**GET-only，不写测试数据**）：
    `curl -H "X-API-Key: <key>" http://<PC 局域网 IP>:8000/api/v1/pen-pals` 通过；
-   后端监听 0.0.0.0、Windows 防火墙 8000 入站放行（**用户侧动作**）。
+   **v3.1 新增**：mailbox 找到 `pen_pal_id=null` 行后
+   `curl -H "X-API-Key: <key>" ".../api/v1/emails?thread_root_id=<root>"`——
+   200 返回该线程则 §2.1 主路成立；4xx 则确认回落路径并在 §8 登记服务端
+   需求（Codex v3 P2，实现前置）。后端监听 0.0.0.0、Windows 防火墙 8000
+   入站放行（**用户侧动作**）。
 3. **烧录** COM5（先停串口监控——既定流程）。
 4. **真机回归清单**（评审申请 §验证状态）：
    - Cfg 保存 → 状态行确认；重进屏值保留（NVS 生效）
@@ -483,6 +499,9 @@ typedef struct { int id; bool mine; char sender[24];
    - **幂等重放**：发送后（未确认路径）重按 Send / 断网重连后重发 → 线程只有
      一封信、状态行 `sent ok (replayed)`（对照网页端线程计数）；编辑一字后
      重发 = 新信（新 key）
+   - **后台发送编辑锁**（Codex v3 P1）：Send → Close 收起等待框 → Title/Body/
+     Pick/Tips 均不可编辑（灰显）、状态行 `sending in background...`；旧结果
+     成功后 COMPOSE 清空解锁；失败后草稿保留解锁
    - THREAD：3 个导航按钮、Fix/Polish（我的信）、第 1 页 Reply
    - **同题双线程**（网页端同 subject 再写一封）：HOME 两行各自可开、互不
      混信（thread_root_id 锚点回归）；Reply 落在正确线程
@@ -557,3 +576,12 @@ typedef struct { int id; bool mine; char sender[24];
     §5 `pp_thread_row_t` 加 `root_id`。
   - ⑩ `/users/me/profile` 已上线（demo 步骤⓪），仍暂不接入（本人≠笔友，
     §4.6/R2 措辞同步）；§7 回归补幂等重放/同题双线程/Title 字节截断三项。
+- 2026-08-22 **v3.1 修订**（Codex v3 复审 `penpal-design-review-result-codex-8109c9e.md`
+  **C 部分接受**，两项边界定稿）：
+  - **P1（后台 SEND 误清新草稿）**：SEND 在飞期间 COMPOSE 编辑锁（Title/Body/
+    Pick/Tips `LV_STATE_DISABLED`，Close 不解锁）；结果消费比对 payload 快照
+    才清空（双保险），不等则保留草稿单独提示 `previous send ok`；§7 补
+    "Close→编辑被锁→旧结果成功"回归。
+  - **P2（null 笔友残留行无已定义查询）**：null 行不带 `pen_pal_id`、仅
+    `thread_root_id` 查询（按 key 授权），**未实测**——登记为 §7-2 服务端
+    预验前置；拒绝则回落 subject 兼容通道只读展示，两路皆拒登记服务端需求。
