@@ -293,6 +293,12 @@ static bool parse_forecast(const char *json)
         d->pop_pct = day_pop;
         strncpy(d->desc, day_desc, 15);
     }
+    /* a parsed forecast is data worth showing even when the current
+     * endpoint failed: without this, a cold start with current down
+     * left the screen blank AND silent (no partial hint either),
+     * because refresh_cb/update_ui are gated on data_valid
+     * (review kimi-c27cb39 Low, issue_list 9.4) */
+    data_valid = true;
     cJSON_Delete(root);
     return true;
 }
