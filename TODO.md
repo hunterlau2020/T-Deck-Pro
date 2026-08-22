@@ -25,6 +25,14 @@
       provider 下拉 ✅ 已过；剩余 3 项：Save 后 key 恢复（#6）、失败重试路径（关热点，14）、
       长回答 `(truncated)`（15）。
 
+### 8 月 commits 全量评审（Kimi，2026-08-22 进行中）
+
+- [x] **B3 AI Chat（21）/ B4 系统杂项（18+3）**——HEAD 无遗留 High/Medium；
+      结论见 `docs/reviews/2026-08-commits-review-status.md` §2.2/§2.3，
+      待办 5 Low + 1 契约层 Medium 已登记 issue_list §11。
+- [ ] **B1 WiFi/TLS（20）/ B2 AI Config（24）/ B5 phase-0（2）**——额度 403
+      两轮失败，恢复后 resume agent-8/9/12（上下文保留，见状态文档 §5）。
+
 ### 第五批评审（Codex a924c4e 结果 P2 —— ✅ 2026-08-22 修复，申请 `c8f62f3`）
 
 - [x] **SD 提示不作格式诊断**（issue_list §3.4 跟进，`c8f62f3`）："有卡但挂载

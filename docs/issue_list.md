@@ -297,6 +297,34 @@
 - 修复路径真机回归（自动同步/busy 释放/并发上限/保存后重同步）⏸ 待用户
   实测；申请 `acc3893`
 
+## 11. 8 月 commits 全量评审登记（Kimi，B3/B4 产出，2026-08-22）
+
+> 来源：`docs/reviews/2026-08-commits-review-status.md` §2.2/§2.3。
+> B3（AI Chat 21）/ B4（系统杂项 18+3）结论：HEAD 无遗留 High/Medium；
+> 以下 5 项 Low + 1 项契约层 Medium 为待办登记。B1/B2/B5 因额度 403 未跑完。
+
+- ⬜ **B4-L1（Low）**：`ui_deckpro.cpp:2314`（`7d5aa8d`）临界区内"事件抢先发布"
+  复检为死代码（刚设 `target=cnt` 后判 `cnt>target` 永假）——删除或移到
+  `esp_wifi_scan_stop()` 之后
+- ⬜ **B4-L2（Low）**：`ui_weather.cpp` 'r' 键先清 `last_fetch_time` 再调
+  `start_fetch()`（`fbfc16c`），WiFi 断/key 缺/任务在飞时缓存永久过期、进屏
+  空重试——改为任务真正创建后才清。**注意**：weather 此后历经
+  `c27cb39`/`71fa528`/`141942d` 改动，修复前先对照 HEAD 复核该路径是否仍存在
+- ⬜ **B3-F12（Low）**：`chat_exit()` 隐藏 waitbox 但未隐藏 New 确认框
+  （`chat_confirm_close()` 仅 destroy 调用）——push-away 泄漏同类，对称修复一行
+- ⬜ **B3-F13（Low）**：Chat 页键盘分支无 `c >= ' '` 守卫（`b47dd4c`），
+  `'\v'` 已修（`a9873bd`）但其余控制字节仍会写入草稿并发往 API
+- ⬜ **B3-F14（Low）**：`disp_flush()`/`flush_timer_cb()` 抑制期强制
+  `DISP_REFR_MODE_PART`（`955a492`），会降级触摸滚动期间其他屏发的全刷请求
+  （自愈）——仅在非 FULL 时设 PART
+- ⬜ **契约层（Medium，先于 8 月批次存在）**：weather fetch 任务不在
+  `docs/async_ipc_contract.md` 契约表内也不遵守契约（无页面代次；
+  `weather_cleanup()` 直接 `vTaskDelete` 强杀在飞任务，栈上 HTTPClient/
+  Preferences 自动对象被连带释放）——建议天气纳入契约（代次 + busy_gen、
+  任务跑完丢弃迟到结果），或在契约中显式登记为例外
+- 注：PenPal v2 设计复审的 4 项 Low（`penpal-design-review-result-kimi-v2.md`
+  §3）因实现已落地（§10 批次）不再另行登记，如需追踪对照实现复核即可
+
 ## 12. PenPal 首轮真机回归发现（2026-08-22，三处同日修复并复测通过）
 
 > 首轮真机回归（acc3893 烧录后）暴露 1 崩溃 + 1 导航缺陷 + 1 易用性需求；
