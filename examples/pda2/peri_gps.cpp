@@ -24,6 +24,11 @@ static uint32_t gps_vsat=0;
 
 uint8_t buffer[256];
 
+/* All gps_* globals are published/reads under this mux: gps_task's
+ * displayInfo() writes on the other core while UI-side getters (incl. the
+ * atomic gps_get_snapshot()) read (review 2026-08-07-20, P2 GPS writers). */
+static portMUX_TYPE s_gps_snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
+
 bool gps_init(void)
 {   
     bool result = false;
@@ -93,38 +98,46 @@ void gps_task_resume(void)
 
 void gps_get_coord(double *lat, double *lng)
 {
+    taskENTER_CRITICAL(&s_gps_snapshot_mux);
     *lat = gps_lat;
     *lng = gps_lng;
+    taskEXIT_CRITICAL(&s_gps_snapshot_mux);
 }
 
 void gps_get_data(uint16_t *year, uint8_t *month, uint8_t *day)
 {
+    taskENTER_CRITICAL(&s_gps_snapshot_mux);
     *year = gps_year;
     *month = gps_month;
     *day = gps_day;
+    taskEXIT_CRITICAL(&s_gps_snapshot_mux);
 }
 
 void gps_get_time(uint8_t *hour, uint8_t *minute, uint8_t *second)
 {
+    taskENTER_CRITICAL(&s_gps_snapshot_mux);
     *hour = gps_hour;
     *minute = gps_minute;
     *second = gps_second;
+    taskEXIT_CRITICAL(&s_gps_snapshot_mux);
 }
 
 void gps_get_satellites(uint32_t *vsat)
 {
+    taskENTER_CRITICAL(&s_gps_snapshot_mux);
     *vsat = gps_vsat;   // Visible Satellites
+    taskEXIT_CRITICAL(&s_gps_snapshot_mux);
 }
 
 void gps_get_speed(double *speed)
 {
+    taskENTER_CRITICAL(&s_gps_snapshot_mux);
     *speed = gps_speed;
+    taskEXIT_CRITICAL(&s_gps_snapshot_mux);
 }
 
 /* Fill *out atomically. Disable preemption just long enough to copy all
  * fields (microseconds) so the caller sees a consistent snapshot. */
-static portMUX_TYPE s_gps_snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
-
 void gps_get_snapshot(gps_snapshot_t *out)
 {
     if (!out) return;
@@ -146,14 +159,24 @@ void gps_get_snapshot(gps_snapshot_t *out)
 /* clang-format on */
 void displayInfo()
 {
+    /* Build the update in locals, print from locals (Serial is slow — keep it
+     * out of the lock), then publish every field in ONE critical section so
+     * readers never mix readings from different GPS fixes. Invalid fields
+     * keep the last published value (same semantics as before). */
+    double lat = gps_lat, lng = gps_lng, altitude = gps_altitude, speed = gps_speed;
+    uint16_t year = gps_year;
+    uint8_t month = gps_month, day = gps_day;
+    uint8_t hour = gps_hour, minute = gps_minute, second = gps_second;
+    uint32_t vsat = gps_vsat;
+
     Serial.print(F("Location: "));
     if (gps.location.isValid())
     {
-        gps_lat = gps.location.lat();
-        gps_lng = gps.location.lng();
-        Serial.print(gps_lat, 6);
+        lat = gps.location.lat();
+        lng = gps.location.lng();
+        Serial.print(lat, 6);
         Serial.print(F(","));
-        Serial.print(gps_lng, 6);
+        Serial.print(lng, 6);
     }
     else
     {
@@ -163,14 +186,14 @@ void displayInfo()
     Serial.print(F("  Date/Time: "));
     if (gps.date.isValid())
     {
-        gps_year = gps.date.year();
-        gps_month = gps.date.month();
-        gps_day = gps.date.day();
-        Serial.print(gps_month);
+        year = gps.date.year();
+        month = gps.date.month();
+        day = gps.date.day();
+        Serial.print(month);
         Serial.print(F("/"));
-        Serial.print(gps_day);
+        Serial.print(day);
         Serial.print(F("/"));
-        Serial.print(gps_year);
+        Serial.print(year);
     }
     else
     {
@@ -180,21 +203,21 @@ void displayInfo()
     Serial.print(F(" "));
     if (gps.time.isValid())
     {
-        gps_hour = gps.time.hour();
-        gps_minute = gps.time.minute();
-        gps_second = gps.time.second();
+        hour = gps.time.hour();
+        minute = gps.time.minute();
+        second = gps.time.second();
 
-        if (gps_hour < 10)
+        if (hour < 10)
             Serial.print(F("0"));
-        Serial.print(gps_hour);
+        Serial.print(hour);
         Serial.print(F(":"));
-        if (gps_minute < 10)
+        if (minute < 10)
             Serial.print(F("0"));
-        Serial.print(gps_minute);
+        Serial.print(minute);
         Serial.print(F(":"));
-        if (gps_second < 10)
+        if (second < 10)
             Serial.print(F("0"));
-        Serial.print(gps_second);
+        Serial.print(second);
         Serial.print(F("."));
     }
     else
@@ -205,20 +228,39 @@ void displayInfo()
     Serial.print(F("  Satellites: "));
     if(gps.satellites.isValid())
     {
-        gps_vsat = gps.satellites.value();
-        Serial.print(gps_vsat);
+        vsat = gps.satellites.value();
+        Serial.print(vsat);
         Serial.print(F(" "));
     }
 
     Serial.print(F("  Speed: "));
     if(gps.speed.isValid())
     {
-        gps_speed = gps.speed.kmph();
-        Serial.print(gps_speed);
+        speed = gps.speed.kmph();
+        Serial.print(speed);
         Serial.print(F(" "));
     }
 
+    if (gps.altitude.isValid())
+    {
+        altitude = gps.altitude.meters();
+    }
+
     Serial.println();
+
+    taskENTER_CRITICAL(&s_gps_snapshot_mux);
+    gps_lat = lat;
+    gps_lng = lng;
+    gps_altitude = altitude;
+    gps_speed = speed;
+    gps_year = year;
+    gps_month = month;
+    gps_day = day;
+    gps_hour = hour;
+    gps_minute = minute;
+    gps_second = second;
+    gps_vsat = vsat;
+    taskEXIT_CRITICAL(&s_gps_snapshot_mux);
 }
 /* clang-format off */
 

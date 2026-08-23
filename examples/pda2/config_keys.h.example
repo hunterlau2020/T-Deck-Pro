@@ -24,9 +24,20 @@
 // Get your key at: https://aistudio.google.com/app/apikey
 // #define GEMINI_API_KEY    "YOUR_GEMINI_API_KEY_HERE"
 
+// ---- OpenRouter API Key (for AI Text / AI Config features) ----
+// DEV default; the runtime chain is NVS -> SPIFFS /env.cfg -> this define.
+// #define AI_KEY_DEFAULT_DEV "YOUR_OPENROUTER_KEY_HERE"
+
 // ---- OpenWeatherMap API Key (for Weather feature) ----
 // Get your free key at: https://openweathermap.org/api
 // #define OWM_API_KEY       "YOUR_OWM_API_KEY_HERE"
+
+// ---- PenPal service (for PenPal app; see docs/penpal-design.md §3.4) ----
+// DEV default; the runtime chain is NVS -> SPIFFS /env.cfg -> this define.
+// Base URL of the pen-pal server (no trailing slash), e.g. your PC's LAN
+// address for local tests; API key comes from the web UI profile page.
+// #define PENPAL_BASE_DEFAULT_DEV "http://192.168.1.5:8000"
+// #define PENPAL_KEY_DEFAULT_DEV  "YOUR_PENPAL_KEY_HERE"
 
 // ---- Calendarific API Key (for Calendar holidays) ----
 // Get your free key at: https://calendarific.com/signup

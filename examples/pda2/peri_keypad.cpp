@@ -10,9 +10,14 @@
 #define KEYPAD_RELEASE_VAL_MIN 1
 #define KEYPAD_RELEASE_VAL_MAX 35
 
-// Row 3 physical layout (decoded from raw events):
-//   col: 0  1  2  3  4  5      6    7      8    9
-//        ?  ?  ?  ?  ?  LCtrl  Mic  Space  Sym  RCtrl
+// Row 2/3 physical layout (decoded from raw events on HD-V2, 2025-09-15):
+//   col:  0     1  2  3  4  5      6    7      8    9
+//   row2: Alt   z  x  c  v  b  n    m    $      Enter
+//   row3:  ?  ?  ?  ?  ?  Shift   Mic  Space  Sym  Shift
+// Note: there is NO Ctrl key on this hardware. The two silkscreened
+// "Shift" keys are at (3,5) and (3,9); the Z-row left key is silkscreened
+// "Alt". Semantics per review decision B: Alt = momentary sym layer,
+// Shift = uppercase layer, Sym = sym layer lock.
 
 // Primary layer (normal)
 const char keymap[KEYPAD_ROWS][KEYPAD_COLS] = {
@@ -22,12 +27,14 @@ const char keymap[KEYPAD_ROWS][KEYPAD_COLS] = {
     {  0,   0,   0,   0,   0,   0,   0, ' ',   0,   0},
 };
 
-// Secondary layer (sym)
+// Secondary layer (sym; locked by Sym, momentary by Alt)
+//   (2,8) volume key -> '\v' (dedicated code, no pollution of text inputs)
+//   (3,6) Mic key     -> '0'  (digit zero on the sym layer)
 const char keymap_sym[KEYPAD_ROWS][KEYPAD_COLS] = {
     {'#', '1', '2', '3', '(', ')', '_', '-', '+', '@'},
     {'*', '4', '5', '6', '/', ':', ';', '\'','"', '\b'},
-    {  0, '7', '8', '9', '?', '!', ',', '.', '0', '\n'},
-    {  0,   0,   0,   0,   0,   0,   0, ' ',   0,   0},
+    {  0, '7', '8', '9', '?', '!', ',', '.', '\v', '\n'},
+    {  0,   0,   0,   0,   0,   0, '0', ' ',   0,   0},
 };
 
 // Tertiary layer (shift = uppercase; held while typing)
@@ -38,19 +45,47 @@ const char keymap_shift[KEYPAD_ROWS][KEYPAD_COLS] = {
     {  0,   0,   0,   0,   0,   0,   0, ' ',   0,   0},
 };
 
-// Modifier positions
-#define KEY_SHIFT_ROW  2
-#define KEY_SHIFT_COL  0
-#define KEY_SYM_ROW    3
-#define KEY_SYM_COL    8
+// Modifier positions (HD-V2 physical layout, decoded from raw events)
+#define KEY_ALT_ROW     2
+#define KEY_ALT_COL     0   /* Z-row left key, silkscreened "Alt" */
+#define KEY_SHIFT_L_ROW 3
+#define KEY_SHIFT_L_COL 5   /* bottom-row left Shift */
+#define KEY_SHIFT_R_ROW 3
+#define KEY_SHIFT_R_COL 9   /* bottom-row right Shift */
+#define KEY_SYM_ROW     3
+#define KEY_SYM_COL     8
 
 Adafruit_TCA8418 keypad;
 keypad_cb keypad_listener = NULL;
-char keypad_curr_val = ' ';
-int keypad_state = KEYPAD_RELEASE;
-bool keypad_update = false;
-static bool shift_active = false;
-static bool sym_lock = false;
+
+/* Software character FIFO (review finding 2.1): keypad_loop drains the whole
+ * hardware FIFO into this queue; keypad_get_val pops one char per call, so
+ * several presses arriving within one loop pass are delivered in order
+ * instead of overwriting a single shared slot. */
+#define KBD_CHAR_FIFO_LEN 16
+static char kbd_char_fifo[KBD_CHAR_FIFO_LEN];
+static int kbd_char_cnt  = 0;
+static int kbd_char_head = 0;                   /* next pop position */
+static int kbd_char_tail = 0;                   /* next push position */
+
+/* Each modifier is tracked independently and combined on use: releasing one
+ * Shift while the other is still held must keep the uppercase layer
+ * (review finding 1.3). */
+static bool alt_pressed   = false;   /* Alt (2,0): momentary sym layer */
+static bool shift_l_press = false;   /* Shift (3,5): uppercase layer */
+static bool shift_r_press = false;   /* Shift (3,9): uppercase layer */
+static bool sym_lock      = false;   /* Sym (3,8): locked sym layer */
+
+static void keypad_modifiers_recover(void)
+{
+    /* FIFO overflow dropped unknown press/release events: reset every
+     * modifier so a lost release can't stick a layer on (finding 1.4). */
+    alt_pressed = false;
+    shift_l_press = false;
+    shift_r_press = false;
+    sym_lock = false;
+    Serial.println("[KBD] FIFO overflow - modifiers reset");
+}
 
 bool keypad_init(int address)
 {
@@ -78,57 +113,103 @@ bool keypad_init(int address)
 
 int keypad_get_val(char *c)
 {
-    if(c){
-        *c = keypad_curr_val;
+    if (kbd_char_cnt <= 0) {
+        return 0;
     }
-    return keypad_update;
-} 
+    if (c) {
+        *c = kbd_char_fifo[kbd_char_head];
+    }
+    kbd_char_head = (kbd_char_head + 1) % KBD_CHAR_FIFO_LEN;
+    kbd_char_cnt--;
+    return 1;
+}
 
 void keypad_set_flag(void)
 {
-    keypad_update = false;
+    /* Legacy API: with the software FIFO, get_val already consumes the char,
+     * there is nothing left to clear. */
+}
+
+/* Clear queued chars on screen transitions (review finding 2.1): a screen
+ * must not receive keystrokes that were produced for the previous screen.
+ * Also drains the TCA8418 HARDWARE FIFO (review round 4 finding 1.1):
+ * events still sitting in the chip would be re-queued on the next
+ * keypad_loop() and leak into the new page. The momentary modifiers are
+ * reset too - their press/release pairs are dropped together, so no layer
+ * can stick. The Sym LOCK is intentionally kept: it is user-toggled
+ * state, not momentary (documented product semantics).
+ * extern "C": called from C code (ui_scr_mrg.c). */
+extern "C" void keypad_clear_chars(void)
+{
+    if (kbd_char_cnt > 0) {
+        kbd_char_cnt  = 0;
+        kbd_char_head = 0;
+        kbd_char_tail = 0;
+    }
+    uint8_t flushed = keypad.flush();
+    alt_pressed = false;
+    shift_l_press = false;
+    shift_r_press = false;
+    Serial.printf("[KBD] char fifo cleared (screen switch, hw flushed %u)\n", flushed);
 }
 
 void keypad_loop(void)
 {
-    char c = 0;
-    int state = -1;
-    int row, col;
-    int k = keypad.getEvent();
+    /* Drain the whole FIFO each pass: during slow operations (e.g. WiFi
+     * scan) several events can pile up and must be consumed in one go
+     * (review finding 1.4). */
+    while (keypad.available() > 0) {
+        int k = keypad.getEvent();
+        int state = -1;
+        if (k == 0) break;
 
-    if (k == 0) return;
-
-    if (k >= KEYPAD_RELEASE_VAL_MIN && k <= KEYPAD_RELEASE_VAL_MAX) {
-        k = k - KEYPAD_RELEASE_VAL_MIN;
-        state = KEYPAD_RELEASE;
-    }
-
-    if (k >= KEYPAD_PRESS_VAL_MIN && k <= KEYPAD_PRESS_VAL_MAX) {
-        k = k - KEYPAD_PRESS_VAL_MIN;
-        state = KEYPAD_PRESS;
-    }
-
-    if (state < 0) return;
-
-    row = k / KEYPAD_COLS;
-    col = (KEYPAD_COLS - 1) - k % KEYPAD_COLS;
-
-    if (row == KEY_SYM_ROW && col == KEY_SYM_COL) {
-        if (state == KEYPAD_PRESS) {
-            sym_lock = !sym_lock;
-            Serial.printf("[KBD] sym_lock=%d\n", sym_lock);
+        if (k >= KEYPAD_RELEASE_VAL_MIN && k <= KEYPAD_RELEASE_VAL_MAX) {
+            k = k - KEYPAD_RELEASE_VAL_MIN;
+            state = KEYPAD_RELEASE;
         }
-        return;
-    }
 
-    if (row == KEY_SHIFT_ROW && col == KEY_SHIFT_COL) {
-        shift_active = (state == KEYPAD_PRESS);
-        Serial.printf("[KBD] shift=%d\n", shift_active);
-        return;
-    }
+        if (k >= KEYPAD_PRESS_VAL_MIN && k <= KEYPAD_PRESS_VAL_MAX) {
+            k = k - KEYPAD_PRESS_VAL_MIN;
+            state = KEYPAD_PRESS;
+        }
 
-    if (state == KEYPAD_PRESS) {
-        if (sym_lock) {
+        if (state < 0) continue;
+
+        int row = k / KEYPAD_COLS;
+        int col = (KEYPAD_COLS - 1) - k % KEYPAD_COLS;
+        bool pressed = (state == KEYPAD_PRESS);
+
+        if (row == KEY_SYM_ROW && col == KEY_SYM_COL) {
+            if (pressed) {
+                sym_lock = !sym_lock;
+                Serial.printf("[KBD] sym_lock=%d\n", sym_lock);
+            }
+            continue;
+        }
+
+        if (row == KEY_ALT_ROW && col == KEY_ALT_COL) {
+            alt_pressed = pressed;
+            Serial.printf("[KBD] alt=%d\n", alt_pressed);
+            continue;
+        }
+
+        if (row == KEY_SHIFT_L_ROW && col == KEY_SHIFT_L_COL) {
+            shift_l_press = pressed;
+            Serial.printf("[KBD] shift(l)=%d\n", shift_l_press);
+            continue;
+        }
+
+        if (row == KEY_SHIFT_R_ROW && col == KEY_SHIFT_R_COL) {
+            shift_r_press = pressed;
+            Serial.printf("[KBD] shift(r)=%d\n", shift_r_press);
+            continue;
+        }
+
+        if (!pressed) continue;
+
+        char c = 0;
+        const bool shift_active = shift_l_press || shift_r_press;
+        if (sym_lock || alt_pressed) {
             c = keymap_sym[row][col];
         } else if (shift_active) {
             c = keymap_shift[row][col];
@@ -136,13 +217,33 @@ void keypad_loop(void)
             c = keymap[row][col];
         }
 
-        if (c == 0) return;
+        if (c == 0) continue;
 
-        Serial.printf("[KBD] row=%d col=%d char='%c' (0x%02x)\n", row, col, c >= 0x20 ? c : '?', c);
+        /* Alt+Enter → '\t': app-level scan shortcut. Alt is momentary, so a
+         * plain Enter (no Alt held) still emits '\n'. */
+        if (c == '\n' && alt_pressed) c = '\t';
 
-        keypad_curr_val = c;
-        keypad_state = state;
-        keypad_update = true;
+        Serial.printf("[KBD] row=%d col=%d char='%c' (0x%02x)\n",
+                      row, col, c >= 0x20 ? c : '?', c);
+
+        if (kbd_char_cnt >= KBD_CHAR_FIFO_LEN) {
+            Serial.println("[KBD] char fifo full - drop");
+            continue;
+        }
+        kbd_char_fifo[kbd_char_tail] = c;
+        kbd_char_tail = (kbd_char_tail + 1) % KBD_CHAR_FIFO_LEN;
+        kbd_char_cnt++;
+    }
+
+    /* INT_STAT bits are write-1-to-clear: OVR_FLOW_INT means press/release
+     * events were dropped while the FIFO was full (review finding 1.4/2.2).
+     * Without the W1C write the bit stays set forever and every loop pass
+     * would reset the modifiers again. */
+    uint8_t int_stat = keypad.readRegister(TCA8418_REG_INT_STAT);
+    if (int_stat & TCA8418_REG_STAT_OVR_FLOW_INT) {
+        keypad_modifiers_recover();
+        keypad.writeRegister(TCA8418_REG_INT_STAT,
+                             TCA8418_REG_STAT_OVR_FLOW_INT);   /* W1C */
     }
 }
 

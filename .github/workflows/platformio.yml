@@ -8,6 +8,7 @@ on:
       - "examples/**"
       - ".github/workflows/platformio.yml"
       - "platformio.ini"
+      - "script/**" # set_srcdir.py decides which example each matrix job builds (review 2026-08-07-21 P2)
 
 jobs:
   build:

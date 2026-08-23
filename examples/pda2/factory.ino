@@ -22,6 +22,9 @@
 #include <WiFi.h>
 #include <freertos/semphr.h>
 #include "config_keys.h"
+#include "penpal_api.h"   /* PenPal API client + (via ui_penpal*.cpp, polled in
+                           * loop()) the screen UI - registered on the menu in
+                           * the menu-page commit */
 
 Adafruit_DRV2605 drv;
 
@@ -58,6 +61,24 @@ InkDisplay *display = &display_v1_1;
 uint8_t *decodebuffer = NULL;
 lv_timer_t *flush_timer = NULL;
 int disp_refr_mode = DISP_REFR_MODE_PART;
+/* Full-refresh SEQUENCING (copilot finding 1.2): disp_full_refr() bumps
+ * the request sequence; flush_epd_bitmap() copies it to the done sequence
+ * when a FULL-mode flush actually reaches the panel (EPD full refresh
+ * takes 1-2 s). A waiter compares the sequence it requested against the
+ * done sequence - it can only be satisfied by ITS OWN frame, never by a
+ * leftover flush of a previous screen. */
+static volatile uint32_t disp_flush_req_seq = 0;
+static volatile uint32_t disp_flush_done_seq = 0;
+/* "Redraw on release" (user request): while a touch scroll is in
+ * progress, EPD writes are suppressed - the pixels still accumulate in
+ * decodebuffer - and the panel is refreshed ONCE when the scroll ends.
+ * This avoids one 0.3-1 s flush per scroll step on e-paper. */
+static volatile bool disp_suppress_flush = false;
+
+void disp_set_suppress_flush(bool s)
+{
+    disp_suppress_flush = s;
+}
 
 uint8_t isT_Deck_Pro_v1_1 = 0;
 const char Version_str1[] = "T-Deck-Pro V1.0";
@@ -195,18 +216,19 @@ static void flush_epd_bitmap(const lv_area_t *area)
         return;
     }
 
+    const bool full = (disp_refr_mode == DISP_REFR_MODE_FULL);
     shared_spi_lock();
     shared_spi_prepare_device(BOARD_EPD_CS);
 
-    if (disp_refr_mode == DISP_REFR_MODE_PART) {
-        display->setPartialWindow(area->x1, area->y1, width, height);
-    } else {
+    if (full) {
         display->setFullWindow();
+    } else {
+        display->setPartialWindow(area->x1, area->y1, width, height);
     }
 
     display->firstPage();
     do {
-        if (disp_refr_mode == DISP_REFR_MODE_FULL) {
+        if (full) {
             display->fillScreen(GxEPD_WHITE);
         }
         display->drawInvertedBitmap(area->x1, area->y1, decodebuffer, width, height, GxEPD_BLACK);
@@ -215,6 +237,9 @@ static void flush_epd_bitmap(const lv_area_t *area)
 
     display->powerOff();
     shared_spi_unlock();
+    if (full) {
+        disp_flush_done_seq = disp_flush_req_seq;   /* THIS frame reached the panel */
+    }
 }
 
 static void flush_timer_cb(lv_timer_t *t)
@@ -223,6 +248,12 @@ static void flush_timer_cb(lv_timer_t *t)
     static int part_count = 0;
     lv_disp_t *disp = lv_disp_get_default();
     if(disp->rendering_in_progress == false) {
+        if (disp_suppress_flush) {
+            /* touch scroll in progress: the release handler refreshes */
+            disp_refr_mode = DISP_REFR_MODE_PART;
+            lv_timer_pause(flush_timer);
+            return;
+        }
         /* Reviewer #5 fix: every FACTORY_EPD_FULL_REFRESH_INTERVAL partial
          * flushes (≈ minutes of activity), force a full EPD waveform refresh
          * to clear accumulated ghosting. Without this, the partial-only path
@@ -263,7 +294,13 @@ static void dips_render_start_cb(struct _lv_disp_drv_t * disp_drv)
 static void disp_flush(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)
 {
     convert_lvgl_buf_to_epd_bitmap(color_p, lv_area_get_width(area), lv_area_get_height(area));
-    flush_epd_bitmap(area);
+    if (!disp_suppress_flush) {
+        flush_epd_bitmap(area);
+    } else {
+        /* pixels accumulate in decodebuffer; the release handler flushes
+         * the whole panel once (redraw-on-release) */
+        disp_refr_mode = DISP_REFR_MODE_PART;
+    }
     
     static int idx = 0;
     Serial.printf("disp_flush:%d, %s, area=(%d,%d)-(%d,%d)\n",
@@ -561,6 +598,12 @@ void setup()
 
     Serial.begin(115200);
 
+    /* China Standard Time (UTC+8, no DST). All localtime() users - the
+     * usage-stats monthly reset, Calendar, Sleep/status timestamps - run
+     * on UTC without this. */
+    setenv("TZ", "CST-8", 1);
+    tzset();
+
     // IO
     pinMode(BOARD_KEYBOARD_LED, OUTPUT);
     pinMode(BOARD_MOTOR_PIN, OUTPUT);
@@ -710,7 +753,12 @@ void setup()
             Serial.printf("[WiFi] Connecting to %s...\n", wifi_ssid_nvs.c_str());
         }
     }
-    configTzTime("PST8PDT,M3.2.0,M11.1.0", "pool.ntp.org");
+    configTzTime("CST-8", "cn.pool.ntp.org", "pool.ntp.org", "time.nist.gov");
+
+    /* TLS trust mode (AI Cfg "trust self-signed" toggle, review 2026-08-07-20
+     * P2): apply the persisted setting before any http_utils consumer runs. */
+    extern void openai_tls_apply(void);
+    openai_tls_apply();
 }
 
 
@@ -720,6 +768,8 @@ void loop()
 {
     lv_task_handler();
     keypad_loop();
+    extern void openai_stats_poll();
+    openai_stats_poll();
     extern void calc_keyboard_poll();
     calc_keyboard_poll();
     extern void weather_keyboard_poll();
@@ -738,6 +788,10 @@ void loop()
     ai_chat_keyboard_poll();
     extern void ai_cfg_keyboard_poll();
     ai_cfg_keyboard_poll();
+    extern void penpal_keyboard_poll();
+    penpal_keyboard_poll();
+    extern void shutdown_keyboard_poll();
+    shutdown_keyboard_poll();
     bq25896_runtime_maintain();
 
     audio.loop();
@@ -762,6 +816,24 @@ void loop()
 void disp_full_refr(void)
 {
     disp_refr_mode = DISP_REFR_MODE_FULL;
+    disp_flush_req_seq++;
+}
+
+/* Request a full refresh and return the sequence of THIS request. The
+ * caller later compares it against disp_flush_seq_done() from a normal
+ * LVGL timer tick - never by pumping lv_task_handler() from a lifecycle
+ * callback (that would re-enter LVGL and watch the WRONG screen: in
+ * scr_mgr_push the entry() runs before lv_scr_load()). */
+uint32_t disp_full_refr_seq(void)
+{
+    disp_full_refr();
+    return disp_flush_req_seq;
+}
+
+/* Sequence of the last FULL-mode flush that reached the panel. */
+uint32_t disp_flush_seq_done(void)
+{
+    return disp_flush_done_seq;
 }
 
 

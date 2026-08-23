@@ -77,6 +77,7 @@ enum {
     SCREEN_VOICE_AI_ID,
     SCREEN_AI_CHAT_ID,
     SCREEN_AI_CFG_ID,
+    SCREEN_PENPAL_ID,
 };
 
 typedef void (*ui_indev_read_cb)(int);

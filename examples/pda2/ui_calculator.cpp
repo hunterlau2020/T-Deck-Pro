@@ -321,6 +321,8 @@ void calc_keyboard_poll()
 
     Serial.printf("[CALC] key: '%c' (0x%02x)\n", c, c);
 
+    if (c == '\t' || c == '\v') return;         /* Alt+Enter scan combo / volume key: ignore */
+
     if (c == '\n') {
         do_calculate();
     } else if (c == '\b') {

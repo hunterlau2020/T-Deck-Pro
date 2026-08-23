@@ -32,6 +32,27 @@ void ui_disp_full_refr(void)
 {
     disp_full_refr();
 }
+
+/* Frame-bound full refresh (copilot finding 1.2): returns the sequence
+ * of THIS request; the caller compares it against ui_disp_flush_done_seq()
+ * from a normal LVGL timer tick. Never pump lv_task_handler() from a
+ * screen lifecycle callback - in scr_mgr_push the entry() runs BEFORE
+ * lv_scr_load(), so a synchronous wait would watch the previous screen's
+ * frame and re-enter LVGL. */
+uint32_t ui_disp_full_refr_seq(void)
+{
+    return disp_full_refr_seq();
+}
+
+uint32_t ui_disp_flush_done_seq(void)
+{
+    return disp_flush_seq_done();
+}
+
+void ui_disp_suppress_flush(bool s)
+{
+    disp_set_suppress_flush(s);
+}
 //************************************[ screen 0 ]****************************************** menu
 //************************************[ screen 1 ]****************************************** lora
 
@@ -315,13 +336,20 @@ bool ui_sd_test_run(ui_sd_test_result_t *out)
     return result->pass;
 }
 
-void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
+void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used, int *state)
 {
+    /* state: 0 = mounted OK, 1 = no card, 2 = card present but the
+     * mount failed - typically a non-FAT16/32 filesystem, but SPI or
+     * init errors on a FAT32 card land here too (the cause is only in
+     * the serial log, so callers must not treat 2 as a diagnosis). */
     if (total) {
         *total = 0;
     }
     if (used) {
         *used = 0;
+    }
+    if (state) {
+        *state = 0;
     }
 
     ui_sd_test_result_t result;
@@ -333,6 +361,16 @@ void ui_setting_get_sd_capacity(uint64_t *total, uint64_t *used)
     shared_spi_unlock();
 
     if (!mounted) {
+        /* cardType() still reports the detected type after a failed
+         * f_mount (the card answered the init commands), which tells
+         * "card present" apart from an empty slot - but it does NOT
+         * prove the failure is the filesystem type. */
+        uint8_t ct = SD.cardType();
+        if (state) {
+            *state = (ct == CARD_NONE) ? 1 : 2;
+        }
+        Serial.printf("[SD] capacity query failed: %s (cardType=%s)\n",
+                      result.error, sd_card_type_to_string(ct));
         return;
     }
 

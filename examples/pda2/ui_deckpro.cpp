@@ -4,6 +4,7 @@
 #include "stdio.h"
 #include "ui_deckpro_port.h"
 #include "Arduino.h"
+#include "openai_api.h"     /* openai_stats_flush() at the deep-sleep checkpoint */
 
 #define SETTING_PAGE_MAX_ITEM 7
 #define GET_BUFF_LEN(a) sizeof(a)/sizeof(a[0])
@@ -236,6 +237,7 @@ static ui_indev_read_cb ui_get_gesture_dir = NULL;
 
 static lv_obj_t *menu_screen1;
 static lv_obj_t *menu_screen2;
+static lv_obj_t *menu_screen3;
 static lv_obj_t *ui_Panel4;
 
 static lv_obj_t * menu_taskbar = NULL;
@@ -248,32 +250,58 @@ static lv_obj_t * menu_taskbar_wifi = NULL;
 static int page_num = 0;
 static int page_curr = 0;
 
-static struct menu_btn menu_btn_list[] = 
+static struct menu_btn menu_btn_list[] =
 {
-    {SCREEN1_ID,  &img_lora,    "Lora",     23,     13},  // Page one
-    {SCREEN2_ID,  &img_setting, "Setting",  95,     13},
-    {SCREEN_GPS_ENHANCED_ID, &img_GPS, "GPS", 167, 13},
-    {SCREEN4_ID,  &img_wifi,    "Wifi",     23,     101},
-    {SCREEN5_ID,  &img_test,    "Test",     95,     101},
-    {SCREEN6_ID,  &img_batt,    "Battery",  167,    101},
-    {SCREEN7_ID,  &img_touch,   "Input",    23,     189},
-    {SCREEN8_ID,  &img_A7682E,  "A7682E",   95,     189},
-    {SCREEN9_ID,  &img_lora,    "Shutdown", 167,    189},
-    {SCREEN12_ID,           &img_motor,   "Motor",    23,     13},  // Page two
-    {SCREEN11_ID,           &img_PCM5102, "Sleep",    95,     13},
-    {SCREEN_CALCULATOR_ID, &img_calculator, "Calc",   167,    13},
-    {SCREEN_WEATHER_ID,    &img_weather,    "Weather", 23,   101},
-    {SCREEN_CALENDAR_ID,   &img_calendar,   "Calendar",95,   101},
-    {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    167,  101},
-    {SCREEN_VOICE_AI_ID,   &img_voice_ai,   "AI Chat", 23,   189},
-    {SCREEN_AI_CHAT_ID,    &img_voice_ai,   "AI Text", 95,   189},
-    {SCREEN_AI_CFG_ID,     &img_setting,    "AI Cfg",  167,  189},
+    /* Page one (user-requested order, 2026-08-17): AI-first layout */
+    {SCREEN_AI_CFG_ID,     &img_setting,    "AI Cfg",  23,   13},
+    {SCREEN_AI_CHAT_ID,    &img_voice_ai,   "AI Text", 95,   13},
+    {SCREEN_VOICE_AI_ID,   &img_voice_ai,   "AI Chat", 167,  13},
+    {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    23,   101},
+    {SCREEN_WEATHER_ID,    &img_weather,    "Weather", 95,   101},
+    {SCREEN_CALENDAR_ID,   &img_calendar,   "Calendar",167,  101},
+    {SCREEN_CALCULATOR_ID, &img_calculator, "Calc",    23,   189},
+    {SCREEN4_ID,           &img_wifi,       "Wifi",    95,   189},
+    {SCREEN11_ID,          &img_PCM5102,    "Sleep",   167,  189},
+    /* Page two: hardware / system entries */
+    {SCREEN1_ID,           &img_lora,       "Lora",    23,   13},
+    {SCREEN2_ID,           &img_setting,    "Setting", 95,   13},
+    {SCREEN_GPS_ENHANCED_ID,&img_GPS,       "GPS",     167,  13},
+    {SCREEN5_ID,           &img_test,       "Test",    23,   101},
+    {SCREEN6_ID,           &img_batt,       "Battery", 95,   101},
+    {SCREEN7_ID,           &img_touch,      "Input",   167,  101},
+    {SCREEN8_ID,           &img_A7682E,     "A7682E",  23,   189},
+    {SCREEN9_ID,           &img_lora,       "Shutdown",95,   189},
+    {SCREEN12_ID,          &img_motor,      "Motor",   167,  189},
+    /* Page three: pen-pal letters (alone, 9/9/1) */
+    {SCREEN_PENPAL_ID,     &img_penpal,     "PenPal",  23,   13},
 };
 
 static void menu_btn_event_cb(lv_event_t *e)
 {
     struct menu_btn *tgr = (struct menu_btn *)e->user_data;
     scr_mgr_push(tgr->idx, false);
+}
+
+/* Show menu page `page_curr`, hide the others, repaint the dots. Shared by
+ * the gesture handler and create0()'s initial state (3 pages since PenPal,
+ * page 3 = menu_screen3). */
+static void menu_page_apply(void)
+{
+    lv_obj_t *pages[3] = {menu_screen1, menu_screen2, menu_screen3};
+
+    for(int i = 0; i <= page_num && i < 3; i++) {
+        if(i == page_curr) {
+            lv_obj_clear_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if(ui_Panel4 == NULL) return;      /* no dots when the menu is single-page */
+    for(int i = 0; i <= page_num; i++) {
+        lv_color_t c = (i == page_curr) ? lv_color_hex(0x000000) : lv_color_hex(0xFFFFFF);
+        lv_obj_set_style_bg_color(lv_obj_get_child(ui_Panel4, i), c, LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
 }
 
 static void menu_get_gesture_dir(int dir)
@@ -295,20 +323,9 @@ static void menu_get_gesture_dir(int dir)
         else{
             return ;
         }
-    }   
-
-    if(page_curr == 1) {
-        lv_obj_clear_flag(menu_screen2, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(menu_screen1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_style_bg_color(lv_obj_get_child(ui_Panel4, 0), lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(lv_obj_get_child(ui_Panel4, 1), lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-
-    } else if(page_curr == 0) {
-        lv_obj_clear_flag(menu_screen1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(menu_screen2, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_style_bg_color(lv_obj_get_child(ui_Panel4, 0), lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(lv_obj_get_child(ui_Panel4, 1), lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
     }
+
+    menu_page_apply();
 }
 
 static void menu_btn_create(lv_obj_t *parent, struct menu_btn *info)
@@ -357,7 +374,24 @@ static void menu_btn_create(lv_obj_t *parent, struct menu_btn *info)
     lv_obj_add_event_cb(btn, menu_btn_event_cb, LV_EVENT_CLICKED, (void *)info);
 }
 
-static void create0(lv_obj_t *parent) 
+/* Menu page container shared by menu_screen1/2/3 (identical styling;
+ * created hidden - create0() shows page 0 via menu_page_apply()). */
+static lv_obj_t *menu_page_create(lv_obj_t *parent, lv_coord_t height)
+{
+    lv_obj_t *page = lv_obj_create(parent);
+    lv_obj_set_size(page, lv_pct(100), height);
+    lv_obj_set_style_bg_color(page, DECKPRO_COLOR_BG, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(page, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_style_border_width(page, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(page, DECKPRO_COLOR_FG, LV_PART_MAIN);
+    lv_obj_set_style_border_side(page, LV_BORDER_SIDE_TOP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(page, 0, LV_PART_MAIN);
+    lv_obj_align(page, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
+    return page;
+}
+
+static void create0(lv_obj_t *parent)
 {
     int status_bar_height = 25;
 
@@ -370,7 +404,7 @@ static void create0(lv_obj_t *parent)
     
     menu_taskbar_time = lv_label_create(menu_taskbar);
     lv_obj_set_style_border_width(menu_taskbar_time, 0, 0);
-    lv_label_set_text_fmt(menu_taskbar_time, "%02d:%02d", 10, 19);
+    lv_label_set_text(menu_taskbar_time, "--:--");  /* real time filled by the taskbar timer */
     lv_obj_set_style_text_font(menu_taskbar_time, &Font_Mono_Bold_14, LV_PART_MAIN);
     lv_obj_align(menu_taskbar_time, LV_ALIGN_LEFT_MID, 10, 0);
 
@@ -409,30 +443,13 @@ static void create0(lv_obj_t *parent)
     menu_taskbar_battery_percent = lv_label_create(status_parent);
     lv_obj_set_style_text_font(menu_taskbar_battery_percent, &Font_Mono_Bold_14, LV_PART_MAIN);
 
-    //
-    page_num = MENU_BTN_NUM / 9;
+    // page_num is the MAX page index used by the gesture gate
+    // (page_curr < page_num), not the page count: N=18 -> index 0..1.
+    page_num = (MENU_BTN_NUM - 1) / 9;
 
-    menu_screen1 = lv_obj_create(parent);
-    lv_obj_set_size(menu_screen1, lv_pct(100), LV_VER_RES - status_bar_height);
-    lv_obj_set_style_bg_color(menu_screen1, DECKPRO_COLOR_BG, LV_PART_MAIN);
-    lv_obj_set_scrollbar_mode(menu_screen1, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_style_border_width(menu_screen1, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(menu_screen1, DECKPRO_COLOR_FG, LV_PART_MAIN);
-    lv_obj_set_style_border_side(menu_screen1, LV_BORDER_SIDE_TOP, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(menu_screen1, 0, LV_PART_MAIN);
-    lv_obj_align(menu_screen1, LV_ALIGN_BOTTOM_MID, 0, 0);
-    // lv_obj_add_flag(menu_screen1, LV_OBJ_FLAG_HIDDEN);
-
-    menu_screen2 = lv_obj_create(parent);
-    lv_obj_set_size(menu_screen2, lv_pct(100), LV_VER_RES - status_bar_height);
-    lv_obj_set_style_bg_color(menu_screen2, DECKPRO_COLOR_BG, LV_PART_MAIN);
-    lv_obj_set_scrollbar_mode(menu_screen2, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_style_border_width(menu_screen2, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(menu_screen2, DECKPRO_COLOR_FG, LV_PART_MAIN);
-    lv_obj_set_style_border_side(menu_screen2, LV_BORDER_SIDE_TOP, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(menu_screen2, 0, LV_PART_MAIN);
-    lv_obj_align(menu_screen2, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_add_flag(menu_screen2, LV_OBJ_FLAG_HIDDEN);
+    menu_screen1 = menu_page_create(parent, LV_VER_RES - status_bar_height);
+    menu_screen2 = menu_page_create(parent, LV_VER_RES - status_bar_height);
+    menu_screen3 = menu_page_create(parent, LV_VER_RES - status_bar_height);
 
     if(ui_test_a7682e() == false)
     {
@@ -450,8 +467,10 @@ static void create0(lv_obj_t *parent)
     for(int i = 0; i < MENU_BTN_NUM; i++) {
         if(i < 9) {
             menu_btn_create(menu_screen1, &menu_btn_list[i]);
-        } else {
+        } else if(i < 18) {
             menu_btn_create(menu_screen2, &menu_btn_list[i]);
+        } else {
+            menu_btn_create(menu_screen3, &menu_btn_list[i]);
         }
     }
 
@@ -473,23 +492,21 @@ static void create0(lv_obj_t *parent)
         lv_obj_set_style_shadow_width(ui_Panel4, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
         lv_obj_set_style_shadow_spread(ui_Panel4, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
 
-        lv_obj_t *ui_Button11 = lv_btn_create(ui_Panel4);
-        lv_obj_set_width(ui_Button11, 10);
-        lv_obj_set_height(ui_Button11, 10);
-        lv_obj_add_flag(ui_Button11, LV_OBJ_FLAG_SCROLL_ON_FOCUS);     /// Flags
-        lv_obj_clear_flag(ui_Button11, LV_OBJ_FLAG_CHECKABLE);      /// Flags
-        lv_obj_set_style_radius(ui_Button11, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_width(ui_Button11, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(ui_Button11, DECKPRO_COLOR_FG, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-        lv_obj_t *ui_Button12 = lv_btn_create(ui_Panel4);
-        lv_obj_set_width(ui_Button12, 10);
-        lv_obj_set_height(ui_Button12, 10);
-        lv_obj_add_flag(ui_Button12, LV_OBJ_FLAG_SCROLL_ON_FOCUS);     /// Flags
-        lv_obj_clear_flag(ui_Button12, LV_OBJ_FLAG_CHECKABLE);      /// Flags
-        lv_obj_set_style_radius(ui_Button12, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_width(ui_Button12, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+        /* one dot per menu page (page_num is the max page index) */
+        for(int i = 0; i <= page_num; i++) {
+            lv_obj_t *dot = lv_btn_create(ui_Panel4);
+            lv_obj_set_width(dot, 10);
+            lv_obj_set_height(dot, 10);
+            lv_obj_add_flag(dot, LV_OBJ_FLAG_SCROLL_ON_FOCUS);     /// Flags
+            lv_obj_clear_flag(dot, LV_OBJ_FLAG_CHECKABLE);      /// Flags
+            lv_obj_set_style_radius(dot, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_border_width(dot, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_bg_color(dot, DECKPRO_COLOR_FG, LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
     }
+
+    /* initial page state: show page 0, paint the active dot */
+    menu_page_apply();
 }
 
 static void entry0(void) {
@@ -970,7 +987,8 @@ static void create2_1(lv_obj_t *parent)
 
     char buf[30];
     uint64_t total=0, used=0;
-    ui_setting_get_sd_capacity(&total, &used);
+    int sd_state = 0;
+    ui_setting_get_sd_capacity(&total, &used, &sd_state);
     lv_snprintf(buf, 30, "%lluMB", total);
     str += line_full_format(28, "SD total:", (const char *)buf);
     str += "\n                           \n";
@@ -978,6 +996,21 @@ static void create2_1(lv_obj_t *parent)
     lv_snprintf(buf, 30, "%lluMB", used);
     str += line_full_format(28, "SD used:", (const char *)buf);
     str += "\n                           \n";
+
+    /* tell the user WHY the card shows 0MB instead of leaving it cryptic.
+     * State 2 only proves the card answered init commands - usually an
+     * exFAT/NTFS card, but SPI/init errors on a fine FAT32 card land
+     * here too, so state the failure and offer FAT32 as advice, not a
+     * diagnosis (review a924c4e P2). */
+    if (sd_state == 2) {
+        str += line_full_format(28, "SD hint:", "mount failed");
+        str += "\n                           \n";
+        str += line_full_format(28, "", "try FAT16/FAT32?");
+        str += "\n                           \n";
+    } else if (sd_state == 1) {
+        str += line_full_format(28, "SD hint:", "no card");
+        str += "\n                           \n";
+    }
 
 
     lv_label_set_text_fmt(info, "%s", str.c_str());
@@ -1382,6 +1415,274 @@ static scr_lifecycle_t screen3 = {
 lv_obj_t * scr4_list;
 static lv_obj_t *scr4_lab_buf[20];
 
+// --------------------- WIFI Test (list item, no separate screen) ----------
+#include "http_utils.h"
+#include <WiFi.h>          /* WiFi.localIP() next to the public IP in Test */
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <lwip/sockets.h>   /* inet_pton / AF_INET for the IP format check */
+
+static lv_obj_t *wifi_test_popup = NULL;
+static bool wifi_test_active = false;           /* set while the WIFI page is on top */
+
+static void wifi_test_close_cb(lv_event_t *e)
+{
+    if (wifi_test_popup) {
+        lv_obj_del(wifi_test_popup);
+        wifi_test_popup = NULL;
+    }
+}
+
+/* Result popup (信息层): title + wrapped body + Close button. */
+static void wifi_test_show_result(const char *title, const char *text)
+{
+    wifi_test_close_cb(NULL);
+    wifi_test_popup = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(wifi_test_popup, 220, 250);
+    lv_obj_align(wifi_test_popup, LV_ALIGN_CENTER, 0, -10);
+    lv_obj_set_style_bg_color(wifi_test_popup, lv_color_white(), 0);
+    lv_obj_set_style_border_width(wifi_test_popup, 1, 0);
+    lv_obj_set_style_border_color(wifi_test_popup, lv_color_black(), 0);
+    lv_obj_set_style_radius(wifi_test_popup, 6, 0);
+    lv_obj_set_style_pad_all(wifi_test_popup, 8, 0);
+    lv_obj_set_flex_flow(wifi_test_popup, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(wifi_test_popup, 6, 0);
+    lv_obj_clear_flag(wifi_test_popup, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *t = lv_label_create(wifi_test_popup);
+    lv_label_set_text(t, title);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
+
+    lv_obj_t *b = lv_label_create(wifi_test_popup);
+    lv_obj_set_width(b, lv_pct(100));
+    lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(b, text);
+    lv_obj_set_style_text_font(b, &lv_font_montserrat_14, 0);
+    lv_obj_set_flex_grow(b, 1);
+
+    lv_obj_t *close_btn = lv_btn_create(wifi_test_popup);
+    lv_obj_set_width(close_btn, lv_pct(100));
+    lv_obj_set_height(close_btn, 32);
+    lv_obj_t *close_lab = lv_label_create(close_btn);
+    lv_label_set_text(close_lab, "Close");
+    lv_obj_center(close_lab);
+    lv_obj_add_event_cb(close_btn, wifi_test_close_cb, LV_EVENT_CLICKED, NULL);
+}
+
+/* WiFi Test is fully asynchronous (review round 7 finding 1.3): the HTTP
+ * request runs in a FreeRTOS task, the UI thread polls the result with an
+ * LVGL timer - the UI never freezes and leaving the page works anytime.
+ *
+ * Review findings 1.4/1.5 fixes: results travel over a FreeRTOS queue as
+ * heap-allocated structs (ownership transfers to the UI thread; no
+ * volatile-flag-guarded std::string cross-core access), and every request
+ * carries the page generation captured at launch - stale results from a
+ * previous visit of the page are dropped. */
+#define WIFI_TEST_URL "https://ifconfig.me/ip"  /* /ip returns plain text, not HTML */
+
+typedef struct {
+    uint32_t gen;               /* page generation at launch */
+    http_response_t resp;
+} wifi_test_result_t;
+
+typedef struct {
+    uint32_t gen;
+    time_t before;
+    time_t after;
+    bool ok;
+} time_sync_result_t;
+
+static QueueHandle_t s_wifi_test_q = NULL;
+static QueueHandle_t s_time_sync_q = NULL;
+static volatile uint32_t s_wifi_page_gen = 0;   /* bumped on every page entry */
+static volatile bool s_wifi_test_busy = false;  /* UI-owned busy state */
+static uint32_t s_wifi_test_busy_gen = 0;       /* gen of the in-flight request */
+static volatile bool s_time_sync_busy = false;
+static uint32_t s_time_sync_busy_gen = 0;
+static lv_timer_t *wifi_test_timer = NULL;
+
+static bool wifi_test_ip_valid(const char *s)
+{
+    uint32_t a4 = 0;
+    uint8_t a6[16];
+    if (!s || !*s) return false;
+    return inet_pton(AF_INET, s, &a4) == 1 || inet_pton(AF_INET6, s, a6) == 1;
+}
+
+static void wifi_test_task_func(void *param)
+{
+    uint32_t gen = (uint32_t)(uintptr_t)param;
+    wifi_test_result_t *res = new wifi_test_result_t;
+    res->gen = gen;
+    res->resp = http_get_ua(WIFI_TEST_URL, "curl/8.5.0", 15000);
+    if (s_wifi_test_q) {
+        xQueueSend(s_wifi_test_q, &res, portMAX_DELAY);
+    } else {
+        delete res;
+    }
+    vTaskDelete(NULL);
+}
+
+static void wifi_page_timer_cb(lv_timer_t *t)
+{
+    /* Drain time sync results (queue, ownership transfers to the UI). */
+    time_sync_result_t *ts = NULL;
+    while (s_time_sync_q && xQueueReceive(s_time_sync_q, &ts, 0) == pdTRUE) {
+        if (!ts) continue;
+        /* release busy only when THIS request finished (review: a stale
+         * result must not unlock a newer in-flight request) */
+        if (ts->gen == s_time_sync_busy_gen) s_time_sync_busy = false;
+        if (ts->gen == s_wifi_page_gen && wifi_test_active) {
+            struct tm tmb, tma;
+            localtime_r(&ts->before, &tmb);
+            localtime_r(&ts->after, &tma);
+            char buf[192];
+            if (ts->ok) {
+                snprintf(buf, sizeof(buf),
+                         "Before: %04d-%02d-%02d %02d:%02d:%02d\n"
+                         "After:  %04d-%02d-%02d %02d:%02d:%02d",
+                         tmb.tm_year + 1900, tmb.tm_mon + 1, tmb.tm_mday,
+                         tmb.tm_hour, tmb.tm_min, tmb.tm_sec,
+                         tma.tm_year + 1900, tma.tm_mon + 1, tma.tm_mday,
+                         tma.tm_hour, tma.tm_min, tma.tm_sec);
+            } else {
+                snprintf(buf, sizeof(buf),
+                         "Sync failed\nbefore=%ld after=%ld",
+                         (long)ts->before, (long)ts->after);
+            }
+            Serial.printf("[TimeSync] before=%ld after=%ld %s\n",
+                          (long)ts->before, (long)ts->after,
+                          ts->ok ? "ok" : "failed");
+            wifi_test_show_result("Time Sync", buf);
+        } else {
+            Serial.println("[TimeSync] stale result dropped");
+        }
+        delete ts;
+    }
+
+    /* Drain WiFi Test results. */
+    wifi_test_result_t *wr = NULL;
+    while (s_wifi_test_q && xQueueReceive(s_wifi_test_q, &wr, 0) == pdTRUE) {
+        if (!wr) continue;
+        if (wr->gen == s_wifi_test_busy_gen) s_wifi_test_busy = false;
+        if (wr->gen == s_wifi_page_gen && wifi_test_active) {
+            http_response_t resp = wr->resp;
+            if (resp.success && resp.status_code == 200) {
+                char ip[80];
+                strncpy(ip, resp.body.c_str(), sizeof(ip) - 1);
+                ip[sizeof(ip) - 1] = '\0';
+                char *endp = ip + strlen(ip);
+                while (endp > ip && (endp[-1] == ' ' || endp[-1] == '\t' ||
+                                     endp[-1] == '\r' || endp[-1] == '\n')) {
+                    *--endp = '\0';
+                }
+                if (wifi_test_ip_valid(ip)) {
+                    /* LAN IP alongside the public one (user request
+                     * 2026-08-22): shows which subnet the device sits on -
+                     * handy when a PC-side server must be reachable from it */
+                    char lan[24];
+                    strncpy(lan, WiFi.localIP().toString().c_str(), sizeof(lan) - 1);
+                    lan[sizeof(lan) - 1] = '\0';
+                    Serial.printf("[WiFiTest] public ip: %s lan ip: %s\n", ip, lan);
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "Public IP:\n%s\nLAN IP:\n%s", ip, lan);
+                    wifi_test_show_result("WiFi Test OK", msg);
+                } else {
+                    Serial.printf("[WiFiTest] unexpected response: %s\n", ip);
+                    wifi_test_show_result("WiFi Test", "Unexpected response\n(not an IP address)");
+                }
+            } else {
+                Serial.printf("[WiFiTest] request failed code=%d err=%s\n",
+                              resp.status_code, resp.error.c_str());
+                char buf[128];
+                if (!resp.error.empty()) {
+                    snprintf(buf, sizeof(buf), "Request failed\n%s", resp.error.c_str());
+                } else {
+                    snprintf(buf, sizeof(buf), "Request failed\nHTTP %d", resp.status_code);
+                }
+                wifi_test_show_result("WiFi Test", buf);
+            }
+        } else {
+            Serial.println("[WiFiTest] stale result dropped");
+        }
+        delete wr;
+    }
+}
+
+static void wifi_test_run(void)
+{
+    if (!http_require_wifi("WiFi Test")) {
+        /* caller-side feedback: http_require_wifi only reports the state
+         * (review round 6 finding 1.2) */
+        Serial.println("[WiFiTest] WiFi not connected");
+        wifi_test_show_result("WiFi Test", "WiFi not connected\nconfigure it first");
+        return;
+    }
+    if (s_wifi_test_busy) return;               /* already running */
+    if (!s_wifi_test_q) s_wifi_test_q = xQueueCreate(4, sizeof(void *));
+    if (!s_wifi_test_q) {                       /* must not start without a queue */
+        wifi_test_show_result("WiFi Test", "Cannot start task");
+        return;
+    }
+
+    wifi_test_show_result("WiFi Test", "Testing...");
+    s_wifi_test_busy = true;
+    s_wifi_test_busy_gen = s_wifi_page_gen;
+    TaskHandle_t h = NULL;
+    if (xTaskCreate(wifi_test_task_func, "wifi_test", 1024 * 8,
+                    (void *)(uintptr_t)s_wifi_page_gen, 1, &h) != pdPASS) {
+        s_wifi_test_busy = false;
+        wifi_test_show_result("WiFi Test", "Cannot start task");
+    }
+}
+
+/* Time Sync list item: async NTP sync, popup shows before/after times. */
+static void time_sync_task_func(void *param)
+{
+    uint32_t gen = (uint32_t)(uintptr_t)param;
+    time_sync_result_t *res = new time_sync_result_t;
+    res->gen = gen;
+    res->before = time(nullptr);
+    configTzTime("CST-8", "cn.pool.ntp.org", "pool.ntp.org", "time.nist.gov");
+    uint32_t t0 = millis();
+    while (time(nullptr) <= 1700000000 && millis() - t0 < 10000) {
+        delay(100);
+    }
+    res->after = time(nullptr);
+    res->ok = (res->after > 1700000000);
+    if (s_time_sync_q) {
+        xQueueSend(s_time_sync_q, &res, portMAX_DELAY);
+    } else {
+        delete res;
+    }
+    vTaskDelete(NULL);
+}
+
+static void time_sync_run(void)
+{
+    if (!http_require_wifi("Time Sync")) {
+        wifi_test_show_result("Time Sync", "WiFi not connected\nconfigure it first");
+        return;
+    }
+    if (s_time_sync_busy) return;               /* already running */
+    if (!s_time_sync_q) s_time_sync_q = xQueueCreate(4, sizeof(void *));
+    if (!s_time_sync_q) {
+        wifi_test_show_result("Time Sync", "Cannot start task");
+        return;
+    }
+
+    wifi_test_show_result("Time Sync", "Syncing...");
+    s_time_sync_busy = true;
+    s_time_sync_busy_gen = s_wifi_page_gen;
+    TaskHandle_t h = NULL;
+    if (xTaskCreate(time_sync_task_func, "time_sync", 1024 * 4,
+                    (void *)(uintptr_t)s_wifi_page_gen, 1, &h) != pdPASS) {
+        s_time_sync_busy = false;
+        wifi_test_show_result("Time Sync", "Cannot start task");
+    }
+}
+
 static void scr4_list_event(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -1399,6 +1700,14 @@ static void scr4_list_event(lv_event_t *e)
             if(strcmp("- WIFI Scan", str) == 0)
             {
                 scr_mgr_push(SCREEN4_2_ID, false);
+            }
+            if(strcmp("- WIFI Test", str) == 0)
+            {
+                wifi_test_run();
+            }
+            if(strcmp("- Time Sync", str) == 0)
+            {
+                time_sync_run();
             }
             printf("%s\n", str);
         }
@@ -1452,19 +1761,48 @@ static void create4(lv_obj_t *parent)
 
     scr4_item_create("- WIFI Config", scr4_list_event);
     scr4_item_create("- WIFI Scan", scr4_list_event);
+    scr4_item_create("- WIFI Test", scr4_list_event);
+    scr4_item_create("- Time Sync", scr4_list_event);
 
     // back
     scr_back_btn_create(parent, "WIFI", scr4_btn_event_cb);
 }
 
-static void entry4(void) 
+static void entry4(void)
 {
     ui_disp_full_refr();
+    wifi_test_active = true;
+    s_wifi_page_gen++;                          /* invalidate in-flight requests of a previous visit */
+    if (!wifi_test_timer) {
+        wifi_test_timer = lv_timer_create(wifi_page_timer_cb, 100, NULL);
+    }
 }
 static void exit4(void) {
     ui_disp_full_refr();
+    wifi_test_active = false;
+    wifi_test_close_cb(NULL);                   /* no popup on other screens */
+    if (wifi_test_timer) {
+        lv_timer_del(wifi_test_timer);
+        wifi_test_timer = NULL;
+    }
 }
-static void destroy4(void) { }
+static void destroy4(void) {
+    wifi_test_active = false;
+    wifi_test_close_cb(NULL);
+    if (wifi_test_timer) {
+        lv_timer_del(wifi_test_timer);
+        wifi_test_timer = NULL;
+    }
+    /* async IPC contract rule 8 (copilot finding 1.5): leaving the page
+     * invalidates the old generation and clears both busy flags - without
+     * this, re-entering within the request window gets silently rejected.
+     * The in-flight tasks keep their own snapshots; their late results are
+     * dropped by the generation check, and busy_gen prevents a stale
+     * result from unlocking a newer request. */
+    s_wifi_page_gen++;
+    s_wifi_test_busy = false;
+    s_time_sync_busy = false;
+}
 
 static scr_lifecycle_t screen4 = {
     .create = create4,
@@ -1476,16 +1814,67 @@ static scr_lifecycle_t screen4 = {
 // --------------------- screen 4.1 --------------------- Wifi Config
 #if 1
 #include <WiFi.h>
+#include <esp_wifi.h>       /* esp_wifi_scan_stop(): actually abort an async scan */
 #include <Preferences.h>
 
 static lv_obj_t *wifi_ssid_lab = NULL;
-static lv_obj_t *wifi_ssid_dd = NULL;
+static lv_obj_t *wifi_ssid_ta = NULL;
 static lv_obj_t *wifi_pass_lab = NULL;
 static lv_obj_t *wifi_pass_ta = NULL;
 static lv_obj_t *wifi_status_lab = NULL;
 static bool wifi_cfg_kbd_active = false;
-static int  wifi_cfg_field = 0;                 // 0 = SSID (dropdown), 1 = password
-static bool wifi_scan_empty = true;             // last scan found no visible SSID
+static int  wifi_cfg_field = 0;                 // 0 = SSID, 1 = password
+static bool wifi_cfg_scan_mode = false;         // true: +/- cycle scan picks (else manual edit)
+static int16_t wifi_scan_state = WIFI_SCAN_FAILED; // WIFI_SCAN_RUNNING while async scan active
+static uint8_t wifi_scan_gen = 0;                 // bumped to invalidate an in-flight scan
+static uint8_t wifi_scan_pending_gen = 0;         // generation of the scan in flight
+static volatile uint32_t s_scan_done_cnt = 0;     // increments on every SCAN_DONE event
+static bool s_scan_event_registered = false;
+static bool s_scan_release_pending = false;       // aborted scan's SCAN_DONE still missing
+static uint32_t s_scan_release_target = 0;        // cnt at abort; an event past it clears pending
+/* The callback runs on the WiFi event task, the UI polls from the main
+ * loop: cnt/pending/target are shared state and must be touched inside
+ * this critical section (copilot finding 1.3: unsynchronized reads can
+ * miss a publish/callback race). Serial is NOT used inside the section. */
+static portMUX_TYPE s_scan_mux = portMUX_INITIALIZER_UNLOCKED;
+
+/* All shared-state READS also go through the critical section (copilot
+ * finding 1.3): the callback runs on the WiFi event task, so a plain
+ * read on the UI core is a C++ data race even if it looks atomic. */
+static bool scan_release_is_pending(void)
+{
+    bool v;
+    portENTER_CRITICAL(&s_scan_mux);
+    v = s_scan_release_pending;
+    portEXIT_CRITICAL(&s_scan_mux);
+    return v;
+}
+
+/* Framework event order (WiFiGenericClass::_eventCallback): the internal
+ * WiFiScanClass::_scanDone() runs FIRST (allocates + fills the results),
+ * user onEvent callbacks dispatch AFTER it. So once this fires, it is safe
+ * to scanDelete() the results (review round 4 finding 1.2). The counter
+ * binds waits to a specific event instead of a flag (review finding 1.3);
+ * a late event arriving before the retry clears the pending state itself
+ * (copilot finding 1.3: retry must not re-baseline the wait). */
+static void wifi_scan_done_cb(arduino_event_id_t event, arduino_event_info_t info)
+{
+    bool release = false;
+    portENTER_CRITICAL(&s_scan_mux);
+    s_scan_done_cnt++;
+    if (s_scan_release_pending && s_scan_done_cnt > s_scan_release_target) {
+        s_scan_release_pending = false;
+        release = true;
+    }
+    portEXIT_CRITICAL(&s_scan_mux);
+    if (release) {
+        Serial.println("[WiFi] deferred release satisfied");
+    }
+}
+static char wifi_scan_ssids[UI_WIFI_SCAN_ITEM_MAX][33];
+static int  wifi_scan_cnt = 0;                  // visible SSIDs from last scan
+static int  wifi_scan_idx = 0;                  // currently shown candidate
+static char wifi_ssid_pre_scan[65] = {0};       // box content before entering scan mode
 static char wifi_ssid[65] = {0};
 static char wifi_pass[65] = {0};
 static char wifi_status[96] = {0};
@@ -1515,79 +1904,163 @@ static void wifi_cfg_save(void)
     p.end();
 }
 
-static void wifi_cfg_refresh(void)
+/* Update field markers/status only. The textareas hold live drafts and must
+ * NOT be rewritten from the buffers on field transitions (finding 2.4). */
+static void wifi_cfg_refresh_labels(void)
 {
     lv_label_set_text(wifi_ssid_lab, wifi_cfg_field == 0 ? "SSID >" : "SSID");
     lv_label_set_text(wifi_pass_lab, wifi_cfg_field == 1 ? "Pass >" : "Pass");
     lv_label_set_text(wifi_status_lab, wifi_status);
-    lv_textarea_set_text(wifi_pass_ta, wifi_pass);
 }
 
-/* Run a scan and fill the SSID dropdown. Returns number of visible SSIDs. */
-static int wifi_cfg_scan(void)
+/* Sync the current field's textarea into its draft buffer, so switching
+ * fields keeps uncommitted edits (finding 2.4). */
+static void wifi_cfg_sync_draft(void)
 {
-    WiFi.scanDelete();
-    int n = WiFi.scanNetworks();
-    static char opts[1024];
+    lv_obj_t *ta = (wifi_cfg_field == 0) ? wifi_ssid_ta : wifi_pass_ta;
+    char *buf = (wifi_cfg_field == 0) ? wifi_ssid : wifi_pass;
+    strncpy(buf, lv_textarea_get_text(ta), 64);
+    buf[64] = '\0';
+}
 
-    if (n <= 0) {
-        snprintf(opts, sizeof(opts), "(none found - Enter:rescan)");
-        lv_dropdown_set_options(wifi_ssid_dd, opts);
-        lv_dropdown_set_selected(wifi_ssid_dd, 0);
-        wifi_scan_empty = true;
-        return 0;
+/* Start an asynchronous WiFi scan (Alt+Enter in the SSID field). Keeps the
+ * pre-scan box content so the pick can be cancelled. Returns true if the
+ * scan was actually started. */
+static void wifi_cfg_scan_abort(void);
+static void wifi_scan_overlay_show(void);
+static void wifi_scan_overlay_update(void);
+static void wifi_scan_overlay_hide(void);
+static void wifi_banner_show(const char *text);
+static void wifi_banner_update(void);
+static void wifi_banner_hide(void);
+
+static bool wifi_cfg_scan_start(void)
+{
+    if (scan_release_is_pending()) {
+        /* A previous aborted scan has not delivered its SCAN_DONE yet;
+         * wait (bounded) for it before touching the framework results,
+         * otherwise scanDelete() races the late _scanDone() (review 1.3).
+         * The event callback clears the pending state itself as soon as
+         * the target count is exceeded. */
+        uint32_t t0 = millis();
+        while (scan_release_is_pending() && millis() - t0 < 3000) {
+            delay(1);
+        }
+        if (scan_release_is_pending()) {
+            snprintf(wifi_status, sizeof(wifi_status), "Scan busy - retry");
+            lv_label_set_text(wifi_status_lab, wifi_status);
+            Serial.println("[WiFi] scan start blocked: previous SCAN_DONE pending");
+            return false;
+        }
+        WiFi.scanDelete();                      /* event arrived; safe to release now */
     }
 
-    opts[0] = '\0';
-    int olen = 0, opt_idx = 0, sel = 0;
-    for (int i = 0; i < n; i++) {
+    wifi_scan_gen++;
+    wifi_scan_pending_gen = wifi_scan_gen;
+    if (!wifi_cfg_scan_mode) {
+        strncpy(wifi_ssid_pre_scan, lv_textarea_get_text(wifi_ssid_ta),
+                sizeof(wifi_ssid_pre_scan) - 1);
+        wifi_ssid_pre_scan[sizeof(wifi_ssid_pre_scan) - 1] = '\0';
+    }
+    WiFi.scanDelete();
+    int16_t r = WiFi.scanNetworks(true);        /* async; main loop keeps draining the key FIFO */
+    if (r == WIFI_SCAN_RUNNING) {
+        wifi_scan_state = WIFI_SCAN_RUNNING;
+        snprintf(wifi_status, sizeof(wifi_status), "Scanning...");
+        lv_label_set_text(wifi_status_lab, wifi_status);
+        wifi_scan_overlay_show();               /* topmost countdown, input blocked */
+        Serial.println("[WiFi] scan started (async)");
+        return true;
+    }
+    wifi_scan_state = r;
+    snprintf(wifi_status, sizeof(wifi_status), "Scan start fail (%d)", r);
+    lv_label_set_text(wifi_status_lab, wifi_status);
+    Serial.printf("[WiFi] scan start failed r=%d\n", r);
+    wifi_banner_show("Scan start failed");
+    return false;
+}
+
+/* Called every loop pass while the screen is active: collect the async scan
+ * result when it finishes. */
+static void wifi_cfg_scan_poll(void)
+{
+    if (wifi_scan_state != WIFI_SCAN_RUNNING) return;
+    int16_t r = WiFi.scanComplete();
+    if (r == WIFI_SCAN_RUNNING) return;         /* still scanning */
+
+    if (r < 0) {
+        /* scan failure kept distinct from "no networks found" (finding 1.5) */
+        wifi_scan_state = r;
+        snprintf(wifi_status, sizeof(wifi_status), "Scan failed (%d)", r);
+        lv_label_set_text(wifi_status_lab, wifi_status);
+        Serial.printf("[WiFi] scan failed r=%d\n", r);
+        wifi_banner_show("Scan failed");
+        return;
+    }
+
+    wifi_scan_state = r;
+    if (wifi_scan_pending_gen != wifi_scan_gen || wifi_cfg_field != 0) {
+        /* superseded by a newer scan/exit, or the user left the SSID field:
+         * drop the results instead of overwriting the draft (finding 2.3) */
+        WiFi.scanDelete();
+        wifi_scan_state = WIFI_SCAN_FAILED;
+        Serial.println("[WiFi] scan results dropped (superseded)");
+        return;
+    }
+    wifi_scan_cnt = 0;
+    wifi_scan_idx = 0;
+    for (int i = 0; i < r && wifi_scan_cnt < UI_WIFI_SCAN_ITEM_MAX; i++) {
         String s = WiFi.SSID(i);
         if (s.length() == 0) continue;          /* hidden network */
-        const char *name = s.c_str();
-        int need = strlen(name) + (opt_idx > 0 ? 1 : 0);
-        if (olen + need >= (int)sizeof(opts) - 1) break;
-        if (opt_idx > 0) opts[olen++] = '\n';
-        strcpy(opts + olen, name);
-        olen += strlen(name);
-        if (strcmp(wifi_ssid, name) == 0) sel = opt_idx;
-        opt_idx++;
+        strncpy(wifi_scan_ssids[wifi_scan_cnt], s.c_str(), 32);
+        wifi_scan_ssids[wifi_scan_cnt][32] = '\0';
+        Serial.printf("[WiFi] scan[%d] %s\n", wifi_scan_cnt, wifi_scan_ssids[wifi_scan_cnt]);
+        if (strcmp(wifi_ssid, wifi_scan_ssids[wifi_scan_cnt]) == 0) {
+            wifi_scan_idx = wifi_scan_cnt;      /* keep the current pick */
+        }
+        wifi_scan_cnt++;
     }
-    if (opt_idx == 0) {
-        snprintf(opts, sizeof(opts), "(none found - Enter:rescan)");
-        wifi_scan_empty = true;
-    } else {
-        wifi_scan_empty = false;
+    WiFi.scanDelete();                          /* release the framework's result memory (2.3) */
+    if (wifi_scan_cnt == 0) {
+        snprintf(wifi_status, sizeof(wifi_status), "Scan: none found");
+        lv_label_set_text(wifi_status_lab, wifi_status);
+        Serial.println("[WiFi] scan done: no networks found");
+        wifi_banner_show("Scan: none found");
+        return;                                 /* stay in manual edit mode */
     }
-    lv_dropdown_set_options(wifi_ssid_dd, opts);
-    lv_dropdown_set_selected(wifi_ssid_dd, sel);
-    return opt_idx;
+    snprintf(wifi_status, sizeof(wifi_status), "Scan: %d found", wifi_scan_cnt);
+    lv_label_set_text(wifi_status_lab, wifi_status);
+    wifi_cfg_scan_mode = true;
+    lv_textarea_set_text(wifi_ssid_ta, wifi_scan_ssids[wifi_scan_idx]);
+    char banner_buf[48];
+    snprintf(banner_buf, sizeof(banner_buf), "Scan: %d found", wifi_scan_cnt);
+    wifi_banner_show(banner_buf);
 }
 
-/* Touch path: an item in the open dropdown list was tapped. LVGL closes the
- * list and fires VALUE_CHANGED; copy the picked SSID and jump to password.
- *
- * NOTE (reviewer #6): pda2 factory retains the touch driver, so this
- * callback is reachable on this hardware. The allinone build (no touch)
- * will NOT call lv_indev_drv_register for pointer, so this callback will
- * never fire there — the keypad pick path in wifi_cfg_keyboard_poll() is
- * the only path that matters. Keep the callback for pda2 hybrid UX. */
-static void wifi_dd_value_cb(lv_event_t *e)
+/* Kick off (and briefly await) NTP right after a successful connect so TLS
+ * cert validation has a sane clock. cn.pool.ntp.org first: pool.ntp.org is
+ * often unreachable in CN networks. */
+static void wifi_time_sync(void)
 {
-    if (wifi_scan_empty) return;
-    lv_obj_t *dd = lv_event_get_target(e);
-    char buf[65];
-    lv_dropdown_get_selected_str(dd, buf, sizeof(buf));
-    strncpy(wifi_ssid, buf, sizeof(wifi_ssid) - 1);
-    wifi_cfg_field = 1;
-    wifi_cfg_refresh();
+    Serial.println("[WiFi] connected - syncing NTP time");
+    configTzTime("CST-8", "cn.pool.ntp.org", "pool.ntp.org", "time.nist.gov");
+    uint32_t t0 = millis();
+    while (time(nullptr) <= 1700000000 && millis() - t0 < 8000) {
+        delay(100);
+        lv_timer_handler();
+    }
+    Serial.printf("[WiFi] time sync %s (epoch=%ld)\n",
+                  time(nullptr) > 1700000000 ? "ok" : "pending", (long)time(nullptr));
 }
 
-static void wifi_cfg_commit(void)
+/* Try to connect with the current ssid/pass. Returns true on success.
+ * Callers persist to NVS only when this returns true. */
+static bool wifi_cfg_connect(void)
 {
     if (wifi_ssid[0] == '\0') {
         snprintf(wifi_status, sizeof(wifi_status), "No SSID set");
         lv_label_set_text(wifi_status_lab, wifi_status);
-        return;
+        return false;
     }
     snprintf(wifi_status, sizeof(wifi_status), "Connecting...");
     lv_label_set_text(wifi_status_lab, wifi_status);
@@ -1602,8 +2075,16 @@ static void wifi_cfg_commit(void)
         delay(200);
         lv_timer_handler();
     }
-    if (st == WL_CONNECTED) {
+    keypad_clear_chars();   /* drop keys pressed during the blocking connect */
+
+    bool ok = (st == WL_CONNECTED);
+    if (ok) {
         snprintf(wifi_status, sizeof(wifi_status), "OK IP: %s", WiFi.localIP().toString().c_str());
+        Serial.printf("[WiFi] connected ip=%s\n", WiFi.localIP().toString().c_str());
+        wifi_time_sync();   /* automatic NTP calibration after connect */
+        char banner_buf[64];
+        snprintf(banner_buf, sizeof(banner_buf), "Connected! IP: %s", WiFi.localIP().toString().c_str());
+        wifi_banner_show(banner_buf);
     } else {
         const char *why = "Connect fail";
         switch (st) {
@@ -1614,75 +2095,141 @@ static void wifi_cfg_commit(void)
             default: break;
         }
         snprintf(wifi_status, sizeof(wifi_status), "%s (%d)", why, st);
+        Serial.printf("[WiFi] connect failed st=%d (%s)\n", st, why);
+        wifi_banner_show("Connect failed");
     }
     lv_label_set_text(wifi_status_lab, wifi_status);
+    return ok;
+}
+
+/* Touch taps move LVGL focus between the two boxes independently of the
+ * keypad (lv_indev.c::indev_click_focus sends LV_EVENT_FOCUSED on tap);
+ * keep wifi_cfg_field in sync so keypad edits always target the box the
+ * user sees the cursor in. The field guard also preserves uncommitted text:
+ * tapping the already-active box must not reset the textarea. */
+static void wifi_cfg_set_field(int f);
+
+static void wifi_ssid_focus_cb(lv_event_t *e)
+{
+    if (wifi_cfg_field != 0) {
+        wifi_cfg_set_field(0);
+    }
+}
+
+static void wifi_pass_focus_cb(lv_event_t *e)
+{
+    if (wifi_cfg_field != 1) {
+        wifi_cfg_set_field(1);
+    }
+}
+
+/* Field switch (keypad or touch): sync the outgoing field's draft, move the
+ * visible cursor (LV_EVENT_FOCUSED restarts the textarea cursor blink) so it
+ * matches the ">" marker, and refresh labels only — the other box's content
+ * is never rewritten (finding 2.4). */
+static void wifi_cfg_set_field(int f)
+{
+    if (f != wifi_cfg_field) {
+        wifi_cfg_sync_draft();
+    }
+    wifi_cfg_field = f;
+    wifi_cfg_scan_mode = false;
+    if (f != 0 && wifi_scan_state == WIFI_SCAN_RUNNING) {
+        wifi_scan_gen++;        /* left the SSID field mid-scan: ignore its result (2.3) */
+    }
+    lv_event_send(f == 0 ? (lv_obj_t *)wifi_ssid_ta : (lv_obj_t *)wifi_pass_ta,
+                  LV_EVENT_FOCUSED, NULL);
+    wifi_cfg_refresh_labels();
 }
 
 void wifi_cfg_keyboard_poll()
 {
-    if (!wifi_cfg_kbd_active || !wifi_ssid_dd || !wifi_pass_ta) return;
+    if (!wifi_cfg_kbd_active || !wifi_ssid_ta || !wifi_pass_ta) return;
+    wifi_cfg_scan_poll();                       /* async scan result (runs every loop) */
+    wifi_scan_overlay_update();                 /* countdown/hide of the scan overlay */
+    wifi_banner_update();                       /* auto-hide of the result banner */
+
+    /* burst processing (user feedback): drain the whole key backlog in
+     * ONE poll pass so a typed run coalesces into a single EPD render
+     * instead of one flush per character - the per-char dispatch below
+     * is unchanged, it just runs in a loop. */
+    for (int guard = 0; guard < 32; guard++) {
     char c;
-    if (!keypad_get_val(&c)) return;
+    if (!keypad_get_val(&c)) break;
     keypad_set_flag();
 
+    if (c == '\v') continue;                    /* volume key: reserved, no handler yet */
+
     if (wifi_cfg_field == 0) {
-        if (lv_dropdown_is_open(wifi_ssid_dd)) {
-            /* dropdown list open: +/- (Sym layer) move, Enter pick, Backspace cancel */
-            int cnt = lv_dropdown_get_option_cnt(wifi_ssid_dd);
-            if (c == '+') {
-                if (!wifi_scan_empty && cnt > 0) {
-                    int s = lv_dropdown_get_selected(wifi_ssid_dd);
-                    lv_dropdown_set_selected(wifi_ssid_dd, (s + 1) % cnt);
-                }
-            } else if (c == '-') {
-                if (!wifi_scan_empty && cnt > 0) {
-                    int s = lv_dropdown_get_selected(wifi_ssid_dd);
-                    lv_dropdown_set_selected(wifi_ssid_dd, (s + cnt - 1) % cnt);
-                }
-            } else if (c == '\n') {
-                if (!wifi_scan_empty) {
-                    char buf[65];
-                    lv_dropdown_get_selected_str(wifi_ssid_dd, buf, sizeof(buf));
-                    strncpy(wifi_ssid, buf, sizeof(wifi_ssid) - 1);
-                }
-                lv_dropdown_close(wifi_ssid_dd);
-                wifi_cfg_field = 1;
-                wifi_cfg_refresh();
-            } else if (c == '\b') {
-                lv_dropdown_close(wifi_ssid_dd);
-                wifi_cfg_refresh();
-            }
-            return;
+        if (wifi_scan_state == WIFI_SCAN_RUNNING) {
+            break;                              /* scan in flight: ignore keys */
         }
-        if (c == '\n') {
-            snprintf(wifi_status, sizeof(wifi_status), "Scanning...");
-            lv_label_set_text(wifi_status_lab, wifi_status);
-            lv_timer_handler();
-            wifi_cfg_scan();
-            lv_dropdown_open(wifi_ssid_dd);
-        } else if (c == '\b') {
-            wifi_cfg_kbd_active = false;
-            scr_mgr_pop(false);
+        if (c == '\t') {
+            /* Alt+Enter: independent scan entry, works with any box content
+             * (review finding 1.2) */
+            wifi_cfg_scan_start();
+        } else if (wifi_cfg_scan_mode) {
+            if (c == '+' || c == '-') {
+                wifi_scan_idx = (wifi_scan_idx + (c == '+' ? 1 : wifi_scan_cnt - 1)) % wifi_scan_cnt;
+                lv_textarea_set_text(wifi_ssid_ta, wifi_scan_ssids[wifi_scan_idx]);
+            } else if (c == '\n') {
+                /* pick the shown candidate (set_field syncs the draft) */
+                wifi_cfg_set_field(1);
+            } else if (c == '\b') {
+                /* cancel the pick: restore the pre-scan box content */
+                wifi_cfg_scan_mode = false;
+                lv_textarea_set_text(wifi_ssid_ta, wifi_ssid_pre_scan);
+            } else {
+                /* start manual editing: all visible chars go to the box
+                 * (review finding 1.1) */
+                wifi_cfg_scan_mode = false;
+                lv_textarea_add_char(wifi_ssid_ta, c);
+            }
+        } else {
+            if (c == '\n') {
+                const char *txt = lv_textarea_get_text(wifi_ssid_ta);
+                if (txt && txt[0] != '\0') {
+                    /* commit the box (set_field syncs the draft), goto password */
+                    wifi_cfg_set_field(1);
+                } else {
+                    /* empty box: Enter also scans; Alt+Enter scans anytime */
+                    wifi_cfg_scan_start();
+                }
+            } else if (c == '\b') {
+                const char *txt = lv_textarea_get_text(wifi_ssid_ta);
+                if (txt && txt[0] != '\0') {
+                    lv_textarea_del_char(wifi_ssid_ta);
+                } else {
+                    wifi_cfg_kbd_active = false;
+                    scr_mgr_pop(false);
+                }
+            } else {
+                lv_textarea_add_char(wifi_ssid_ta, c);
+            }
         }
     } else {
         /* password field */
+        if (c == '\t') {
+            return;                             /* Alt+Enter scan combo: not valid here */
+        }
         if (c == '\n') {
-            strncpy(wifi_pass, lv_textarea_get_text(wifi_pass_ta), sizeof(wifi_pass) - 1);
-            wifi_cfg_save();
-            wifi_cfg_refresh();
-            wifi_cfg_commit();
+            wifi_cfg_sync_draft();               /* pass box → wifi_pass */
+            if (wifi_cfg_connect()) {
+                wifi_cfg_save();                 /* persist only on success */
+            }
+            wifi_cfg_refresh_labels();
         } else if (c == '\b') {
             const char *txt = lv_textarea_get_text(wifi_pass_ta);
             if (txt && txt[0] != '\0') {
                 lv_textarea_del_char(wifi_pass_ta);
             } else {
-                wifi_cfg_field = 0;
-                wifi_cfg_refresh();
+                wifi_cfg_set_field(0);
             }
         } else {
             lv_textarea_add_char(wifi_pass_ta, c);
         }
     }
+    }                                           /* end burst loop */
 }
 
 static void scr4_1_btn_event_cb(lv_event_t * e)
@@ -1693,8 +2240,40 @@ static void scr4_1_btn_event_cb(lv_event_t * e)
     }
 }
 
+/* Touch path for Connect: same as Enter on the password field — sync the
+ * current draft, try to connect, and persist to NVS ONLY on success. */
+static void wifi_connect_btn_cb(lv_event_t *e)
+{
+    wifi_cfg_sync_draft();
+    if (wifi_cfg_connect()) {
+        wifi_cfg_save();                         /* persist only on success */
+    }
+    wifi_cfg_refresh_labels();
+}
+
+/* Touch path for Clear: wipe both boxes, the draft buffers and the NVS
+ * record (so auto-connect on boot no longer uses the old credentials). */
+static void wifi_clear_btn_cb(lv_event_t *e)
+{
+    wifi_ssid[0] = '\0';
+    wifi_pass[0] = '\0';
+    lv_textarea_set_text(wifi_ssid_ta, "");
+    lv_textarea_set_text(wifi_pass_ta, "");
+    wifi_cfg_scan_mode = false;
+    wifi_scan_gen++;                            /* invalidate any in-flight scan */
+    wifi_cfg_save();
+    snprintf(wifi_status, sizeof(wifi_status), "Cleared");
+    wifi_cfg_set_field(0);
+}
+
 static void create4_1(lv_obj_t *parent)
 {
+    /* SCAN_DONE event signal for the abort path (review round 4 finding 1.2) */
+    if (!s_scan_event_registered) {
+        WiFi.onEvent(wifi_scan_done_cb, ARDUINO_EVENT_WIFI_SCAN_DONE);
+        s_scan_event_registered = true;
+    }
+
     scr_back_btn_create(parent, "Wifi Config", scr4_1_btn_event_cb);
 
     lv_obj_t *cont = lv_obj_create(parent);
@@ -1712,14 +2291,13 @@ static void create4_1(lv_obj_t *parent)
     lv_obj_set_style_text_font(wifi_ssid_lab, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_width(wifi_ssid_lab, lv_pct(100));
 
-    wifi_ssid_dd = lv_dropdown_create(cont);
-    lv_obj_set_width(wifi_ssid_dd, lv_pct(100));
-    lv_obj_set_height(wifi_ssid_dd, 34);
-    lv_dropdown_set_options(wifi_ssid_dd, "(Enter: scan)");
-    lv_dropdown_set_selected(wifi_ssid_dd, 0);
-    lv_obj_set_style_text_font(wifi_ssid_dd, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_font(lv_dropdown_get_list(wifi_ssid_dd), &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_add_event_cb(wifi_ssid_dd, wifi_dd_value_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    wifi_ssid_ta = lv_textarea_create(cont);
+    lv_obj_set_width(wifi_ssid_ta, lv_pct(100));
+    lv_obj_set_height(wifi_ssid_ta, 34);
+    lv_textarea_set_one_line(wifi_ssid_ta, true);
+    lv_textarea_set_max_length(wifi_ssid_ta, 32);
+    lv_textarea_set_placeholder_text(wifi_ssid_ta, "type SSID or Enter=scan");
+    lv_obj_set_style_text_font(wifi_ssid_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
     wifi_pass_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(wifi_pass_lab, &lv_font_montserrat_14, LV_PART_MAIN);
@@ -1733,6 +2311,10 @@ static void create4_1(lv_obj_t *parent)
     lv_textarea_set_placeholder_text(wifi_pass_ta, "password");
     lv_obj_set_style_text_font(wifi_pass_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
+    /* keep the keypad field state in sync with touch focus */
+    lv_obj_add_event_cb(wifi_ssid_ta, wifi_ssid_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(wifi_pass_ta, wifi_pass_focus_cb, LV_EVENT_FOCUSED, NULL);
+
     wifi_status_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(wifi_status_lab, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(wifi_status_lab, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
@@ -1742,16 +2324,231 @@ static void create4_1(lv_obj_t *parent)
     lv_obj_t *hint = lv_label_create(cont);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(hint, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
-    lv_label_set_text(hint, "SSID: Enter=scan  +=/\x2d=select\nPass: Enter=save  Backspace=del/back");
+    lv_label_set_text(hint, "Enter:scan/next  +/-:pick\nAlt+Enter:scan  Backspace:del/back");
 
+    /* Connect / Clear buttons (touch path; keyboard: Enter on pass = connect) */
+    lv_obj_t *btn_row = lv_obj_create(cont);
+    lv_obj_set_width(btn_row, lv_pct(100));
+    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btn_row, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(btn_row, 4, LV_PART_MAIN);
+
+    lv_obj_t *connect_btn = lv_btn_create(btn_row);
+    lv_obj_set_flex_grow(connect_btn, 1);
+    lv_obj_set_height(connect_btn, 30);
+    lv_obj_t *connect_lab = lv_label_create(connect_btn);
+    lv_label_set_text(connect_lab, "Connect");
+    lv_obj_center(connect_lab);
+    lv_obj_add_event_cb(connect_btn, wifi_connect_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *clear_btn = lv_btn_create(btn_row);
+    lv_obj_set_flex_grow(clear_btn, 1);
+    lv_obj_set_height(clear_btn, 30);
+    lv_obj_t *clear_lab = lv_label_create(clear_btn);
+    lv_label_set_text(clear_lab, "Clear");
+    lv_obj_center(clear_lab);
+    lv_obj_add_event_cb(clear_btn, wifi_clear_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    wifi_cfg_field = 0;
+    wifi_cfg_scan_mode = false;
+    wifi_scan_cnt = 0;
+    wifi_scan_idx = 0;
     wifi_cfg_load();
-    wifi_cfg_refresh();
+    lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
+    lv_textarea_set_text(wifi_pass_ta, wifi_pass);
+    wifi_cfg_refresh_labels();
     wifi_cfg_kbd_active = true;
 }
 
 static void entry4_1(void) { ui_disp_full_refr(); }
-static void exit4_1(void) { ui_disp_full_refr(); }
-static void destroy4_1(void) { wifi_cfg_kbd_active = false; }
+static void exit4_1(void) {
+    /* The scan overlay/banner live on lv_layer_top() and would outlive a
+     * plain push (exit runs, destroy does not): hide them so they don't
+     * sit on top of the pushed screen (review round 25 finding). */
+    wifi_scan_overlay_hide();
+    wifi_banner_hide();
+    ui_disp_full_refr();
+}
+/* Abort an in-flight async scan (review round 4 finding 1.2): wait for the
+ * explicit SCAN_DONE event (which guarantees the framework's _scanDone()
+ * has finished allocating/filling the results) before scanDelete(). On
+ * timeout the release is DEFERRED and new scans are blocked until the
+ * event arrives (review finding 1.3: a follow-up scan must not run
+ * scanDelete() while the late callback may still be filling results). */
+static void wifi_cfg_scan_abort(void)
+{
+    if (wifi_scan_state != WIFI_SCAN_RUNNING) return;
+
+    /* Copilot 1.3: publish the release target BEFORE stopping the scan,
+     * then re-check the counter. An event landing between the previous
+     * judgement and the publish either passes the re-check or arrives
+     * after the publish and is cleared by the callback - the pending
+     * state can no longer be wedged by an already-past event. */
+    portENTER_CRITICAL(&s_scan_mux);
+    s_scan_release_target = s_scan_done_cnt;
+    s_scan_release_pending = true;
+    if (s_scan_done_cnt > s_scan_release_target) {
+        s_scan_release_pending = false;         /* event beat us to the publish */
+    }
+    portEXIT_CRITICAL(&s_scan_mux);
+
+    esp_wifi_scan_stop();
+    uint32_t t0 = millis();
+    while (scan_release_is_pending() && millis() - t0 < 3000) {
+        delay(1);
+    }
+    if (!scan_release_is_pending()) {
+        WiFi.scanDelete();                      /* SCAN_DONE observed; safe to release */
+    } else {
+        Serial.println("[WiFi] scan abort timeout - release deferred");
+    }
+    wifi_scan_state = WIFI_SCAN_FAILED;
+}
+
+/* Scan progress overlay (user request): topmost message with a countdown.
+ * Blocks keypad (poll guard) and touch (full-screen clickable layer) while
+ * visible; hidden when the scan finishes or the countdown expires (expiry
+ * also aborts a stuck scan). */
+#define WIFI_SCAN_OVL_TIMEOUT_MS 10000
+static lv_obj_t *wifi_scan_ovl = NULL;
+static lv_obj_t *wifi_scan_ovl_lab = NULL;
+static uint32_t wifi_scan_ovl_t0 = 0;
+static uint32_t wifi_scan_ovl_last_secs = 0;
+static uint32_t wifi_scan_ovl_flush_seq = 0;
+static uint32_t wifi_scan_ovl_visible_t0 = 0;
+static bool wifi_scan_ovl_frame_visible = false;
+
+static void wifi_scan_overlay_show(void)
+{
+    if (wifi_scan_ovl) return;
+    wifi_scan_ovl = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(wifi_scan_ovl, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_opa(wifi_scan_ovl, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(wifi_scan_ovl, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(wifi_scan_ovl, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(wifi_scan_ovl, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(wifi_scan_ovl, LV_OBJ_FLAG_CLICKABLE);   /* swallow touches */
+
+    wifi_scan_ovl_lab = lv_label_create(wifi_scan_ovl);
+    lv_obj_set_style_bg_color(wifi_scan_ovl_lab, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(wifi_scan_ovl_lab, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(wifi_scan_ovl_lab, 1, 0);
+    lv_obj_set_style_border_color(wifi_scan_ovl_lab, lv_color_black(), 0);
+    lv_obj_set_style_radius(wifi_scan_ovl_lab, 6, 0);
+    lv_obj_set_style_pad_all(wifi_scan_ovl_lab, 8, 0);
+    lv_obj_set_style_text_font(wifi_scan_ovl_lab, &lv_font_montserrat_14, 0);
+    lv_obj_align(wifi_scan_ovl_lab, LV_ALIGN_TOP_MID, 0, 60);
+    wifi_scan_ovl_t0 = millis();
+    wifi_scan_ovl_last_secs = 0;
+    lv_label_set_text(wifi_scan_ovl_lab, "Scanning... 10s");
+    /* Bind the minimum-display timer to the frame that actually reaches
+     * the EPD. Object lifetime is not panel-visible time on e-paper. */
+    wifi_scan_ovl_frame_visible = false;
+    wifi_scan_ovl_visible_t0 = 0;
+    wifi_scan_ovl_flush_seq = ui_disp_full_refr_seq();
+}
+
+static void wifi_scan_overlay_hide(void)
+{
+    if (wifi_scan_ovl) {
+        lv_obj_del(wifi_scan_ovl);
+        wifi_scan_ovl = NULL;
+        wifi_scan_ovl_lab = NULL;
+    }
+    wifi_scan_ovl_frame_visible = false;
+    wifi_scan_ovl_visible_t0 = 0;
+    wifi_scan_ovl_flush_seq = 0;
+}
+
+/* Called every loop while the screen is active. */
+#define WIFI_SCAN_OVL_MIN_MS 800
+static void wifi_scan_overlay_update(void)
+{
+    if (!wifi_scan_ovl) return;
+
+    if (!wifi_scan_ovl_frame_visible &&
+        ui_disp_flush_done_seq() >= wifi_scan_ovl_flush_seq) {
+        wifi_scan_ovl_frame_visible = true;
+        wifi_scan_ovl_visible_t0 = millis();
+        Serial.println("[WiFi] scan overlay reached panel");
+    }
+
+    if (wifi_scan_state != WIFI_SCAN_RUNNING &&
+        wifi_scan_ovl_frame_visible &&
+        millis() - wifi_scan_ovl_visible_t0 >= WIFI_SCAN_OVL_MIN_MS) {
+        wifi_scan_overlay_hide();
+        return;
+    }
+
+    /* A result banner may be created as soon as scanComplete() returns.
+     * Keep the progress layer above it until its own visible interval ends. */
+    lv_obj_move_foreground(wifi_scan_ovl);
+
+    uint32_t elapsed = millis() - wifi_scan_ovl_t0;
+    if (elapsed >= WIFI_SCAN_OVL_TIMEOUT_MS) {
+        wifi_cfg_scan_abort();                  /* countdown over: abort stuck scan */
+        wifi_scan_overlay_hide();
+        wifi_banner_show("Scan timeout");
+        return;
+    }
+    uint32_t secs = (WIFI_SCAN_OVL_TIMEOUT_MS - elapsed + 999) / 1000;
+    if (secs != wifi_scan_ovl_last_secs) {
+        wifi_scan_ovl_last_secs = secs;
+        lv_label_set_text_fmt(wifi_scan_ovl_lab, "Scanning... %lus", (unsigned)secs);
+    }
+}
+
+/* Result banner (user request): topmost, non-blocking message that
+ * auto-hides. Used to make scan/connect outcomes unmistakable. */
+#define WIFI_BANNER_MS 3000
+static lv_obj_t *wifi_banner_lab = NULL;
+static uint32_t wifi_banner_t0 = 0;
+
+static void wifi_banner_show(const char *text)
+{
+    if (!wifi_banner_lab) {
+        wifi_banner_lab = lv_label_create(lv_layer_top());
+        lv_obj_set_style_bg_color(wifi_banner_lab, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(wifi_banner_lab, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(wifi_banner_lab, 1, 0);
+        lv_obj_set_style_border_color(wifi_banner_lab, lv_color_black(), 0);
+        lv_obj_set_style_radius(wifi_banner_lab, 6, 0);
+        lv_obj_set_style_pad_all(wifi_banner_lab, 8, 0);
+        lv_obj_set_style_text_font(wifi_banner_lab, &lv_font_montserrat_14, 0);
+        lv_obj_align(wifi_banner_lab, LV_ALIGN_TOP_MID, 0, 60);
+    }
+    lv_label_set_text(wifi_banner_lab, text);
+    lv_obj_move_foreground(wifi_banner_lab);
+    wifi_banner_t0 = millis();
+}
+
+static void wifi_banner_hide(void)
+{
+    if (wifi_banner_lab) {
+        lv_obj_del(wifi_banner_lab);
+        wifi_banner_lab = NULL;
+    }
+}
+
+/* Called every loop while the screen is active. */
+static void wifi_banner_update(void)
+{
+    if (wifi_banner_lab && millis() - wifi_banner_t0 >= WIFI_BANNER_MS) {
+        wifi_banner_hide();
+    }
+}
+
+static void destroy4_1(void)
+{
+    wifi_cfg_kbd_active = false;
+    wifi_cfg_scan_mode = false;
+    wifi_scan_gen++;                            /* invalidate any in-flight result application */
+    wifi_scan_overlay_hide();
+    wifi_banner_hide();
+    wifi_cfg_scan_abort();
+}
 
 static scr_lifecycle_t screen4_1 = {
     .create = create4_1,
@@ -1827,7 +2624,7 @@ static void create4_2(lv_obj_t *parent)
     wifi_scan_lab = lv_label_create(scr4_2_cont);
     lv_obj_set_width(wifi_scan_lab, lv_pct(95));
     lv_obj_set_style_pad_all(wifi_scan_lab, 0, LV_PART_MAIN);
-    lv_obj_set_style_text_font(wifi_scan_lab, FONT_BOLD_MONO_SIZE_15, LV_PART_MAIN);   
+    lv_obj_set_style_text_font(wifi_scan_lab, FONT_BOLD_MONO_SIZE_15, LV_PART_MAIN);
     lv_obj_set_style_border_width(wifi_scan_lab, 0, LV_PART_MAIN);
     lv_label_set_long_mode(wifi_scan_lab, LV_LABEL_LONG_WRAP);
 
@@ -2862,24 +3659,58 @@ static scr_lifecycle_t screen8_2 = {
 #endif
 //************************************[ screen 9 ]****************************************** Shutdown
 #if 1
-static lv_timer_t *shutdown_timer = NULL;
+static bool shutdown_kbd_active = false;
+static lv_obj_t *shutdown_confirm = NULL;
+
+static void shutdown_confirm_accept(void)
+{
+    if (shutdown_confirm) {
+        lv_obj_del(shutdown_confirm);
+        shutdown_confirm = NULL;
+    }
+    shutdown_kbd_active = false;
+    ui_shutdown_on();
+}
+
+static void shutdown_confirm_cancel(void)
+{
+    if (shutdown_confirm) {
+        lv_obj_del(shutdown_confirm);
+        shutdown_confirm = NULL;
+    }
+    shutdown_kbd_active = false;
+    scr_mgr_pop(false);
+}
+
+static void shutdown_confirm_accept_cb(lv_event_t *e) { shutdown_confirm_accept(); }
+static void shutdown_confirm_cancel_cb(lv_event_t *e) { shutdown_confirm_cancel(); }
+
+/* Enter = confirm shutdown, any other key = cancel back to the menu
+ * (user request: accidental entry must not kill the device - the old
+ * blind 2s auto-shutdown is gone). */
+void shutdown_keyboard_poll(void)
+{
+    if (!shutdown_kbd_active) return;
+    char c;
+    if (!keypad_get_val(&c)) return;
+    keypad_set_flag();
+    if (c == '\n') {
+        shutdown_confirm_accept();
+    } else {
+        shutdown_confirm_cancel();
+    }
+}
 
 static void scr9_btn_event_cb(lv_event_t * e)
 {
     if(e->code == LV_EVENT_CLICKED){
-        scr_mgr_pop(false);
+        shutdown_confirm_cancel();
     }
-}
-
-static void shutdown_timer_event(lv_timer_t* t)
-{
-    ui_shutdown_on();
-    lv_timer_del(t);
 }
 
 static void create9(lv_obj_t *parent)
 {
-    if(ui_battery_25896_is_vbus_in()) 
+    if(ui_battery_25896_is_vbus_in())
     {
         lv_obj_t * label = lv_label_create(parent);
         lv_obj_set_width(label, lv_pct(95));
@@ -2889,26 +3720,81 @@ static void create9(lv_obj_t *parent)
                             "battery is connected alone, and cannot be shut down when connected to USB.");
         lv_obj_center(label);
 
-        // back 
-        scr_back_btn_create(parent, "Shoutdown", scr8_btn_event_cb);
-    } 
-    else 
+        // back
+        scr_back_btn_create(parent, "Shutdown", scr8_btn_event_cb);
+    }
+    else
     {
         lv_obj_t * img = lv_img_create(parent);
         lv_img_set_src(img, &img_start);
         lv_obj_center(img);
 
-        lv_timer_create(shutdown_timer_event, 2000, (void *)parent);
+        scr_back_btn_create(parent, "Shutdown", scr9_btn_event_cb);
+
+        /* confirmation overlay: Enter = OK, Cancel/any key/back = cancel */
+        shutdown_confirm = lv_obj_create(lv_layer_top());
+        lv_obj_set_size(shutdown_confirm, 220, 130);
+        lv_obj_align(shutdown_confirm, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_style_bg_color(shutdown_confirm, lv_color_white(), 0);
+        lv_obj_set_style_border_width(shutdown_confirm, 1, 0);
+        lv_obj_set_style_border_color(shutdown_confirm, lv_color_black(), 0);
+        lv_obj_set_style_radius(shutdown_confirm, 6, 0);
+        lv_obj_set_style_pad_all(shutdown_confirm, 8, 0);
+        lv_obj_set_flex_flow(shutdown_confirm, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_row(shutdown_confirm, 6, 0);
+        lv_obj_clear_flag(shutdown_confirm, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *body = lv_label_create(shutdown_confirm);
+        lv_obj_set_width(body, lv_pct(100));
+        lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
+        lv_label_set_text(body, "Shut down now?\n(Enter=OK, any key=Cancel)");
+        lv_obj_set_style_text_font(body, &lv_font_montserrat_14, 0);
+        lv_obj_set_flex_grow(body, 1);
+
+        lv_obj_t *row = lv_obj_create(shutdown_confirm);
+        lv_obj_set_width(row, lv_pct(100));
+        lv_obj_set_height(row, 32);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(row, 4, LV_PART_MAIN);
+
+        lv_obj_t *cancel_btn = lv_btn_create(row);
+        lv_obj_set_flex_grow(cancel_btn, 1);
+        lv_obj_set_height(cancel_btn, 32);
+        lv_obj_t *cancel_lab = lv_label_create(cancel_btn);
+        lv_label_set_text(cancel_lab, "Cancel");
+        lv_obj_center(cancel_lab);
+        lv_obj_add_event_cb(cancel_btn, shutdown_confirm_cancel_cb, LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t *ok_btn = lv_btn_create(row);
+        lv_obj_set_flex_grow(ok_btn, 1);
+        lv_obj_set_height(ok_btn, 32);
+        lv_obj_t *ok_lab = lv_label_create(ok_btn);
+        lv_label_set_text(ok_lab, "OK");
+        lv_obj_center(ok_lab);
+        lv_obj_add_event_cb(ok_btn, shutdown_confirm_accept_cb, LV_EVENT_CLICKED, NULL);
+
+        shutdown_kbd_active = true;
     }
 }
-static void entry9(void) 
+static void entry9(void)
 {
     ui_disp_full_refr();
 }
 static void exit9(void) {
     ui_disp_full_refr();
+    shutdown_kbd_active = false;
 }
-static void destroy9(void) { }
+static void destroy9(void)
+{
+    shutdown_kbd_active = false;
+    if (shutdown_confirm) {
+        lv_obj_del(shutdown_confirm);
+        shutdown_confirm = NULL;
+    }
+}
 
 static scr_lifecycle_t screen9 = {
     .create = create9,
@@ -3112,36 +3998,32 @@ static scr_lifecycle_t screen10 = {
 //************************************[ screen 11 ]****************************************** Sleep
 #if 1
 #include <TouchDrvCSTXXX.hpp>
+static lv_timer_t *sleep_timer = NULL;      /* countdown; handle saved so exit11 can cancel */
+static lv_timer_t *sleep_watch_timer = NULL;/* waits for THIS frame's flush, then starts countdown */
+static uint32_t sleep_wait_seq = 0;         /* flush sequence bound to this Sleep frame */
+static int sleep_watch_ticks = 0;           /* 50 ms ticks; 60 = 3 s backstop */
+static lv_obj_t *sleep_count_lab = NULL;
+static int sleep_countdown = 0;
+
 static void scr11_btn_event_cb(lv_event_t * e)
 {
     if(e->code == LV_EVENT_CLICKED){
-        scr_mgr_pop(false);
+        scr_mgr_pop(false);                     /* exit11 cancels the pending sleep */
     }
 }
 
-static void create11(lv_obj_t *parent)
+/* Power down peripherals and enter deep sleep.
+ * Wake source: ext1 on BOARD_BOOT_PIN (BOOT button), any-low. On wake the
+ * chip REBOOTS (statics re-init, keypad_init() flushes the TCA8418), so no
+ * modifier state can stick; setup() releases the gpio holds. */
+static void sleep_do_enter(void)
 {
     // extern TouchDrvCSTXXX touch;
-
     // touch.sleep();
 
     lora_sleep();
 
     SerialGPS.end();
-    
-    // pinMode(BOARD_GPS_PPS, OUTPUT);
-    // pinMode(BOARD_GPS_RXD, OUTPUT);
-    // pinMode(BOARD_GPS_TXD, OUTPUT);
-    // pinMode(BOARD_LORA_RST, OUTPUT);
-    // pinMode(BOARD_TOUCH_RST, OUTPUT);
-    // pinMode(BOARD_LORA_BUSY, OUTPUT);
-
-    // digitalWrite(BOARD_GPS_PPS, LOW);
-    // digitalWrite(BOARD_GPS_RXD, LOW);
-    // digitalWrite(BOARD_GPS_TXD, LOW);
-    // digitalWrite(BOARD_LORA_RST, LOW);
-    // digitalWrite(BOARD_TOUCH_RST, LOW);
-    // digitalWrite(BOARD_LORA_BUSY, LOW);
 
     gpio_reset_pin((gpio_num_t)BOARD_GPS_PPS);
     gpio_reset_pin((gpio_num_t)BOARD_GPS_RXD);
@@ -3153,37 +4035,118 @@ static void create11(lv_obj_t *parent)
     digitalWrite(BOARD_6609_EN, LOW);
     digitalWrite(BOARD_LORA_EN, LOW);
     digitalWrite(BOARD_GPS_EN, LOW);
-    
+
     digitalWrite(BOARD_A7682E_PWRKEY, LOW);
 
-    // gpio_hold_en((gpio_num_t)BOARD_GPS_PPS);
-    // gpio_hold_en((gpio_num_t)BOARD_TOUCH_RST);
-    // gpio_hold_en((gpio_num_t)BOARD_GPS_RXD);
-    // gpio_hold_en((gpio_num_t)BOARD_GPS_TXD);
-    // gpio_hold_en((gpio_num_t)BOARD_LORA_RST);
-    // gpio_hold_en((gpio_num_t)BOARD_LORA_BUSY);
     gpio_hold_en((gpio_num_t)BOARD_6609_EN);
     gpio_hold_en((gpio_num_t)BOARD_LORA_EN);
     gpio_hold_en((gpio_num_t)BOARD_GPS_EN);
     gpio_hold_en((gpio_num_t)BOARD_A7682E_PWRKEY);
     gpio_deep_sleep_hold_en();
 
-    
-    // esp_sleep_enable_ext0_wakeup((gpio_num_t)ENCODER_KEY, 0);                            
-    esp_sleep_enable_ext1_wakeup((1UL << BOARD_BOOT_PIN), ESP_EXT1_WAKEUP_ANY_LOW);   // Hibernate using user keys
+    esp_sleep_enable_ext1_wakeup((1UL << BOARD_BOOT_PIN), ESP_EXT1_WAKEUP_ANY_LOW);
+    openai_stats_flush();                       /* lifecycle checkpoint (copilot 1.1) */
     esp_deep_sleep_start();
-
-    // back 
-    scr_back_btn_create(parent, "Sleep", scr8_btn_event_cb);
 }
-static void entry11(void) 
+
+/* 1s ticks: "Sleep in: 2" -> "1" -> enter sleep. The NULL-handle guard
+ * makes a pending tick a no-op after exit11/destroy11 cancelled. */
+static void sleep_timer_event(lv_timer_t *t)
 {
-    ui_disp_full_refr();
+    if (sleep_timer == NULL) return;            /* cancelled */
+    if (sleep_countdown > 0) {
+        lv_label_set_text_fmt(sleep_count_lab,
+                              "Entering sleep...\n\nWake: press BOOT key.\n\nSleep in: %d",
+                              sleep_countdown);
+        sleep_countdown--;
+    } else {
+        sleep_timer = NULL;                     /* no re-entry */
+        lv_timer_del(t);
+        sleep_do_enter();
+    }
+}
+
+static void create11(lv_obj_t *parent)
+{
+    sleep_count_lab = lv_label_create(parent);
+    lv_obj_set_width(sleep_count_lab, lv_pct(95));
+    lv_obj_set_style_text_font(sleep_count_lab, FONT_BOLD_SIZE_15, LV_PART_MAIN);
+    lv_label_set_long_mode(sleep_count_lab, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(sleep_count_lab, "Entering sleep...\n\nWake: press BOOT key.");
+    lv_obj_center(sleep_count_lab);
+
+    // back (cancels the pending sleep)
+    scr_back_btn_create(parent, "Sleep", scr11_btn_event_cb);
+}
+/* 50 ms ticks from the NORMAL LVGL timer loop: wait until the Sleep
+ * frame's OWN flush sequence reached the panel, then start the countdown.
+ * entry() runs BEFORE lv_scr_load() in scr_mgr_push, so a synchronous
+ * wait there would watch the previous screen's frame AND re-enter LVGL
+ * from a lifecycle callback (copilot finding 1.2). */
+static void sleep_watch_timer_event(lv_timer_t *t)
+{
+    if (sleep_watch_timer == NULL) return;      /* cancelled */
+    if (ui_disp_flush_done_seq() >= sleep_wait_seq) {
+        sleep_watch_timer = NULL;
+        lv_timer_del(t);
+        sleep_countdown = 2;                    /* 2 ticks -> sleep after ~3 s */
+        sleep_timer = lv_timer_create(sleep_timer_event, 1000, NULL);
+        if (sleep_timer) {
+            lv_timer_set_repeat_count(sleep_timer, 4);  /* backstop: never fires forever */
+        }
+    } else if (++sleep_watch_ticks >= 60) {
+        /* 3 s without the frame reaching the panel: CANCEL the sleep
+         * (copilot finding 1.4) - never deep-sleep blind on an invisible
+         * prompt. */
+        sleep_watch_timer = NULL;
+        lv_timer_del(t);
+        lv_label_set_text(sleep_count_lab,
+                          "Display sync failed\nsleep cancelled\n\nPress back");
+        Serial.println("[Sleep] frame-wait timeout - sleep cancelled");
+    }
+}
+
+static void entry11(void)
+{
+    /* request the full refresh and BIND the wait to this frame's sequence:
+     * only the flush of the Sleep screen itself satisfies the watcher */
+    sleep_wait_seq = ui_disp_full_refr_seq();
+    sleep_watch_ticks = 0;
+    /* defensive order (main review 1.7): del + NULL before create, so a
+     * re-entry can never hold a stale handle; no nested Sleep screen is
+     * possible, but the cleanup must stay double-free-safe */
+    if (sleep_watch_timer) {
+        lv_timer_del(sleep_watch_timer);
+        sleep_watch_timer = NULL;
+    }
+    if (sleep_timer) {
+        lv_timer_del(sleep_timer);
+        sleep_timer = NULL;
+    }
+    sleep_watch_timer = lv_timer_create(sleep_watch_timer_event, 50, NULL);
 }
 static void exit11(void) {
     ui_disp_full_refr();
+    if (sleep_watch_timer) {
+        lv_timer_del(sleep_watch_timer);        /* back pressed: cancel sleep */
+        sleep_watch_timer = NULL;
+    }
+    if (sleep_timer) {
+        lv_timer_del(sleep_timer);
+        sleep_timer = NULL;
+    }
 }
-static void destroy11(void) { }
+static void destroy11(void)
+{
+    if (sleep_watch_timer) {
+        lv_timer_del(sleep_watch_timer);
+        sleep_watch_timer = NULL;
+    }
+    if (sleep_timer) {
+        lv_timer_del(sleep_timer);
+        sleep_timer = NULL;
+    }
+}
 
 static scr_lifecycle_t screen11 = {
     .create = create11,
@@ -3264,12 +4227,17 @@ static void indev_get_gesture_dir(lv_timer_t *t)
     lv_indev_t * touch_indev = lv_indev_get_next(NULL);
     lv_dir_t dir = lv_indev_get_gesture_dir(touch_indev);
 
-    if(dir == LV_DIR_RIGHT) { // right
-        ui_get_gesture_dir(LV_DIR_RIGHT);
-    } 
-    else if(dir == LV_DIR_LEFT) { // left
-        ui_get_gesture_dir(LV_DIR_LEFT);
+    /* LVGL latches gesture_dir from detection until the next press resets
+     * it to NONE (lv_indev.c press-start reset; gesture_sent makes the
+     * detection itself one-shot per press). A plain poll therefore re-fires
+     * every 30ms tick while the finger is still down - with the 3-page menu
+     * one swipe skipped a page (2 pages had masked it via the bounds clamp).
+     * Fire only on the NONE -> dir edge, once per gesture. */
+    static lv_dir_t s_last_gesture_dir = LV_DIR_NONE;
+    if((dir == LV_DIR_RIGHT || dir == LV_DIR_LEFT) && dir != s_last_gesture_dir) {
+        if(ui_get_gesture_dir) ui_get_gesture_dir(dir);
     }
+    s_last_gesture_dir = dir;
 }
 
 static void menu_keypay_get_event(lv_timer_t *t)
@@ -3300,6 +4268,8 @@ static void menu_keypay_get_event(lv_timer_t *t)
 static void menu_taskbar_update_timer_cb(lv_timer_t *t)
 {
     static int sec = 0;
+    static int taskbar_last_hour = -1;
+    static int taskbar_last_min = -1;
     sec++;
 
     bool charge = 0;
@@ -3309,6 +4279,28 @@ static void menu_taskbar_update_timer_cb(lv_timer_t *t)
 
     if(sec % 10 == 0)
     {
+        /* time: refreshed together with the battery (every 10s); shows the
+         * real local time, "--:--" until NTP has synced the clock */
+        {
+            time_t now = time(nullptr);
+            int h = -1, m = -1;
+            if (now > 1700000000) {
+                struct tm tmv;
+                localtime_r(&now, &tmv);
+                h = tmv.tm_hour;
+                m = tmv.tm_min;
+            }
+            if (h != taskbar_last_hour || m != taskbar_last_min) {
+                taskbar_last_hour = h;
+                taskbar_last_min = m;
+                if (h >= 0) {
+                    lv_label_set_text_fmt(menu_taskbar_time, "%02d:%02d", h, m);
+                } else {
+                    lv_label_set_text(menu_taskbar_time, "--:--");
+                }
+            }
+        }
+
         finish = ui_battery_27220_get_charge_finish();
         percent = ui_battery_27220_get_percent();
 
@@ -3447,6 +4439,9 @@ void ui_deckpro_entry(void)
 
     extern scr_lifecycle_t screen_ai_cfg;
     scr_mgr_register(SCREEN_AI_CFG_ID, &screen_ai_cfg);
+
+    extern scr_lifecycle_t screen_penpal;
+    scr_mgr_register(SCREEN_PENPAL_ID, &screen_penpal);
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);

@@ -13,6 +13,8 @@
 
 using namespace std;
 
+class WiFiClientSecure;   /* reference params below only */
+
 typedef enum {
     HTTP_TLS_CA_VERIFY = 0,   /* validate chain against built-in CA bundle */
     HTTP_TLS_INSECURE  = 1,   /* skip verification (user opted in) */
@@ -22,6 +24,7 @@ typedef struct {
     int status_code;
     string body;
     bool success;
+    string error;       /* human-readable failure detail (TLS/time/etc.) */
 } http_response_t;
 
 /**
@@ -41,11 +44,31 @@ void http_set_tls_mode(http_tls_mode_t mode);
 http_tls_mode_t http_get_tls_mode(void);
 
 /**
- * @brief Check WiFi connectivity and show popup if disconnected.
- * @param feature_name Name of the feature requesting WiFi (shown in popup).
+ * @brief Check WiFi connectivity (STA connected).
+ *        Does NOT show any UI by itself: the CALLER is responsible for
+ *        showing user feedback when this returns false.
+ * @param feature_name Name of the feature requesting WiFi (log context).
  * @return true if WiFi is connected.
  */
 bool http_require_wifi(const char *feature_name);
+
+/**
+ * @brief Configure a WiFiClientSecure per the current TLS mode (built-in CA
+ *        bundle, or insecure when the user opted in).
+ *        Exported for penpal_api's own https transport (design §3.3) so both
+ *        paths share ONE CA bundle and policy instead of a drifting copy.
+ *        ADDITIVE export: every existing http_* caller is unchanged.
+ */
+void http_apply_tls(WiFiClientSecure &client);
+
+/**
+ * @brief Wait (bounded) for NTP time sync - TLS cert validation needs a sane
+ *        clock. Exported for penpal_api's https path, same single-policy
+ *        rationale as http_apply_tls(). ADDITIVE export.
+ * @param max_wait_ms Upper bound on the wait.
+ * @return true when system time is past the 2023-11 sanity threshold.
+ */
+bool http_ensure_time(uint32_t max_wait_ms);
 
 /**
  * @brief Perform an HTTPS GET request.
@@ -54,6 +77,33 @@ bool http_require_wifi(const char *feature_name);
  * @return http_response_t with status_code, body, and success flag.
  */
 http_response_t http_get(const char *url, uint32_t timeout_ms = 10000);
+
+/**
+ * @brief Perform an HTTPS GET with an explicit User-Agent header.
+ *        Some endpoints (e.g. ifconfig.me) return HTML to unknown/browser
+ *        agents and plain text to curl-like agents.
+ *
+ *        UA policy: a User-Agent is ONLY injected through this function,
+ *        for endpoints known to switch on it. All other http_* calls send
+ *        the HTTPClient default headers - there is no global curl UA.
+ * @param url Full URL to fetch.
+ * @param user_agent User-Agent value (NULL/empty = default).
+ * @param timeout_ms Request timeout in milliseconds (default 10000).
+ * @return http_response_t with status_code, body, success and error.
+ */
+http_response_t http_get_ua(const char *url, const char *user_agent,
+                            uint32_t timeout_ms = 10000);
+
+/**
+ * @brief Perform an HTTPS GET with an Authorization header
+ *        (e.g. "Bearer <key>" for API endpoints).
+ * @param url Full URL to fetch.
+ * @param auth_header Authorization header value (NULL/empty = skip).
+ * @param timeout_ms Request timeout in milliseconds (default 10000).
+ * @return http_response_t with status_code, body, success and error.
+ */
+http_response_t http_get_auth(const char *url, const char *auth_header,
+                              uint32_t timeout_ms = 10000);
 
 /**
  * @brief Perform an HTTPS POST request.

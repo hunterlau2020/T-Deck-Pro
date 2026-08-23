@@ -8,13 +8,14 @@ A PDA (Personal Digital Assistant) firmware for the **LilyGo T-Deck Pro v1.1** b
 - **Display**: 3.1" E-Paper 240×320 monochrome (GDEQ031T10)
 - **Keyboard**: TCA8418 4×10 matrix with sym/alt modifiers
 - **Touch**: CST226SE capacitive (HYN driver)
-- **Peripherals**: SX1262 LoRa, GPS, BHI260AP IMU, BQ25896/BQ27220 power, DRV2605 haptic, A7682E GSM, PCM5102A audio
+- **Peripherals**: SX1262 LoRa, GPS, BHI260AP IMU, BQ25896/BQ27220 power, DRV2605 haptic, A7682E GSM, PCM5102A audio (**4G/A7682E 版无 PCM5102A DAC**——耳机孔无 I2S 输出，MP3 播放不可行，见 issue_list §3.3)
+- **SD card**: FAT16/FAT32 only（exFAT/NTFS 挂载失败显示 0MB，About System 屏有 `SD hint` 提示）；FAT32 上限 2TB，>32GB 卡需第三方工具格式化
 
 ## Key Functions
 
 ### Existing (from factory)
 - LoRa transceiver (send/receive/settings)
-- WiFi scan and connect
+- WiFi page: **WIFI Config**（编辑/扫描双模式 + 异步扫描 + Connect 成功才保存 + Clear）、**WIFI Scan**（AP 列表）、**WIFI Test**（ifconfig.me 公网 IP，信息层 + Close）、**Time Sync**（NTP 校时，显示同步前后时间）
 - GPS position and satellite view
 - Battery monitoring (BQ25896 charger + BQ27220 fuel gauge)
 - Hardware test suite
@@ -26,12 +27,13 @@ A PDA (Personal Digital Assistant) firmware for the **LilyGo T-Deck Pro v1.1** b
 ### Added PDA Apps
 - **Calculator** — Scientific calculator with Shunting-Yard expression parser. Supports sin/cos/tan/log/sqrt/exp/fact and full operator precedence.
 - **Weather** — OpenWeatherMap One Call API 3.0. Current conditions, 12-hour hourly, 8-day daily forecast. Caches data in NVS for 1 hour. Uses GPS or cached coordinates.
+- **Calendar** — lunar calendar + holiday lookup.
+- **Dictionary** — online dictionaryapi.dev lookup.
+- **AI Voice Chat** — voice AI screen (TTS reply).
+- **AI Text** — WeChat 式聊天界面 via OpenRouter（OpenAI 兼容）：上 2/3 可滚动历史（AI 左/用户右气泡）+ 下 1/3 多行输入 + Send/Clear/**New** 侧按钮；**多轮上下文**（最近 8KB 整轮配对，`openai_chat_multi`）；历史持久化 SPIFFS `/chat.log`（原子换入 + 校验和），失败草稿存 `/chat.draft` 重启可恢复；发送异步（任务快照 + 页面代次）；usage 统计入 NVS `ai_stats`。
+- **AI Config** — Base URL（多行）/ Model / Key 各自输入框 + Save / Test 按钮；**Test = 最小 chat-completion**（msgbox 计费提示 + 15s 绝对 deadline + Close 取消）；Save 门槛 = Test 通过（状态行明示原因）；**NVS 双槽原子保存**（暂存非活动槽 + 单键 active 翻转）；Base/Model/Key 均有固件默认值（NVS 优先）。
 
 ### Planned
-- Calendar (modified from LilyGoLib PDA)
-- GPS (modified — compass + enhanced satellite view)
-- Dictionary (offline lookup)
-- Voice AI (Gemini API)
 - Voice Recorder
 - Internet Radio
 - Microphone (modified)
@@ -39,17 +41,16 @@ A PDA (Personal Digital Assistant) firmware for the **LilyGo T-Deck Pro v1.1** b
 ## Building
 
 ```bash
-# In platformio.ini, set:
-#   src_dir = examples/pda2
+# Build (platformio.ini has the [env:pda2] environment;
+# script/set_srcdir.py maps the env name to examples/pda2)
+python -m platformio run -e pda2
 
-# Build
-pio run -e T-Deck-Pro
-
-# Flash + monitor
-pio run -e T-Deck-Pro -t upload -t monitor
+# Flash + monitor (stop any running serial monitor first: it holds COMx)
+python -m platformio run -e pda2 -t upload --upload-port COM5
+python -m platformio device monitor -p COM5 -b 115200
 ```
 
-WiFi credentials and API keys go in `config_keys.h` (copy from `config_keys.h.example`). This file is gitignored.
+Secrets follow the chain **NVS → SPIFFS `/env.cfg` → gitignored `config_keys.h` → empty default** (SECURITY.md). No real keys in tracked source.
 
 ## Architecture
 
@@ -98,36 +99,45 @@ void show_page(int idx) {
 
 The T-Deck Pro keyboard is a 4×10 matrix read by TCA8418. The driver (`peri_keypad.cpp`) translates raw matrix positions to characters with sym/alt modifier support.
 
+> **Raw vs driver coordinates are column-mirrored**: the driver maps
+> `driver_col = 9 - raw_col` (e.g. raw `(R2 C9)` = Alt = driver `(2,0)`).
+> `examples/test_keypad` prints the RAW row/col - convert the column before
+> comparing with the maps below.
+
 **Normal layer:**
 ```
-q  w  e  r  t  y  u  i  o  p
-a  s  d  f  g  h  j  k  l  ⌫
-⇧  z  x  c  v  b  n  m  $  ⏎
-       [  space ×3  ]  Sym
+q   w   e   r   t   y   u   i   o   p
+a   s   d   f   g   h   j   k   l   ⌫
+Alt z   x   c   v   b   n   m   $   ⏎
+     ⇧  Mic Space Sym ⇧
 ```
 
-**Shift layer** (hold `⇧` for uppercase, releases back to lowercase):
+**Shift layer** (hold either `⇧` for uppercase, releases back to lowercase):
 ```
-Q  W  E  R  T  Y  U  I  O  P
-A  S  D  F  G  H  J  K  L  ⌫
-⇧  Z  X  C  V  B  N  M  $  ⏎
-       [  space ×3  ]  Sym
+Q   W   E   R   T   Y   U   I   O   P
+A   S   D   F   G   H   J   K   L   ⌫
+Alt Z   X   C   V   B   N   M   $   ⏎
+     ⇧  Mic Space Sym ⇧
 ```
 
 **Sym layer** (press Sym to toggle/lock):
 ```
-#  1  2  3  (  )  _  -  +  @
-*  4  5  6  /  :  ;  '  "  ⌫
-⇧  7  8  9  ?  !  ,  .  0  ⏎
-       [  space ×3  ]  Sym
+#   1  2  3  (  )  _  -  +  @
+*   4  5  6  /  :  ;  '  "  ⌫
+Alt 7  8  9  ?  !  ,  .  Vol ⏎
+     ⇧  0  Space Sym ⇧
 ```
 
 Special keys:
-- `'\b'` (0x08) — Backspace/Delete
-- `'\n'` (0x0A) — Enter
-- `'$'` — Speaker key (app-specific)
-- Shift (`⇧`) hold → uppercase; Sym toggles sym lock (digits/symbols)
-- Mic key is NOT on the TCA8418 matrix (separate GPIO)
+- `'\b'` (0x08) — Backspace/Delete (⌫)
+- `'\n'` (0x0A) — Enter (⏎)
+- `'\t'` (0x09) — Alt+Enter combo (WiFi-config scan shortcut)
+- `'$'` — Volume/speaker key (app-specific; ignored by text inputs)
+- `'\v'` (0x0B) — Volume key on the Sym layer (reserved, no handler yet; ignored by text inputs)
+- Shift keys: **two** Shift keys (bottom row, left and right) — hold for uppercase
+- **Alt** (Z-row left): hold for the **momentary sym layer** (digits/symbols, same map as Sym but not latched; release to return to normal)
+- Sym: toggles the sym-layer lock; on the sym layer the Mic key emits `'0'`
+- Mic key is on the TCA8418 matrix; its normal layer has no keymap function
 
 ### 3. Image/icon format
 
