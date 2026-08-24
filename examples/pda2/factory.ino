@@ -741,16 +741,22 @@ void setup()
 
     /* Auto-connect WiFi from NVS runtime config (screen 4.1) */
     {
-        Preferences wifi_pref;
-        wifi_pref.begin("wifi", true);
-        String wifi_ssid_nvs = wifi_pref.getString("ssid", "");
-        String wifi_pass_nvs = wifi_pref.getString("pass", "");
-        wifi_pref.end();
-        if (wifi_ssid_nvs.length() > 0) {
+        extern void wifi_slot_migrate_legacy(void);
+        extern void wifi_slot_load(int slot, char *ssid, int ssid_len,
+                                   char *pass, int pass_len);
+        extern int  wifi_slot_get_active(void);
+        wifi_slot_migrate_legacy();
+        int active = wifi_slot_get_active();
+        char wifi_ssid_nvs[65] = {0};
+        char wifi_pass_nvs[65] = {0};
+        wifi_slot_load(active, wifi_ssid_nvs, sizeof(wifi_ssid_nvs),
+                       wifi_pass_nvs, sizeof(wifi_pass_nvs));
+        if (wifi_ssid_nvs[0] != '\0') {
             WiFi.mode(WIFI_STA);
             WiFi.setAutoReconnect(true);
-            WiFi.begin(wifi_ssid_nvs.c_str(), wifi_pass_nvs.c_str());
-            Serial.printf("[WiFi] Connecting to %s...\n", wifi_ssid_nvs.c_str());
+            WiFi.begin(wifi_ssid_nvs, wifi_pass_nvs);
+            Serial.printf("[WiFi] Connecting slot %d to %s...\n",
+                          active, wifi_ssid_nvs);
         }
     }
     configTzTime("CST-8", "cn.pool.ntp.org", "pool.ntp.org", "time.nist.gov");

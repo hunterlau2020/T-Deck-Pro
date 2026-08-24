@@ -106,6 +106,26 @@ http_response_t http_get_auth(const char *url, const char *auth_header,
                               uint32_t timeout_ms = 10000);
 
 /**
+ * @brief Perform an HTTPS POST request with optional extra headers.
+ * @param url Full URL to post to.
+ * @param body Request body content.
+ * @param content_type Content-Type header value.
+ * @param auth_header Optional Authorization header value (empty string to skip).
+ * @param header_names Array of extra header names (NULL if none).
+ * @param header_values Array of extra header values (NULL if none).
+ * @param header_count Number of extra headers.
+ * @param timeout_ms Request timeout in milliseconds (default 15000).
+ * @return http_response_t with status_code, body, success flag and error detail.
+ */
+http_response_t http_post_with_headers(const char *url, const string &body,
+                                       const char *content_type,
+                                       const char *auth_header,
+                                       const char *header_names[],
+                                       const char *header_values[],
+                                       int header_count,
+                                       uint32_t timeout_ms = 15000);
+
+/**
  * @brief Perform an HTTPS POST request.
  * @param url Full URL to post to.
  * @param body Request body content.

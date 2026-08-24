@@ -1822,6 +1822,8 @@ static lv_obj_t *wifi_ssid_ta = NULL;
 static lv_obj_t *wifi_pass_lab = NULL;
 static lv_obj_t *wifi_pass_ta = NULL;
 static lv_obj_t *wifi_status_lab = NULL;
+static lv_obj_t *wifi_slot_lab = NULL;
+static lv_obj_t *wifi_cfg_popup = NULL;
 static bool wifi_cfg_kbd_active = false;
 static int  wifi_cfg_field = 0;                 // 0 = SSID, 1 = password
 static bool wifi_cfg_scan_mode = false;         // true: +/- cycle scan picks (else manual edit)
@@ -1879,15 +1881,104 @@ static char wifi_ssid[65] = {0};
 static char wifi_pass[65] = {0};
 static char wifi_status[96] = {0};
 
-static void wifi_cfg_load(void)
+#define WIFI_SLOT_COUNT 5
+#define WIFI_SLOT_NONE  255
+
+static int wifi_cfg_slot = 0;                 /* slot currently shown in the UI */
+static int wifi_active_slot = WIFI_SLOT_NONE; /* slot used for auto-connect */
+
+static void wifi_slot_key(char *buf, int slot, const char *field)
+{
+    snprintf(buf, 16, "slot%d_%s", slot, field);
+}
+
+/* One-time migration from the pre-slot keys "ssid"/"pass" to slot 0. */
+void wifi_slot_migrate_legacy(void)
+{
+    Preferences p;
+    p.begin("wifi", false);
+    if (p.getUChar("legacy_migrated", 0) == 1) {
+        p.end();
+        return;
+    }
+    String ssid = p.getString("ssid", "");
+    String pass = p.getString("pass", "");
+    if (ssid.length() > 0) {
+        p.putString("slot0_ssid", ssid);
+        p.putString("slot0_pass", pass);
+        p.putUChar("active_slot", 0);
+        p.remove("ssid");
+        p.remove("pass");
+        Serial.println("[WiFi] migrated legacy ssid/pass to slot 0");
+    }
+    p.putUChar("legacy_migrated", 1);
+    p.end();
+}
+
+void wifi_slot_load(int slot, char *ssid, int ssid_len,
+                    char *pass, int pass_len)
+{
+    if (slot < 0 || slot >= WIFI_SLOT_COUNT) slot = 0;
+    char ssid_key[16], pass_key[16];
+    wifi_slot_key(ssid_key, slot, "ssid");
+    wifi_slot_key(pass_key, slot, "pass");
+    Preferences p;
+    p.begin("wifi", true);
+    String s = p.getString(ssid_key, "");
+    String q = p.getString(pass_key, "");
+    p.end();
+    strncpy(ssid, s.c_str(), ssid_len - 1);
+    ssid[ssid_len - 1] = '\0';
+    strncpy(pass, q.c_str(), pass_len - 1);
+    pass[pass_len - 1] = '\0';
+}
+
+static void wifi_slot_save(int slot, const char *ssid, const char *pass)
+{
+    if (slot < 0 || slot >= WIFI_SLOT_COUNT) return;
+    char ssid_key[16], pass_key[16];
+    wifi_slot_key(ssid_key, slot, "ssid");
+    wifi_slot_key(pass_key, slot, "pass");
+    Preferences p;
+    p.begin("wifi", false);
+    p.putString(ssid_key, ssid ? ssid : "");
+    p.putString(pass_key, pass ? pass : "");
+    p.end();
+}
+
+static void wifi_slot_clear(int slot)
+{
+    if (slot < 0 || slot >= WIFI_SLOT_COUNT) return;
+    wifi_slot_save(slot, "", "");
+}
+
+int wifi_slot_get_active(void)
 {
     Preferences p;
     p.begin("wifi", true);
-    String s = p.getString("ssid", "");
-    String q = p.getString("pass", "");
-    strncpy(wifi_ssid, s.c_str(), sizeof(wifi_ssid) - 1);
-    strncpy(wifi_pass, q.c_str(), sizeof(wifi_pass) - 1);
+    int slot = (int)p.getUChar("active_slot", 0);
     p.end();
+    if (slot < 0 || slot >= WIFI_SLOT_COUNT) slot = 0;
+    return slot;
+}
+
+static void wifi_slot_set_active(int slot)
+{
+    if (slot < 0 || slot >= WIFI_SLOT_COUNT) return;
+    Preferences p;
+    p.begin("wifi", false);
+    p.putUChar("active_slot", (uint8_t)slot);
+    p.end();
+    wifi_active_slot = slot;
+}
+
+static void wifi_cfg_load(void)
+{
+    wifi_slot_migrate_legacy();
+    wifi_active_slot = wifi_slot_get_active();
+    wifi_cfg_slot = wifi_active_slot;
+    wifi_slot_load(wifi_cfg_slot, wifi_ssid, sizeof(wifi_ssid),
+                   wifi_pass, sizeof(wifi_pass));
     if (WiFi.status() == WL_CONNECTED) {
         snprintf(wifi_status, sizeof(wifi_status), "IP: %s", WiFi.localIP().toString().c_str());
     } else {
@@ -1897,20 +1988,45 @@ static void wifi_cfg_load(void)
 
 static void wifi_cfg_save(void)
 {
-    Preferences p;
-    p.begin("wifi", false);
-    p.putString("ssid", wifi_ssid);
-    p.putString("pass", wifi_pass);
-    p.end();
+    wifi_slot_save(wifi_cfg_slot, wifi_ssid, wifi_pass);
 }
 
 /* Update field markers/status only. The textareas hold live drafts and must
  * NOT be rewritten from the buffers on field transitions (finding 2.4). */
 static void wifi_cfg_refresh_labels(void)
 {
+    if (wifi_slot_lab) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Slot %d/%d%s",
+                 wifi_cfg_slot + 1, WIFI_SLOT_COUNT,
+                 wifi_cfg_slot == wifi_active_slot ? " *" : "");
+        lv_label_set_text(wifi_slot_lab, buf);
+    }
     lv_label_set_text(wifi_ssid_lab, wifi_cfg_field == 0 ? "SSID >" : "SSID");
     lv_label_set_text(wifi_pass_lab, wifi_cfg_field == 1 ? "Pass >" : "Pass");
     lv_label_set_text(wifi_status_lab, wifi_status);
+}
+
+static void wifi_cfg_sync_draft(void);   /* defined below */
+static void wifi_cfg_set_field(int f);   /* defined below */
+
+/* Switch to another slot: sync the outgoing slot's draft, load the new slot,
+ * and reset focus to SSID. */
+static void wifi_cfg_set_slot(int slot)
+{
+    if (slot < 0) slot = WIFI_SLOT_COUNT - 1;
+    if (slot >= WIFI_SLOT_COUNT) slot = 0;
+    if (slot == wifi_cfg_slot) return;
+    wifi_cfg_sync_draft();
+    wifi_cfg_slot = slot;
+    wifi_slot_load(wifi_cfg_slot, wifi_ssid, sizeof(wifi_ssid),
+                   wifi_pass, sizeof(wifi_pass));
+    lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
+    lv_textarea_set_text(wifi_pass_ta, wifi_pass);
+    wifi_cfg_scan_mode = false;
+    wifi_scan_gen++;
+    wifi_cfg_set_field(0);
+    wifi_cfg_refresh_labels();
 }
 
 /* Sync the current field's textarea into its draft buffer, so switching
@@ -2102,6 +2218,57 @@ static bool wifi_cfg_connect(void)
     return ok;
 }
 
+/* Simple result msgbox for Connect/Save actions. Any key or the Close
+ * button dismisses it. */
+static void wifi_cfg_popup_close_cb(lv_event_t *e)
+{
+    (void)e;
+    if (wifi_cfg_popup) {
+        lv_obj_del(wifi_cfg_popup);
+        wifi_cfg_popup = NULL;
+    }
+}
+
+static void wifi_cfg_show_msgbox(const char *title, const char *text)
+{
+    wifi_cfg_popup_close_cb(NULL);
+    if (!title) title = "";
+    if (!text) text = "";
+
+    wifi_cfg_popup = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(wifi_cfg_popup, 220, 180);
+    lv_obj_align(wifi_cfg_popup, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(wifi_cfg_popup, lv_color_white(), 0);
+    lv_obj_set_style_border_width(wifi_cfg_popup, 1, 0);
+    lv_obj_set_style_border_color(wifi_cfg_popup, lv_color_black(), 0);
+    lv_obj_set_style_radius(wifi_cfg_popup, 6, 0);
+    lv_obj_set_style_pad_all(wifi_cfg_popup, 8, 0);
+    lv_obj_set_flex_flow(wifi_cfg_popup, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(wifi_cfg_popup, 6, 0);
+    lv_obj_clear_flag(wifi_cfg_popup, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *t = lv_label_create(wifi_cfg_popup);
+    lv_obj_set_width(t, lv_pct(100));
+    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(t, title);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
+
+    lv_obj_t *b = lv_label_create(wifi_cfg_popup);
+    lv_obj_set_width(b, lv_pct(100));
+    lv_obj_set_flex_grow(b, 1);
+    lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(b, text);
+    lv_obj_set_style_text_font(b, &lv_font_montserrat_14, 0);
+
+    lv_obj_t *close_btn = lv_btn_create(wifi_cfg_popup);
+    lv_obj_set_width(close_btn, lv_pct(100));
+    lv_obj_set_height(close_btn, 32);
+    lv_obj_t *close_lab = lv_label_create(close_btn);
+    lv_label_set_text(close_lab, "Close");
+    lv_obj_center(close_lab);
+    lv_obj_add_event_cb(close_btn, wifi_cfg_popup_close_cb, LV_EVENT_CLICKED, NULL);
+}
+
 /* Touch taps move LVGL focus between the two boxes independently of the
  * keypad (lv_indev.c::indev_click_focus sends LV_EVENT_FOCUSED on tap);
  * keep wifi_cfg_field in sync so keypad edits always target the box the
@@ -2145,6 +2312,18 @@ static void wifi_cfg_set_field(int f)
 void wifi_cfg_keyboard_poll()
 {
     if (!wifi_cfg_kbd_active || !wifi_ssid_ta || !wifi_pass_ta) return;
+
+    /* If a result msgbox is open, any key dismisses it so the underlying
+     * keypad handlers do not process the keypress behind the popup. */
+    if (wifi_cfg_popup) {
+        char c;
+        if (keypad_get_val(&c)) {
+            keypad_set_flag();
+            wifi_cfg_popup_close_cb(NULL);
+        }
+        return;
+    }
+
     wifi_cfg_scan_poll();                       /* async scan result (runs every loop) */
     wifi_scan_overlay_update();                 /* countdown/hide of the scan overlay */
     wifi_banner_update();                       /* auto-hide of the result banner */
@@ -2158,7 +2337,11 @@ void wifi_cfg_keyboard_poll()
     if (!keypad_get_val(&c)) break;
     keypad_set_flag();
 
-    if (c == '\v') continue;                    /* volume key: reserved, no handler yet */
+    if (c == '\v') {
+        /* volume key: cycle through the 5 WiFi memory slots */
+        wifi_cfg_set_slot(wifi_cfg_slot + 1);
+        continue;
+    }
 
     if (wifi_cfg_field == 0) {
         if (wifi_scan_state == WIFI_SCAN_RUNNING) {
@@ -2216,6 +2399,12 @@ void wifi_cfg_keyboard_poll()
             wifi_cfg_sync_draft();               /* pass box → wifi_pass */
             if (wifi_cfg_connect()) {
                 wifi_cfg_save();                 /* persist only on success */
+                wifi_slot_set_active(wifi_cfg_slot);
+                wifi_cfg_show_msgbox("Connected",
+                                     wifi_status[0] ? wifi_status : "WiFi connected");
+            } else {
+                wifi_cfg_show_msgbox("Connect failed",
+                                     wifi_status[0] ? wifi_status : "Unable to connect");
             }
             wifi_cfg_refresh_labels();
         } else if (c == '\b') {
@@ -2241,18 +2430,38 @@ static void scr4_1_btn_event_cb(lv_event_t * e)
 }
 
 /* Touch path for Connect: same as Enter on the password field — sync the
- * current draft, try to connect, and persist to NVS ONLY on success. */
+ * current draft, try to connect, and persist + activate ONLY on success. */
 static void wifi_connect_btn_cb(lv_event_t *e)
 {
+    (void)e;
     wifi_cfg_sync_draft();
     if (wifi_cfg_connect()) {
         wifi_cfg_save();                         /* persist only on success */
+        wifi_slot_set_active(wifi_cfg_slot);
+        wifi_cfg_show_msgbox("Connected",
+                             wifi_status[0] ? wifi_status : "WiFi connected");
+    } else {
+        wifi_cfg_show_msgbox("Connect failed",
+                             wifi_status[0] ? wifi_status : "Unable to connect");
     }
     wifi_cfg_refresh_labels();
 }
 
-/* Touch path for Clear: wipe both boxes, the draft buffers and the NVS
- * record (so auto-connect on boot no longer uses the old credentials). */
+/* Touch path for Save: persist current draft to the current slot without
+ * trying to connect. */
+static void wifi_save_btn_cb(lv_event_t *e)
+{
+    wifi_cfg_sync_draft();
+    wifi_cfg_save();
+    snprintf(wifi_status, sizeof(wifi_status), "Slot %d saved", wifi_cfg_slot + 1);
+    wifi_cfg_refresh_labels();
+}
+
+static void wifi_slot_prev_cb(lv_event_t *e) { wifi_cfg_set_slot(wifi_cfg_slot - 1); }
+static void wifi_slot_next_cb(lv_event_t *e) { wifi_cfg_set_slot(wifi_cfg_slot + 1); }
+
+/* Touch path for Clear: wipe the current slot and its draft. The active
+ * marker is left untouched; auto-connect will simply skip an empty slot. */
 static void wifi_clear_btn_cb(lv_event_t *e)
 {
     wifi_ssid[0] = '\0';
@@ -2261,8 +2470,9 @@ static void wifi_clear_btn_cb(lv_event_t *e)
     lv_textarea_set_text(wifi_pass_ta, "");
     wifi_cfg_scan_mode = false;
     wifi_scan_gen++;                            /* invalidate any in-flight scan */
-    wifi_cfg_save();
-    snprintf(wifi_status, sizeof(wifi_status), "Cleared");
+    wifi_slot_clear(wifi_cfg_slot);
+    snprintf(wifi_status, sizeof(wifi_status), "Slot %d cleared", wifi_cfg_slot + 1);
+    wifi_cfg_refresh_labels();
     wifi_cfg_set_field(0);
 }
 
@@ -2286,6 +2496,37 @@ static void create4_1(lv_obj_t *parent)
     lv_obj_set_style_pad_row(cont, 4, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Slot selector row: prev / Slot N/5 * / next */
+    lv_obj_t *slot_row = lv_obj_create(cont);
+    lv_obj_set_width(slot_row, lv_pct(100));
+    lv_obj_set_height(slot_row, 30);
+    lv_obj_set_style_bg_opa(slot_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(slot_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(slot_row, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(slot_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(slot_row, 4, LV_PART_MAIN);
+    lv_obj_clear_flag(slot_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *slot_prev_btn = lv_btn_create(slot_row);
+    lv_obj_set_size(slot_prev_btn, 36, 26);
+    lv_obj_t *slot_prev_lab = lv_label_create(slot_prev_btn);
+    lv_label_set_text(slot_prev_lab, "<");
+    lv_obj_center(slot_prev_lab);
+    lv_obj_add_event_cb(slot_prev_btn, wifi_slot_prev_cb, LV_EVENT_CLICKED, NULL);
+
+    wifi_slot_lab = lv_label_create(slot_row);
+    lv_obj_set_flex_grow(wifi_slot_lab, 1);
+    lv_obj_set_style_text_font(wifi_slot_lab, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(wifi_slot_lab, "Slot -/-");
+    lv_obj_set_style_text_align(wifi_slot_lab, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t *slot_next_btn = lv_btn_create(slot_row);
+    lv_obj_set_size(slot_next_btn, 36, 26);
+    lv_obj_t *slot_next_lab = lv_label_create(slot_next_btn);
+    lv_label_set_text(slot_next_lab, ">");
+    lv_obj_center(slot_next_lab);
+    lv_obj_add_event_cb(slot_next_btn, wifi_slot_next_cb, LV_EVENT_CLICKED, NULL);
 
     wifi_ssid_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(wifi_ssid_lab, &lv_font_montserrat_14, LV_PART_MAIN);
@@ -2324,9 +2565,9 @@ static void create4_1(lv_obj_t *parent)
     lv_obj_t *hint = lv_label_create(cont);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(hint, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
-    lv_label_set_text(hint, "Enter:scan/next  +/-:pick\nAlt+Enter:scan  Backspace:del/back");
+    lv_label_set_text(hint, "Vol:slot  Enter:conn\nAlt+Enter:scan  +/-:pick");
 
-    /* Connect / Clear buttons (touch path; keyboard: Enter on pass = connect) */
+    /* Connect / Save / Clear buttons (touch path; keyboard: Enter on pass = connect) */
     lv_obj_t *btn_row = lv_obj_create(cont);
     lv_obj_set_width(btn_row, lv_pct(100));
     lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, LV_PART_MAIN);
@@ -2337,15 +2578,23 @@ static void create4_1(lv_obj_t *parent)
 
     lv_obj_t *connect_btn = lv_btn_create(btn_row);
     lv_obj_set_flex_grow(connect_btn, 1);
-    lv_obj_set_height(connect_btn, 30);
+    lv_obj_set_height(connect_btn, 28);
     lv_obj_t *connect_lab = lv_label_create(connect_btn);
     lv_label_set_text(connect_lab, "Connect");
     lv_obj_center(connect_lab);
     lv_obj_add_event_cb(connect_btn, wifi_connect_btn_cb, LV_EVENT_CLICKED, NULL);
 
+    lv_obj_t *save_btn = lv_btn_create(btn_row);
+    lv_obj_set_flex_grow(save_btn, 1);
+    lv_obj_set_height(save_btn, 28);
+    lv_obj_t *save_lab = lv_label_create(save_btn);
+    lv_label_set_text(save_lab, "Save");
+    lv_obj_center(save_lab);
+    lv_obj_add_event_cb(save_btn, wifi_save_btn_cb, LV_EVENT_CLICKED, NULL);
+
     lv_obj_t *clear_btn = lv_btn_create(btn_row);
     lv_obj_set_flex_grow(clear_btn, 1);
-    lv_obj_set_height(clear_btn, 30);
+    lv_obj_set_height(clear_btn, 28);
     lv_obj_t *clear_lab = lv_label_create(clear_btn);
     lv_label_set_text(clear_lab, "Clear");
     lv_obj_center(clear_lab);
@@ -2369,6 +2618,7 @@ static void exit4_1(void) {
      * sit on top of the pushed screen (review round 25 finding). */
     wifi_scan_overlay_hide();
     wifi_banner_hide();
+    wifi_cfg_popup_close_cb(NULL);              /* dismiss any result msgbox */
     ui_disp_full_refr();
 }
 /* Abort an in-flight async scan (review round 4 finding 1.2): wait for the

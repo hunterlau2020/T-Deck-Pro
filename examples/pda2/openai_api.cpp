@@ -456,8 +456,17 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
                              const char *model, const char *api_key, string &out,
                              uint32_t timeout_ms, bool is_test)
 {
-    if (!prompt || !base_url || !model || !api_key) return false;
-    if (!http_require_wifi("AI")) return false;
+    out = "Unknown AI request error";   /* default for every early return */
+    if (!prompt || !base_url || !model || !api_key) {
+        out = "Missing API parameters";
+        Serial.println("[AI] fail: missing parameters");
+        return false;
+    }
+    if (!http_require_wifi("AI")) {
+        out = "WiFi not connected";
+        Serial.println("[AI] fail: WiFi not connected");
+        return false;
+    }
 
     /* The config stores the provider BASE (e.g. https://api.deepseek.com/v1);
      * the chat endpoint appends /chat/completions - unless the stored base
@@ -469,6 +478,10 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
     }
     base_url = ep.c_str();
 
+    /* reasoning.exclude is an OpenRouter extension; DeepSeek direct and other
+     * OpenAI-compatible providers may ignore it or behave unexpectedly. */
+    const bool is_openrouter = (strstr(base_url, "openrouter.ai") != NULL);
+
     /* Request shape mirrors the OpenRouter curl reference:
      * {"model":..., "temperature":0.7, "reasoning":{"exclude":true},
      *  "messages":[{"role":"system",...},<history turns>,
@@ -476,19 +489,29 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
      * cJSON_AddStringToObject performs proper JSON string escaping, so
      * quotes/backslashes/newlines in any message cannot break the body. */
     cJSON *root = cJSON_CreateObject();
-    if (!root) return false;
+    if (!root) {
+        out = "Failed to build request (alloc)";
+        Serial.println("[AI] fail: cJSON_CreateObject");
+        return false;
+    }
     cJSON_AddStringToObject(root, "model", model);
     cJSON_AddNumberToObject(root, "temperature", 0.7);
-    cJSON *reasoning = cJSON_AddObjectToObject(root, "reasoning");
-    if (reasoning) cJSON_AddBoolToObject(reasoning, "exclude", true);
+    if (is_openrouter) {
+        cJSON *reasoning = cJSON_AddObjectToObject(root, "reasoning");
+        if (reasoning) cJSON_AddBoolToObject(reasoning, "exclude", true);
+    }
 
     cJSON *msgs = cJSON_AddArrayToObject(root, "messages");
     if (!msgs) {
         cJSON_Delete(root);
+        out = "Failed to build request (messages)";
+        Serial.println("[AI] fail: cJSON_AddArrayToObject");
         return false;
     }
     if (!ai_msg_add(msgs, "system", AI_SYSTEM_PROMPT)) {
         cJSON_Delete(root);
+        out = "Failed to build request (system msg)";
+        Serial.println("[AI] fail: ai_msg_add system");
         return false;
     }
     if (history) {
@@ -496,40 +519,126 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
             if (!history[i].role || !history[i].content) continue;
             if (!ai_msg_add(msgs, history[i].role, history[i].content)) {
                 cJSON_Delete(root);
+                out = "Failed to build request (history)";
+                Serial.println("[AI] fail: ai_msg_add history");
                 return false;
             }
         }
     }
     if (!ai_msg_add(msgs, "user", prompt)) {
         cJSON_Delete(root);
+        out = "Failed to build request (user msg)";
+        Serial.println("[AI] fail: ai_msg_add user");
         return false;
     }
     char *body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
-    if (!body) return false;
+    if (!body) {
+        out = "Failed to build request (serialize)";
+        Serial.println("[AI] fail: cJSON_PrintUnformatted");
+        return false;
+    }
 
     char auth[160];
     snprintf(auth, sizeof(auth), "Bearer %s", api_key);
 
-    http_response_t resp = http_post(base_url, string(body),
-                                     "application/json", auth, timeout_ms);
+    /* OpenRouter asks for attribution headers (optional for the request to
+     * succeed, but some keys/accounts enforce them; they also let the app
+     * appear on leaderboards). Add them when the endpoint is OpenRouter. */
+    const char *extra_names[2] = { NULL, NULL };
+    const char *extra_values[2] = { NULL, NULL };
+    int extra_count = 0;
+    if (is_openrouter) {
+        extra_names[0] = "HTTP-Referer";
+        extra_values[0] = "https://t-deck-pro.local";
+        extra_names[1] = "X-OpenRouter-Title";
+        extra_values[1] = "T-Deck Pro";
+        extra_count = 2;
+    }
+
+    http_response_t resp = http_post_with_headers(base_url, string(body),
+                                                  "application/json", auth,
+                                                  extra_names,
+                                                  extra_values,
+                                                  extra_count, timeout_ms);
     free(body);
 
     if (!resp.success || resp.status_code != 200) {
-        Serial.printf("[AI] HTTP %d, len=%u\n", resp.status_code, (unsigned)resp.body.length());
+        Serial.printf("[AI] HTTP %d, len=%u, openrouter=%d\n",
+                      resp.status_code, (unsigned)resp.body.length(),
+                      is_openrouter ? 1 : 0);
+        /* Log the first part of the body so we can diagnose provider errors
+         * (OpenRouter returns detailed JSON error messages). */
+        if (!resp.body.empty()) {
+            Serial.printf("[AI] body: %.200s\n", resp.body.c_str());
+        }
+        if (!resp.error.empty()) {
+            Serial.printf("[AI] error: %s\n", resp.error.c_str());
+        }
+        /* Surface a concise error message for the UI (and serial) without
+         * leaking the full raw response. */
+        out.clear();
+        cJSON *err_root = cJSON_Parse(resp.body.c_str());
+        if (err_root) {
+            cJSON *err_obj = cJSON_GetObjectItem(err_root, "error");
+            cJSON *err_msg = err_obj ? cJSON_GetObjectItem(err_obj, "message") : NULL;
+            if (err_msg && cJSON_IsString(err_msg) && err_msg->valuestring) {
+                out = err_msg->valuestring;
+            }
+            cJSON_Delete(err_root);
+        }
+        if (out.empty()) {
+            char buf[128];
+            if (!resp.error.empty()) {
+                snprintf(buf, sizeof(buf), "HTTP %d: %s",
+                         resp.status_code, resp.error.c_str());
+            } else {
+                snprintf(buf, sizeof(buf), "HTTP %d: API error",
+                         resp.status_code);
+            }
+            out = buf;
+        }
+        if (out.length() > 200) {
+            out.resize(200);
+            out += "...";
+        }
         return false;
     }
 
     /* Parse choices[0].message.content */
+    if (resp.body.empty()) {
+        out = "读取响应超时";
+        Serial.printf("[AI] fail: empty response body (status=%d, error=%s)\n",
+                      resp.status_code, resp.error.empty() ? "(none)" : resp.error.c_str());
+        return false;
+    }
     cJSON *j = cJSON_Parse(resp.body.c_str());
-    if (!j) return false;
+    if (!j) {
+        if (!resp.body.empty() && resp.body[0] == '<') {
+            out = "API returned HTML (not JSON)";
+        } else {
+            out = "Invalid API response (parse)";
+        }
+        Serial.printf("[AI] fail: cJSON_Parse response, len=%u, body[0]=0x%02x\n",
+                      (unsigned)resp.body.length(),
+                      resp.body.empty() ? 0 : (unsigned char)resp.body[0]);
+        if (!resp.body.empty()) {
+            Serial.printf("[AI] body preview: %.120s\n", resp.body.c_str());
+        }
+        return false;
+    }
     ai_usage_accumulate(j, is_test);    /* count usage whenever it is present */
     cJSON *choices = cJSON_GetObjectItem(j, "choices");
     cJSON *c0 = choices ? cJSON_GetArrayItem(choices, 0) : NULL;
     cJSON *msg0 = c0 ? cJSON_GetObjectItem(c0, "message") : NULL;
     cJSON *content = msg0 ? cJSON_GetObjectItem(msg0, "content") : NULL;
     bool ok = (content != NULL) && cJSON_IsString(content) && content->valuestring != NULL;
-    if (ok) out = content->valuestring;
+    if (ok) {
+        out = content->valuestring;
+    } else {
+        out = "Invalid API response (no content)";
+        Serial.println("[AI] fail: response has no choices[0].message.content");
+    }
     cJSON_Delete(j);
     return ok;
 }

@@ -321,10 +321,13 @@ http_response_t http_get_auth(const char *url, const char *auth_header, uint32_t
     return resp;
 }
 
-http_response_t http_post(const char *url, const string &body,
-                          const char *content_type,
-                          const char *auth_header,
-                          uint32_t timeout_ms)
+http_response_t http_post_with_headers(const char *url, const string &body,
+                                       const char *content_type,
+                                       const char *auth_header,
+                                       const char *header_names[],
+                                       const char *header_values[],
+                                       int header_count,
+                                       uint32_t timeout_ms)
 {
     http_response_t resp = {0, "", false, ""};
     if (s_tls_mode != HTTP_TLS_INSECURE && !http_ensure_time(5000)) {
@@ -338,6 +341,8 @@ http_response_t http_post(const char *url, const string &body,
     HTTPClient http;
 
     http.setTimeout(timeout_ms);
+    http.useHTTP10(true);                           /* force HTTP/1.0 to avoid
+        chunked encoding / keep-alive body-read issues with some providers */
     if (!http.begin(client, url)) {
         resp.body = (s_tls_mode == HTTP_TLS_INSECURE) ? "Failed to connect" : "Failed to connect (TLS)";
         char err[128] = {0};
@@ -347,12 +352,26 @@ http_response_t http_post(const char *url, const string &body,
     }
 
     http.addHeader("Content-Type", content_type);
+    http.addHeader("Accept-Encoding", "identity");  /* ESP32 HTTPClient does not
+        decompress gzip; force uncompressed responses (OpenRouter etc.). */
+    http.addHeader("Connection", "close");          /* help HTTPClient detect
+        end-of-body on slow/chunked responses (DeepSeek read timeout). */
     if (auth_header && auth_header[0] != '\0') {
         http.addHeader("Authorization", auth_header);
+    }
+    for (int i = 0; i < header_count; i++) {
+        if (header_names[i] && header_names[i][0] != '\0' &&
+            header_values[i] && header_values[i][0] != '\0') {
+            http.addHeader(header_names[i], header_values[i]);
+        }
     }
 
     resp.status_code = http.POST(body.c_str());
     if (resp.status_code > 0) {
+        Serial.printf("[HTTP] status=%d ct=%s ce=%s\n",
+                      resp.status_code,
+                      http.header("Content-Type").c_str(),
+                      http.header("Content-Encoding").c_str());
         resp.body = http.getString().c_str();
         resp.success = (resp.status_code >= 200 && resp.status_code < 300);
     } else {
@@ -361,6 +380,15 @@ http_response_t http_post(const char *url, const string &body,
     }
     http.end();
     return resp;
+}
+
+http_response_t http_post(const char *url, const string &body,
+                          const char *content_type,
+                          const char *auth_header,
+                          uint32_t timeout_ms)
+{
+    return http_post_with_headers(url, body, content_type, auth_header,
+                                  NULL, NULL, 0, timeout_ms);
 }
 
 http_response_t http_post_large(const char *url, const uint8_t *data, size_t data_len,

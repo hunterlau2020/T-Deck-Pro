@@ -152,5 +152,12 @@ lv_obj_t *scr_back_btn_create(lv_obj_t *parent, const char *text, lv_event_cb_t 
 
 #ifdef __cplusplus
 } /*extern "C"*/
+
+/* WiFi memory-slot helpers (C++), used by factory.ino setup(). */
+void wifi_slot_migrate_legacy(void);
+void wifi_slot_load(int slot, char *ssid, int ssid_len,
+                    char *pass, int pass_len);
+int  wifi_slot_get_active(void);
+
 #endif
 #endif /* __UI_EPD47H__ */

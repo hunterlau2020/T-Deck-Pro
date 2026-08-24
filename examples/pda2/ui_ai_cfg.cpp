@@ -40,7 +40,7 @@
 #include <freertos/queue.h>
 
 #define AI_CFG_FIELD_NUM 3
-#define AI_TEST_HTTP_MS 10000     /* connect + response read */
+#define AI_TEST_HTTP_MS 45000     /* connect + response read */
 #define AI_TEST_NTP_MS  5000      /* worst-case NTP wait inside http_* */
 #define AI_TEST_DEADLINE_MS (AI_TEST_HTTP_MS + AI_TEST_NTP_MS)
 
@@ -299,12 +299,8 @@ static void ai_cfg_save(void)
         ai_msgbox_show("Model empty - fill it first");
         return;
     }
-    if (strlen(ai_key) < 16) {
+    if (strlen(ai_key) < 15) {
         ai_msgbox_show("Key too short");
-        return;
-    }
-    if (!s_ai_test_passed) {
-        ai_msgbox_show("Run Test first");
         return;
     }
 
@@ -375,15 +371,16 @@ static void ai_ta_focus_cb(lv_event_t *e)
     }
 }
 
-/* Save gate UX (finding 1.4): tell the user WHY Save is blocked. */
+/* Status hint: reflects test state now that Save no longer requires a
+ * passing Test (user request). */
 static void ai_cfg_status_hint(void)
 {
-    if (s_ai_test_passed) {
-        lv_label_set_text(ai_status_lab, "Test OK - ready to Save");
-    } else if (s_ai_test_busy) {
+    if (s_ai_test_busy) {
         lv_label_set_text(ai_status_lab, "Testing...");
+    } else if (s_ai_test_passed) {
+        lv_label_set_text(ai_status_lab, "Test OK");
     } else {
-        lv_label_set_text(ai_status_lab, "Run Test to enable Save");
+        lv_label_set_text(ai_status_lab, "Save / Test");
     }
 }
 
@@ -451,7 +448,11 @@ static void ai_test_btn_cb(lv_event_t *e)
     s_ai_test_busy = true;
     /* billing transparency (main finding 1.3/1.4): the minimal completion
      * still consumes tokens, and it only proves network+auth */
-    ai_msgbox_show("Testing... 15s\ncosts ~1 token\n(network+auth only)");
+    char init_buf[64];
+    snprintf(init_buf, sizeof(init_buf),
+             "Testing... %lus\ncosts ~1 token\n(network+auth only)",
+             (unsigned)(AI_TEST_DEADLINE_MS / 1000));
+    ai_msgbox_show(init_buf);
     ai_msgbox_countdown_active = true;
     ai_msgbox_t0 = millis();
     ai_msgbox_last_secs = 99;
@@ -493,7 +494,7 @@ void ai_cfg_keyboard_poll(void)
             ai_msgbox_countdown_active = false;
             s_ai_test_busy = false;
             s_ai_test_req_gen++;                /* finding 1.9: a late result is dropped */
-            ai_msgbox_set_text("Request timeout\n(check network)");
+            ai_msgbox_set_text("等待返回超时");
             ai_cfg_status_hint();
         } else if (secs != ai_msgbox_last_secs) {
             ai_msgbox_last_secs = secs;
@@ -521,9 +522,11 @@ void ai_cfg_keyboard_poll(void)
                 Serial.printf("[AICfg] test OK, reply len=%u\n",
                               (unsigned)tr->reply.length());
             } else {
-                ai_msgbox_show("Test fail:\nHTTP/API error\n(check config)");
-                Serial.printf("[AICfg] test failed, reply len=%u\n",
-                              (unsigned)tr->reply.length());
+                char fail_buf[192];
+                snprintf(fail_buf, sizeof(fail_buf), "Test fail:\n%s",
+                         tr->reply.c_str());
+                ai_msgbox_show(fail_buf, 180);
+                Serial.printf("[AICfg] test failed: %s\n", tr->reply.c_str());
             }
             ai_cfg_status_hint();
         } else {
