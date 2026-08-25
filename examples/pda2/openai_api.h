@@ -111,3 +111,55 @@ bool openai_save_config(const char *base, const char *model, const char *key,
 bool openai_tls_insecure(void);
 void openai_tls_apply(void);
 bool openai_tls_set(bool insecure);
+
+/* --------------------------------------------------------------------------
+ * Provider registry shared between AI Config and PenPal.
+ * A provider is a named tuple of (base_url, model).  The API key is resolved
+ * at runtime from the active AI Config slot or per-provider NVS overrides,
+ * so it is NOT part of the registry entry.
+ * -------------------------------------------------------------------------- */
+
+/** @brief One static provider descriptor. */
+typedef struct {
+    const char *name;     /**< Internal id, e.g. "openrouter". */
+    const char *label;    /**< Human label, e.g. "OpenRouter". */
+    const char *base_url; /**< Endpoint base, e.g. "https://openrouter.ai/api/v1". */
+    const char *model;    /**< Default model id for this provider. */
+} ai_provider_info_t;
+
+/** @return Number of built-in providers. */
+int ai_provider_count(void);
+
+/**
+ * @brief Copy provider descriptor at index into @p out.
+ * @param idx 0 .. ai_provider_count()-1.
+ * @param out Filled on success; pointers point to static strings.
+ * @return true if idx is valid.
+ */
+bool ai_provider_enum(int idx, ai_provider_info_t *out);
+
+/**
+ * @brief Find a provider by internal name.
+ * @return Its index, or -1 if not found.
+ */
+int ai_provider_find(const char *name);
+
+/**
+ * @brief Resolve the effective config for a named provider.
+ *
+ * Resolution order (later wins):
+ *   1. Registry defaults (base_url, model).
+ *   2. NVS "ai" namespace: active slot fields.
+ *   3. /env.cfg (if readable) for key.
+ *   4. Compile-time AI_KEY_DEFAULT_DEV if non-empty.
+ *
+ * @param name Provider name ("openrouter", "deepseek", ...).
+ * @param base  Output buffer for endpoint URL.
+ * @param model Output buffer for model id.
+ * @param key   Output buffer for API key.
+ * @return true if the provider exists; buffers are always written (possibly
+ *         empty strings when no key is configured).
+ */
+bool ai_provider_get(const char *name, char *base, int base_len,
+                     char *model, int model_len,
+                     char *key, int key_len);

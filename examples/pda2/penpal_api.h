@@ -142,6 +142,14 @@ void penpal_load_config(char *base, int base_len, char *key, int key_len);
  *  @return false on NVS failure (caller shows it in the Cfg status line). */
 bool penpal_save_config(const char *base, const char *key);
 
+/**
+ * @brief Load/save the selected AI provider name in NVS namespace "penpal".
+ *        An empty string means "custom / none".  The actual base/model/key
+ *        are resolved from AI Config via openai_api::ai_provider_get().
+ */
+void penpal_load_ai_provider(char *name, int name_len);
+bool penpal_save_ai_provider(const char *name);
+
 /* ---- idempotency key (design §2.2) ---------------------------------------- */
 
 /** @brief Fill out with a fresh 32-hex Idempotency-Key (hardware RNG,
@@ -190,10 +198,13 @@ bool penpal_send_email(const char *base, const char *key,
                        bool *replayed, string *err);
 
 bool penpal_correction(const char *base, const char *key, int email_id,
+                       const char *ai_provider, const char *ai_model,
                        pp_fix_t *out, string *err);
 
 bool penpal_polish(const char *base, const char *key, int email_id,
+                   const char *ai_provider, const char *ai_model,
                    pp_polish_t *out, string *err);
 
 bool penpal_tips(const char *base, const char *key, int email_id,
+                 const char *ai_provider, const char *ai_model,
                  pp_tips_t *out, string *err);

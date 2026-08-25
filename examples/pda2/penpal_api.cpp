@@ -276,6 +276,29 @@ bool penpal_save_config(const char *base, const char *key)
     return ok;
 }
 
+void penpal_load_ai_provider(char *name, int name_len)
+{
+    if (!name || name_len <= 0) return;
+    Preferences p;
+    p.begin("penpal", true);
+    String s = "";
+    if (p.isKey("ai_provider")) s = p.getString("ai_provider", "");
+    p.end();
+    s_copy(name, name_len, s.c_str());
+}
+
+bool penpal_save_ai_provider(const char *name)
+{
+    Preferences p;
+    p.begin("penpal", false);
+    const String n = name ? String(name) : String("");
+    p.putString("ai_provider", n);
+    const bool ok = p.isKey("ai_provider") && p.getString("ai_provider", "") == n;
+    p.end();
+    if (!ok) Serial.println("[PenPal] ai_provider save failed (NVS write/verify)");
+    return ok;
+}
+
 /* ---- endpoints -------------------------------------------------------------- */
 
 bool penpal_get_pals(const char *base, const char *key,
@@ -553,15 +576,40 @@ bool penpal_send_email(const char *base, const char *key,
     return true;
 }
 
+/* Build an LLM-side path with optional provider/model query params so the
+ * PenPal server can route to the AI Config selected by the user. */
+static string pp_llm_path(int email_id, const char *suffix,
+                          const char *ai_provider, const char *ai_model)
+{
+    char base[64];
+    snprintf(base, sizeof(base), "/emails/%d%s", email_id, suffix);
+    string path = base;
+    bool has_provider = (ai_provider && ai_provider[0]);
+    bool has_model    = (ai_model && ai_model[0]);
+    if (has_provider || has_model) {
+        path += "?";
+        if (has_provider) {
+            path += "provider=";
+            path += ai_provider;
+            if (has_model) path += "&";
+        }
+        if (has_model) {
+            path += "model=";
+            path += ai_model;
+        }
+    }
+    return path;
+}
+
 bool penpal_correction(const char *base, const char *key, int email_id,
+                       const char *ai_provider, const char *ai_model,
                        pp_fix_t *out, string *err)
 {
     *out = pp_fix_t{};      /* value-init (memset is reserved for POD-free) */
     if (!pp_cfg_ok(base, key, err)) return false;
 
-    char path[48];
-    snprintf(path, sizeof(path), "/emails/%d/correction", email_id);
-    pp_http_t r = pp_request("POST", pp_url(base, path), NULL, NULL,
+    string path = pp_llm_path(email_id, "/correction", ai_provider, ai_model);
+    pp_http_t r = pp_request("POST", pp_url(base, path.c_str()), NULL, NULL,
                              key, PP_TIMEOUT_LLM_MS);
     if (!r.ok) {
         if (err) *err = pp_fail(r);
@@ -601,15 +649,15 @@ bool penpal_correction(const char *base, const char *key, int email_id,
 }
 
 bool penpal_polish(const char *base, const char *key, int email_id,
+                   const char *ai_provider, const char *ai_model,
                    pp_polish_t *out, string *err)
 {
     /* value-init, NOT memset - the struct holds std::string (Codex P1) */
     *out = pp_polish_t{};
     if (!pp_cfg_ok(base, key, err)) return false;
 
-    char path[48];
-    snprintf(path, sizeof(path), "/emails/%d/polish", email_id);
-    pp_http_t r = pp_request("POST", pp_url(base, path), NULL, NULL,
+    string path = pp_llm_path(email_id, "/polish", ai_provider, ai_model);
+    pp_http_t r = pp_request("POST", pp_url(base, path.c_str()), NULL, NULL,
                              key, PP_TIMEOUT_LLM_MS);
     if (!r.ok) {
         if (err) *err = pp_fail(r);
@@ -665,14 +713,14 @@ bool penpal_polish(const char *base, const char *key, int email_id,
 }
 
 bool penpal_tips(const char *base, const char *key, int email_id,
+                 const char *ai_provider, const char *ai_model,
                  pp_tips_t *out, string *err)
 {
     *out = pp_tips_t{};     /* value-init (uniform with the string structs) */
     if (!pp_cfg_ok(base, key, err)) return false;
 
-    char path[48];
-    snprintf(path, sizeof(path), "/emails/%d/tips", email_id);
-    pp_http_t r = pp_request("POST", pp_url(base, path), NULL, NULL,
+    string path = pp_llm_path(email_id, "/tips", ai_provider, ai_model);
+    pp_http_t r = pp_request("POST", pp_url(base, path.c_str()), NULL, NULL,
                              key, PP_TIMEOUT_LLM_MS);
     if (!r.ok) {
         if (err) *err = pp_fail(r);

@@ -147,6 +147,121 @@ bool openai_tls_set(bool insecure)
     return ok;
 }
 
+/* --------------------------------------------------------------------------
+ * Provider registry shared between AI Config and PenPal.
+ * -------------------------------------------------------------------------- */
+
+typedef struct {
+    const char *name;
+    const char *label;
+    const char *base_url;
+    const char *model;
+    const char *env_key;
+} ai_provider_internal_t;
+
+/* KEEP IN SYNC with ai_provider_enum(): same names, same order. */
+static const ai_provider_internal_t s_providers[] = {
+    { "openrouter", "OpenRouter",
+      "https://openrouter.ai/api/v1",
+      "deepseek/deepseek-v4-flash-0731", "OPENROUTER_KEY" },
+    { "deepseek",   "DeepSeek",
+      "https://api.deepseek.com/v1",
+      "deepseek-v4-flash",                "DEEPSEEK_KEY" },
+    { "minimax",    "MiniMax",
+      "https://api.minimaxi.com/v1",
+      "MiniMax-M3",                       "MINIMAX_KEY" },
+    { "qwen",       "Qwen",
+      "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "qwen3.7-plus",                     "QWEN_KEY" },
+    { "tencent",    "Tencent",
+      "https://tokenhub.tencentmaas.com/v1",
+      "hy3",                              "TENCENT_KEY" },
+};
+#define AI_PROVIDER_NUM (sizeof(s_providers) / sizeof(s_providers[0]))
+
+int ai_provider_count(void)
+{
+    return AI_PROVIDER_NUM;
+}
+
+bool ai_provider_enum(int idx, ai_provider_info_t *out)
+{
+    if (idx < 0 || idx >= (int)AI_PROVIDER_NUM || !out) return false;
+    out->name     = s_providers[idx].name;
+    out->label    = s_providers[idx].label;
+    out->base_url = s_providers[idx].base_url;
+    out->model    = s_providers[idx].model;
+    return true;
+}
+
+int ai_provider_find(const char *name)
+{
+    if (!name) return -1;
+    for (int i = 0; i < (int)AI_PROVIDER_NUM; i++) {
+        if (strcmp(name, s_providers[i].name) == 0) return i;
+    }
+    return -1;
+}
+
+bool ai_provider_get(const char *name, char *base, int base_len,
+                     char *model, int model_len,
+                     char *key, int key_len)
+{
+    if (!base || base_len <= 0 ||
+        !model || model_len <= 0 ||
+        !key   || key_len   <= 0) return false;
+
+    const int idx = ai_provider_find(name);
+    if (idx < 0) {
+        base[0] = model[0] = key[0] = '\0';
+        return false;
+    }
+    const ai_provider_internal_t *p = &s_providers[idx];
+
+    /* Load the active AI Config slot.  If its base matches this provider,
+     * treat the saved slot as an explicit override (base/model/key may all
+     * have been customized in AI Config). */
+    char ab[160] = "", am[80] = "", ak[80] = "";
+    openai_load_config(ab, sizeof(ab), am, sizeof(am), ak, sizeof(ak));
+
+    if (strcmp(ab, p->base_url) == 0) {
+        strncpy(base, ab, base_len - 1);
+        strncpy(model, am, model_len - 1);
+        strncpy(key,   ak, key_len   - 1);
+    } else {
+        strncpy(base, p->base_url, base_len - 1);
+        strncpy(model, p->model,    model_len - 1);
+
+        /* Key fallback chain: provider-specific NVS -> /env.cfg ->
+         * openrouter compile-time dev key -> empty. */
+        char nvs_key[32];
+        snprintf(nvs_key, sizeof(nvs_key), "key.%s", p->name);
+        Preferences pr;
+        pr.begin("ai", true);
+        String saved = pr.getString(nvs_key, "");
+        pr.end();
+        if (saved.length() > 0) {
+            strncpy(key, saved.c_str(), key_len - 1);
+        } else if (p->env_key[0]) {
+            char envk[96] = "";
+            env_get(p->env_key, envk, sizeof(envk));
+            if (envk[0] == '\0' && strcmp(p->name, "openrouter") == 0) {
+#ifdef AI_KEY_DEFAULT_DEV
+                strncpy(envk, AI_KEY_DEFAULT_DEV, sizeof(envk) - 1);
+                envk[sizeof(envk) - 1] = '\0';
+#endif
+            }
+            strncpy(key, envk, key_len - 1);
+        } else {
+            key[0] = '\0';
+        }
+    }
+    base[base_len - 1] = '\0';
+    model[model_len - 1] = '\0';
+    key[key_len - 1]   = '\0';
+    return true;
+}
+
 static cJSON *ai_msg_add(cJSON *msgs, const char *role, const char *content)
 {
     cJSON *m = cJSON_CreateObject();

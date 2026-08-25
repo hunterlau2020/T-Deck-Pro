@@ -82,6 +82,8 @@ typedef struct {
     int type;               /* pp_res_type_t */
     string base;
     string key;
+    string ai_provider;     /* AI Config provider id for LLM endpoints */
+    string ai_model;        /* AI Config model id for LLM endpoints */
     int pen_pal_id;         /* THREAD */
     int thread_root_id;     /* THREAD / SEND(reply anchor) */
     int email_id;           /* FIX / POLISH / TIPS */

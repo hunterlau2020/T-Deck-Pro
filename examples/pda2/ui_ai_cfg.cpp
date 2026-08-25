@@ -52,6 +52,7 @@ static lv_obj_t *ai_key_lab = NULL;
 static lv_obj_t *ai_key_ta = NULL;
 static lv_obj_t *ai_status_lab = NULL;
 static lv_obj_t *ai_provider_dd = NULL;
+static char ai_provider_options[256] = "";
 static lv_obj_t *ai_tls_sw = NULL;         /* "Trust" self-signed TLS switch */
 static bool ai_cfg_kbd_active = false;
 static int  ai_cfg_field = 0;            /* 0=base 1=model 2=key */
@@ -86,41 +87,15 @@ static bool s_ai_test_passed = false;              /* required by Save; cleared 
 static void ai_cfg_sync_draft(void);
 static void ai_cfg_status_hint(void);
 
-typedef struct {
-    const char *name;
-    const char *base;
-    const char *model;
-    const char *key_name;       /* /env.cfg key for this provider's API key */
-} ai_provider_t;
+static int ai_provider_idx = ai_provider_count();   /* custom until matched */
 
-/* KEEP IN SYNC with the lv_dropdown_set_options() string list below:
- * same provider names, same order - the dropdown callback indexes
- * s_providers by the selected entry. */
-static const ai_provider_t s_providers[] = {
-    { "openrouter", "https://openrouter.ai/api/v1",
-      "deepseek/deepseek-v4-flash-0731", "OPENROUTER_KEY" },
-    { "deepseek",   "https://api.deepseek.com/v1",
-      "deepseek-v4-flash",                "DEEPSEEK_KEY" },
-    { "minimax",    "https://api.minimaxi.com/v1",
-      "MiniMax-M3",                       "MINIMAX_KEY" },
-    { "qwen",       "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "qwen3.7-plus",                     "QWEN_KEY" },
-    { "tencent",    "https://tokenhub.tencentmaas.com/v1",
-      "hy3",                              "TENCENT_KEY" },
-    { "custom",     "", "", "" },
-};
-#define AI_PROVIDER_NUM 6
-static int ai_provider_idx = AI_PROVIDER_NUM - 1;   /* custom until matched */
-
-/* Apply the current provider: base/model boxes + THAT provider's key.
- * Key chain per provider: NVS "key.<name>" -> /env.cfg "<NAME>_KEY" ->
- * (openrouter only) gitignored config_keys.h AI_KEY_DEFAULT_DEV -> empty
- * box. Each provider keeps its OWN key - switching back restores it from
- * NVS. "custom" CLEARS all three boxes (user request). */
+/* Apply the current provider: base/model boxes + THAT provider's resolved
+ * key.  Resolution is centralised in openai_api.cpp.  "custom" CLEARS all
+ * three boxes (user request). */
 static void ai_provider_apply(void)
 {
-    const ai_provider_t *p = &s_providers[ai_provider_idx];
-    if (p->base[0] == '\0') {
+    const int builtin = ai_provider_count();
+    if (ai_provider_idx >= builtin) {
         /* custom: start from scratch */
         lv_textarea_set_text(ai_base_ta, "");
         lv_textarea_set_text(ai_model_ta, "");
@@ -129,36 +104,17 @@ static void ai_provider_apply(void)
         ai_model[0] = '\0';
         ai_key[0] = '\0';
     } else {
-        lv_textarea_set_text(ai_base_ta, p->base);
-        strncpy(ai_base, p->base, sizeof(ai_base) - 1);
-        ai_base[sizeof(ai_base) - 1] = '\0';
-        lv_textarea_set_text(ai_model_ta, p->model);
-        strncpy(ai_model, p->model, sizeof(ai_model) - 1);
-        ai_model[sizeof(ai_model) - 1] = '\0';
-
+        ai_provider_info_t p;
+        ai_provider_enum(ai_provider_idx, &p);
         char k[96] = "";
-        char nkey[32];
-        snprintf(nkey, sizeof(nkey), "key.%s", p->name);
-        Preferences pr;
-        pr.begin("ai", true);
-        String saved = pr.getString(nkey, "");
-        pr.end();
-        if (saved.length() > 0) {
-            strncpy(k, saved.c_str(), sizeof(k) - 1);
-            k[sizeof(k) - 1] = '\0';
-        } else if (p->key_name[0] != '\0') {
-            env_get(p->key_name, k, sizeof(k));
-            if (k[0] == '\0' && strcmp(p->name, "openrouter") == 0) {
-#ifdef AI_KEY_DEFAULT_DEV
-                strncpy(k, AI_KEY_DEFAULT_DEV, sizeof(k) - 1);
-                k[sizeof(k) - 1] = '\0';
-#endif
-            }
-        }
+        ai_provider_get(p.name, ai_base, sizeof(ai_base),
+                        ai_model, sizeof(ai_model), k, sizeof(k));
+        lv_textarea_set_text(ai_base_ta, ai_base);
+        lv_textarea_set_text(ai_model_ta, ai_model);
         lv_textarea_set_text(ai_key_ta, k);
         strncpy(ai_key, k, sizeof(ai_key) - 1);
         ai_key[sizeof(ai_key) - 1] = '\0';
-        if (k[0] != '\0') Serial.printf("[AICfg] key for %s loaded\n", p->name);
+        if (k[0] != '\0') Serial.printf("[AICfg] key for %s loaded\n", p.name);
     }
     s_ai_test_passed = false;               /* base/model changed: Test is stale */
     ai_cfg_status_hint();
@@ -169,7 +125,12 @@ static void ai_provider_select(int idx)
     ai_cfg_sync_draft();                    /* keep the outgoing field's edits */
     ai_provider_idx = idx;
     ai_provider_apply();
-    Serial.printf("[AICfg] provider: %s\n", s_providers[ai_provider_idx].name);
+    ai_provider_info_t p;
+    if (ai_provider_enum(ai_provider_idx, &p)) {
+        Serial.printf("[AICfg] provider: %s\n", p.name);
+    } else {
+        Serial.println("[AICfg] provider: custom");
+    }
 }
 
 /* Native lv_dropdown (touch expands the list) + Alt+Enter cycles. */
@@ -180,7 +141,8 @@ static void ai_provider_dd_cb(lv_event_t *e)
 
 static void ai_provider_next(void)
 {
-    int sel = (ai_provider_idx + 1) % AI_PROVIDER_NUM;
+    const int total = ai_provider_count() + 1;   /* + custom */
+    int sel = (ai_provider_idx + 1) % total;
     lv_dropdown_set_selected(ai_provider_dd, sel);  /* fires dd_cb -> select */
 }
 
@@ -307,12 +269,12 @@ static void ai_cfg_save(void)
     const char *err = NULL;
     if (openai_save_config(ai_base, ai_model, ai_key, &err)) {
         /* remember the key under THIS provider too, so switching away
-         * and back restores it (per-provider keys). Skip custom (base is
-         * empty) - key.custom would be dead storage, never read back. */
-        const ai_provider_t *p = &s_providers[ai_provider_idx];
-        if (p->base[0] != '\0') {
+         * and back restores it (per-provider keys). Skip custom (idx past
+         * built-ins) - key.custom would be dead storage, never read back. */
+        ai_provider_info_t p;
+        if (ai_provider_enum(ai_provider_idx, &p)) {
             char nkey[32];
-            snprintf(nkey, sizeof(nkey), "key.%s", p->name);
+            snprintf(nkey, sizeof(nkey), "key.%s", p.name);
             Preferences pr;
             pr.begin("ai", false);
             pr.putString(nkey, ai_key);
@@ -636,19 +598,24 @@ static void ai_cfg_create(lv_obj_t *parent)
     lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
 
     /* Provider selector: native dropdown (touch expands the list);
-     * Alt+Enter cycles through it from the keypad */
+     * Alt+Enter cycles through it from the keypad.  Options are built from
+     * the central registry so labels live in one place. */
     ai_provider_dd = lv_dropdown_create(cont);
     lv_obj_set_width(ai_provider_dd, lv_pct(100));
     lv_obj_set_height(ai_provider_dd, 30);
     lv_obj_set_style_text_font(ai_provider_dd, &lv_font_montserrat_14, LV_PART_MAIN);
-    /* KEEP IN SYNC with s_providers[] above: same names, same order. */
-    lv_dropdown_set_options(ai_provider_dd,
-                            "openrouter\n"
-                            "deepseek\n"
-                            "minimax\n"
-                            "qwen\n"
-                            "tencent\n"
-                            "custom");
+    ai_provider_options[0] = '\0';
+    for (int i = 0; i < ai_provider_count(); i++) {
+        ai_provider_info_t p;
+        ai_provider_enum(i, &p);
+        if (i > 0) strncat(ai_provider_options, "\n",
+                           sizeof(ai_provider_options) - strlen(ai_provider_options) - 1);
+        strncat(ai_provider_options, p.label,
+                sizeof(ai_provider_options) - strlen(ai_provider_options) - 1);
+    }
+    strncat(ai_provider_options, "\ncustom",
+            sizeof(ai_provider_options) - strlen(ai_provider_options) - 1);
+    lv_dropdown_set_options(ai_provider_dd, ai_provider_options);
 
     /* Base URL: label + multi-line box (long URLs stay editable) */
     ai_base_lab = lv_label_create(cont);
@@ -744,9 +711,11 @@ static void ai_cfg_create(lv_obj_t *parent)
     /* match the saved base to a provider preset (custom when unknown);
      * DISPLAY only - the saved values stay untouched. The dropdown is set
      * BEFORE its change callback is attached, so init never re-applies. */
-    ai_provider_idx = AI_PROVIDER_NUM - 1;
-    for (int i = 0; i < AI_PROVIDER_NUM - 1; i++) {
-        if (strcmp(ai_base, s_providers[i].base) == 0) {
+    ai_provider_idx = ai_provider_count();   /* custom */
+    for (int i = 0; i < ai_provider_count(); i++) {
+        ai_provider_info_t p;
+        ai_provider_enum(i, &p);
+        if (strcmp(ai_base, p.base_url) == 0) {
             ai_provider_idx = i;
             break;
         }

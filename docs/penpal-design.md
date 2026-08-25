@@ -224,15 +224,19 @@ URL 前缀 https:// → WiFiClientSecure（按 http_get_tls_mode() 现行策略�
 
 ### 3.4 配置链（沿用 SECURITY.md 模式）
 
+PenPal 服务端配置：
+
 ```
-NVS 命名空间 "penpal"（键 base / key）
+NVS 命名空间 "penpal"（键 base / key / ai_provider）
   → SPIFFS /env.cfg（PENPAL_BASE=... / PENPAL_KEY=...，env_secrets 解析）
   → gitignored config_keys.h（PENPAL_BASE_DEFAULT_DEV / PENPAL_KEY_DEFAULT_DEV，
     本地开发填 PC 局域网 IP + hunter 测试 key）
   → 空默认（Cfg 页引导填写）
 ```
 
-- 设备端通过 **CFG 页**修改（两个 textarea + Save + 状态行）。
+AI provider/model 本身不保存在 `penpal` namespace 中；`penpal:ai_provider` 只保存一个 provider 名，运行时通过 `openai_api::ai_provider_get()` 从 AI Config 解析出 base/model/key。
+
+- 设备端通过 **CFG 页**修改（Server URL / Server Key / AI Provider 下拉 + Save + 状态行）。
 - **容量说明（kimi §1.5/T4）**：`env_secrets` 8 槽上限（`ENV_MAX_ENTRIES`，
   `env_secrets.cpp:21`；第 9 条起**静默丢弃**，`:48`）+ 值上限 95 字符
   （`val[96]`）。现有有意义键最多 7 个（`OPENROUTER_KEY`/`OWM_KEY`/
@@ -421,15 +425,18 @@ FB 页 `entry()` 按 §3.2 结果 `type`（FIX / POLISH）选择渲染布局—�
 ```
 ┌──────────────────────────────────────┐
 │ [Back] PenPal Cfg                    │
-│ Base URL: [http://192.168.x.x:8000 ] │  textarea（≤95 字符，§3.4 对齐 env.cfg 值上限）
-│ API key:  [89rg35eua2            ]   │  textarea（≤16 字符）
-│ [Save]     status line（保存结果/    │
-│            当前解析链来源）           │
+│ Server URL: [http://192.168.x.x:8000]│  textarea（≤95 字符，§3.4 对齐 env.cfg 值上限）
+│ Server Key: [89rg35eua2          ]   │  textarea（≤16 字符）
+│ AI Provider: [OpenRouter    ▼]       │  下拉，复用 AI Config 的 provider
+│ [Save]     status line（AI provider/ │
+│            保存结果 / 解析链来源）     │
 └──────────────────────────────────────┘
 ```
 
-- Save = NVS `penpal` 写 + 状态行报错（单槽，§3.4）；
-- 打开时 textarea 预填当前生效值；键盘与 COMPOSE 一致（`\t` 切换焦点）。
+- Save = NVS `penpal` 写服务端 `base`/`key` + 写 `ai_provider`（单槽，§3.4），状态行报错；
+- AI Provider 下拉选项来自 `openai_api` 的集中式注册表，最后一项为 `custom`；
+- 状态行显示所选 provider 的 `label/model/key 是否存在`，以及当前值是否来自 `env.cfg`；
+- 键盘：`\t` 在 Server URL / Server Key / AI Provider 之间循环焦点；焦点在 provider 上时按 `+/-` 切换选项；`\b` 删除当前输入框字符，为空时返回 HOME。
 
 ## 5. 数据模型与内存预算
 

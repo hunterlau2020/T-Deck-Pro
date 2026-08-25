@@ -33,6 +33,7 @@
 #include "ui_penpal.h"
 #include "ui_scr_mrg.h"
 #include "http_utils.h"
+#include "openai_api.h"
 #include "src/assets.h"
 #include <Preferences.h>
 #include <freertos/FreeRTOS.h>
@@ -384,15 +385,24 @@ static void pp_task_func(void *param)
                                     &res->count, &err);
         break;
     case PP_RES_FIX:
-        res->ok = penpal_correction(base, key, rq->email_id, &res->fix, &err);
+        res->ok = penpal_correction(base, key, rq->email_id,
+                                    rq->ai_provider.c_str(),
+                                    rq->ai_model.c_str(),
+                                    &res->fix, &err);
         if (res->ok) pp_fix_text(res->text, &res->fix);
         break;
     case PP_RES_POLISH:
-        res->ok = penpal_polish(base, key, rq->email_id, &res->polish, &err);
+        res->ok = penpal_polish(base, key, rq->email_id,
+                                rq->ai_provider.c_str(),
+                                rq->ai_model.c_str(),
+                                &res->polish, &err);
         if (res->ok) pp_polish_text(res->text, &res->polish);
         break;
     case PP_RES_TIPS:
-        res->ok = penpal_tips(base, key, rq->email_id, &res->tips, &err);
+        res->ok = penpal_tips(base, key, rq->email_id,
+                              rq->ai_provider.c_str(),
+                              rq->ai_model.c_str(),
+                              &res->tips, &err);
         if (res->ok) pp_tips_text(res->text, &res->tips);
         break;
     default:
@@ -463,6 +473,23 @@ bool pp_start(const pp_task_req_t *tmpl, bool chained)
     pp_task_req_t *rq = new pp_task_req_t(*tmpl);  /* full string copies */
     rq->base = base;
     rq->key = key;
+    /* Resolve the AI provider on the UI thread (Preferences is not re-entrant
+     * and must not be touched from the worker task).  Empty / custom -> leave
+     * ai_provider/model empty so the server uses its own default. */
+    {
+        char provider_name[32] = "";
+        char ai_base[160] = "", ai_model[80] = "", ai_key[80] = "";
+        penpal_load_ai_provider(provider_name, sizeof(provider_name));
+        if (provider_name[0] &&
+            ai_provider_get(provider_name, ai_base, sizeof(ai_base),
+                            ai_model, sizeof(ai_model), ai_key, sizeof(ai_key))) {
+            rq->ai_provider = provider_name;
+            rq->ai_model    = ai_model;
+        } else {
+            rq->ai_provider.clear();
+            rq->ai_model.clear();
+        }
+    }
     /* count BEFORE create: the worker may finish on the other core before
      * xTaskCreate returns here (P2) */
     __atomic_add_fetch(&s_pp_inflight, 1, __ATOMIC_RELAXED);
@@ -926,10 +953,57 @@ static void pp_home_key(char c)
     }
 }
 
+
 /* ---- CFG page (§4.7) ----------------------------------------------------- */
 static lv_obj_t *s_cfg_base_ta = NULL;
 static lv_obj_t *s_cfg_key_ta = NULL;
-static bool s_cfg_focus_key = false;     /* false = base, true = key */
+static lv_obj_t *s_cfg_provider_dd = NULL;
+static char s_cfg_provider_options[256] = "";
+static int s_cfg_provider_idx = 0;
+
+enum {
+    PP_CFG_FOCUS_BASE = 0,
+    PP_CFG_FOCUS_KEY,
+    PP_CFG_FOCUS_PROVIDER,
+    PP_CFG_FOCUS_NUM
+};
+static int s_cfg_focus = PP_CFG_FOCUS_BASE;
+
+static int pp_cfg_provider_count(void)
+{
+    return ai_provider_count() + 1;   /* built-ins + custom */
+}
+
+static void pp_cfg_status_text(char *buf, int buf_len)
+{
+    char name[32] = "";
+    penpal_load_ai_provider(name, sizeof(name));
+    char base[160] = "", model[80] = "", key[80] = "";
+    if (name[0] && ai_provider_get(name, base, sizeof(base),
+                                   model, sizeof(model), key, sizeof(key))) {
+        ai_provider_info_t p;
+        ai_provider_enum(ai_provider_find(name), &p);
+        snprintf(buf, buf_len,
+                 "AI: %s\n%s\nkey: %s",
+                 p.label, model, key[0] ? "set" : "missing");
+    } else {
+        snprintf(buf, buf_len, "AI: custom/not set");
+    }
+}
+
+static void pp_cfg_update_status(void)
+{
+    char buf[128];
+    pp_cfg_status_text(buf, sizeof(buf));
+    pp_status_set(buf);
+}
+
+static void pp_cfg_provider_dd_cb(lv_event_t *e)
+{
+    (void)e;
+    s_cfg_provider_idx = (int)lv_dropdown_get_selected(s_cfg_provider_dd);
+    pp_cfg_update_status();
+}
 
 void pp_cfg_prefill(void)
 {
@@ -938,19 +1012,40 @@ void pp_cfg_prefill(void)
     pp_cfg_load(base, sizeof(base), key, sizeof(key));
     lv_textarea_set_text(s_cfg_base_ta, base);
     lv_textarea_set_text(s_cfg_key_ta, key);
+
+    char provider_name[32] = "";
+    penpal_load_ai_provider(provider_name, sizeof(provider_name));
+    s_cfg_provider_idx = ai_provider_count();   /* custom default */
+    int idx = ai_provider_find(provider_name);
+    if (idx >= 0) s_cfg_provider_idx = idx;
+    lv_dropdown_set_selected(s_cfg_provider_dd, s_cfg_provider_idx);
+
+    char buf[160];
+    pp_cfg_status_text(buf, sizeof(buf));
     if (base[0] && !pp_cfg_from_nvs()) {
-        pp_status_set("current value from env.cfg - Save writes NVS");
+        /* overlay the env.cfg hint on the first line without losing AI status */
+        char combined[192];
+        snprintf(combined, sizeof(combined), "server from env.cfg | %s", buf);
+        pp_status_set(combined);
     } else {
-        pp_status_set("");
+        pp_status_set(buf);
     }
 }
 
 static void pp_cfg_save_cb(lv_event_t *e)
 {
+    (void)e;
     const char *base = lv_textarea_get_text(s_cfg_base_ta);
     const char *key = lv_textarea_get_text(s_cfg_key_ta);
     if (!base || !key) return;
-    if (!penpal_save_config(base, key)) {
+    bool ok = penpal_save_config(base, key);
+    if (ok) {
+        ai_provider_info_t p;
+        const char *provider_name = "";
+        if (ai_provider_enum(s_cfg_provider_idx, &p)) provider_name = p.name;
+        ok = penpal_save_ai_provider(provider_name);
+    }
+    if (!ok) {
         pp_status_set("save failed (NVS)");
     } else {
         pp_status_set("saved");
@@ -975,7 +1070,7 @@ static void pp_cfg_build(lv_obj_t *parent)
 
     lv_obj_t *bl = lv_label_create(page);
     lv_obj_align(bl, LV_ALIGN_TOP_LEFT, 6, 42);
-    lv_label_set_text(bl, "Base URL:");
+    lv_label_set_text(bl, "Server URL:");
     lv_obj_set_style_text_font(bl, &lv_font_montserrat_14, 0);
 
     s_cfg_base_ta = lv_textarea_create(page);
@@ -987,7 +1082,7 @@ static void pp_cfg_build(lv_obj_t *parent)
 
     lv_obj_t *kl = lv_label_create(page);
     lv_obj_align(kl, LV_ALIGN_TOP_LEFT, 6, 102);
-    lv_label_set_text(kl, "API key:");
+    lv_label_set_text(kl, "Server Key:");
     lv_obj_set_style_text_font(kl, &lv_font_montserrat_14, 0);
 
     s_cfg_key_ta = lv_textarea_create(page);
@@ -997,17 +1092,42 @@ static void pp_cfg_build(lv_obj_t *parent)
     lv_textarea_set_one_line(s_cfg_key_ta, true);
     lv_obj_set_style_text_font(s_cfg_key_ta, &lv_font_montserrat_14, 0);
 
+    lv_obj_t *pl = lv_label_create(page);
+    lv_obj_align(pl, LV_ALIGN_TOP_LEFT, 6, 162);
+    lv_label_set_text(pl, "AI Provider:");
+    lv_obj_set_style_text_font(pl, &lv_font_montserrat_14, 0);
+
+    s_cfg_provider_dd = lv_dropdown_create(page);
+    lv_obj_set_size(s_cfg_provider_dd, 228, 30);
+    lv_obj_align(s_cfg_provider_dd, LV_ALIGN_TOP_MID, 0, 180);
+    lv_obj_set_style_text_font(s_cfg_provider_dd, &lv_font_montserrat_14, LV_PART_MAIN);
+    s_cfg_provider_options[0] = '\0';
+    for (int i = 0; i < ai_provider_count(); i++) {
+        ai_provider_info_t p;
+        ai_provider_enum(i, &p);
+        if (i > 0) strncat(s_cfg_provider_options, "\n",
+                           sizeof(s_cfg_provider_options) - strlen(s_cfg_provider_options) - 1);
+        strncat(s_cfg_provider_options, p.label,
+                sizeof(s_cfg_provider_options) - strlen(s_cfg_provider_options) - 1);
+    }
+    strncat(s_cfg_provider_options, "\ncustom",
+            sizeof(s_cfg_provider_options) - strlen(s_cfg_provider_options) - 1);
+    lv_dropdown_set_options(s_cfg_provider_dd, s_cfg_provider_options);
+    lv_obj_add_event_cb(s_cfg_provider_dd, pp_cfg_provider_dd_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
     lv_obj_t *save_btn = lv_btn_create(page);
     lv_obj_set_size(save_btn, 64, 30);
-    lv_obj_align(save_btn, LV_ALIGN_TOP_LEFT, 6, 164);
+    lv_obj_align(save_btn, LV_ALIGN_TOP_LEFT, 6, 220);
     lv_obj_t *save_lab = lv_label_create(save_btn);
     lv_label_set_text(save_lab, "Save");
     lv_obj_center(save_lab);
     lv_obj_add_event_cb(save_btn, pp_cfg_save_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *status = lv_label_create(page);
-    lv_obj_align(status, LV_ALIGN_TOP_LEFT, 6, 200);
+    lv_obj_align(status, LV_ALIGN_TOP_LEFT, 6, 256);
     lv_obj_set_width(status, 228);
+    lv_obj_set_height(status, 58);
     lv_label_set_long_mode(status, LV_LABEL_LONG_WRAP);
     lv_label_set_text(status, "");
     lv_obj_set_style_text_font(status, &lv_font_montserrat_14, 0);
@@ -1019,12 +1139,24 @@ static void pp_home_cfg_back_cb(lv_event_t *e) { pp_set_page(PP_PAGE_HOME); }
 
 static void pp_cfg_key(char c)
 {
-    lv_obj_t *ta = s_cfg_focus_key ? s_cfg_key_ta : s_cfg_base_ta;
-    if (!ta) return;
     if (c == '\t') {
-        s_cfg_focus_key = !s_cfg_focus_key;
+        s_cfg_focus = (s_cfg_focus + 1) % PP_CFG_FOCUS_NUM;
         return;
     }
+    if (s_cfg_focus == PP_CFG_FOCUS_PROVIDER) {
+        if (c == '+' || c == '-') {
+            int total = pp_cfg_provider_count();
+            int sel = (int)lv_dropdown_get_selected(s_cfg_provider_dd);
+            if (c == '+') sel = (sel + 1) % total;
+            else          sel = (sel + total - 1) % total;
+            lv_dropdown_set_selected(s_cfg_provider_dd, sel);
+            s_cfg_provider_idx = sel;
+            pp_cfg_update_status();
+        }
+        return;
+    }
+    lv_obj_t *ta = (s_cfg_focus == PP_CFG_FOCUS_KEY) ? s_cfg_key_ta : s_cfg_base_ta;
+    if (!ta) return;
     if (c == '\b') {
         const char *txt = lv_textarea_get_text(ta);
         if (txt && txt[0] != '\0') lv_textarea_del_char(ta);
