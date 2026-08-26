@@ -974,20 +974,23 @@ static int pp_cfg_provider_count(void)
     return ai_provider_count() + 1;   /* built-ins + custom */
 }
 
+/* Preview the CURRENT dropdown selection (Codex/Claude P2: it used to
+ * re-read NVS, so the status line showed the SAVED provider until Save).
+ * On re-entry the dropdown is synchronised from NVS first, so the saved
+ * state is still what gets displayed then. enum()'s return is checked
+ * (Gemini M1) - custom/unknown falls to the explicit branch. */
 static void pp_cfg_status_text(char *buf, int buf_len)
 {
-    char name[32] = "";
-    penpal_load_ai_provider(name, sizeof(name));
-    char base[160] = "", model[80] = "", key[80] = "";
-    if (name[0] && ai_provider_get(name, base, sizeof(base),
-                                   model, sizeof(model), key, sizeof(key))) {
-        ai_provider_info_t p;
-        ai_provider_enum(ai_provider_find(name), &p);
+    ai_provider_info_t p;
+    if (ai_provider_enum(s_cfg_provider_idx, &p)) {
+        char base[160] = "", model[80] = "", key[80] = "";
+        ai_provider_get(p.name, base, sizeof(base),
+                        model, sizeof(model), key, sizeof(key));
         snprintf(buf, buf_len,
                  "AI: %s\n%s\nkey: %s",
                  p.label, model, key[0] ? "set" : "missing");
     } else {
-        snprintf(buf, buf_len, "AI: custom/not set");
+        snprintf(buf, buf_len, "AI: custom\n(server default model)");
     }
 }
 
@@ -1038,18 +1041,23 @@ static void pp_cfg_save_cb(lv_event_t *e)
     const char *base = lv_textarea_get_text(s_cfg_base_ta);
     const char *key = lv_textarea_get_text(s_cfg_key_ta);
     if (!base || !key) return;
-    bool ok = penpal_save_config(base, key);
-    if (ok) {
+    /* Two independent NVS writes are not atomic (Codex/Claude P2): report
+     * exactly which half stuck instead of one vague "save failed". */
+    bool server_ok = penpal_save_config(base, key);
+    bool prov_ok = false;
+    if (server_ok) {
         ai_provider_info_t p;
         const char *provider_name = "";
         if (ai_provider_enum(s_cfg_provider_idx, &p)) provider_name = p.name;
-        ok = penpal_save_ai_provider(provider_name);
+        prov_ok = penpal_save_ai_provider(provider_name);
     }
-    if (!ok) {
-        pp_status_set("save failed (NVS)");
-    } else {
+    if (server_ok && prov_ok) {
         pp_status_set("saved");
         s_pp_autosynced = false;   /* next visit syncs with the new config */
+    } else if (server_ok) {
+        pp_status_set("server saved; AI provider save failed");
+    } else {
+        pp_status_set("save failed (NVS)");
     }
 }
 
@@ -1144,6 +1152,10 @@ static void pp_cfg_key(char c)
         return;
     }
     if (s_cfg_focus == PP_CFG_FOCUS_PROVIDER) {
+        if (c == '\b') {
+            pp_set_page(PP_PAGE_HOME);   /* keyboard exit, same as empty box */
+            return;
+        }
         if (c == '+' || c == '-') {
             int total = pp_cfg_provider_count();
             int sel = (int)lv_dropdown_get_selected(s_cfg_provider_dd);
