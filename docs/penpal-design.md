@@ -383,7 +383,8 @@ AI provider/model 本身不保存在 `penpal` namespace 中；`penpal:ai_provide
 
 - 进入即按 HOME 行的 `thread_root_id` 精确取线程（§2 ④，v3 起——同主题多线程
   不再被 subject 兼容通道合并）；**先试 `th_<root_id>` 缓存**（2026-08-26），
-  命中直接显示，nav 行右侧 **Sync 按钮强制重拉本线程**（dropped 提示从
+  命中直接显示，标题行右端（`< Thread` 同行，同 HOME 顶栏按钮方位）
+  **Sync 按钮强制重拉本线程**（dropped 提示从
   计数标签挪到信头，防与按钮重叠）；
 - 数据：线程信件**时间逆序**分页，**每页 1 封**，index 0 = 最新（首页）；
 - `|◀ Start` = 回到 index 0；`< Prev` = 更旧一封；`Next ▶` = 更新一封；
@@ -480,7 +481,7 @@ typedef struct { int id; bool mine; char sender[24];
   HOME 首次 entry 缓存全命中（pals+mailbox）→ 直接渲染不拉网络，状态行
   `cached - press Sync to refresh`；Sync（键/按钮）drop home 缓存后强制
   PALS→MAILBOX。THREAD 打开先试 `th_<root_id>` 缓存，命中直接显示；
-  页内新增 **Sync 按钮**（顶栏 nav 行右侧，44×26 文本按钮）强制重拉，
+  页内新增 **Sync 按钮**（标题行右端、`< Thread` 同行，44×26 文本按钮）强制重拉，
   结果消费路径按 `s_cur_page` 分支重渲染（在 THREAD 页时
   `ppr_show_thread()`）。邮件状态以服务端为准不变——缓存只是展示层
   加速，所有写操作（SEND）后的 auto-sync 仍走网络并覆盖缓存；

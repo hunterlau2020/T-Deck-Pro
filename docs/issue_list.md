@@ -424,7 +424,8 @@
   `pp_home_sync(manual=true)` drop home 缓存（键盘 `\n` 与触摸 Sync 同路）。
   发信后 auto-sync（`manual=false`）不 drop、走网络并覆盖缓存。
 - ✅ **THREAD**：`pp_home_row_cb` 先试 `th_<root_id>` 缓存（升序数组原地
-  反转，消费语义与 PP_RES_THREAD 一致）；页内 nav 行右侧新增 **Sync 按钮**
+  反转，消费语义与 PP_RES_THREAD 一致）；标题行右端（`< Thread` 同行）新增
+  **Sync 按钮**
   （44×26 文本——自定义粗体字体无 LV_SYMBOL 字形，图标不可用）强制重拉；
   消费端按 `s_cur_page` 分支：HOME→切页，THREAD（刷新场景）→
   `ppr_show_thread()` 重渲染。dropped 提示从计数标签挪进信头

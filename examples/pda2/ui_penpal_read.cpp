@@ -336,18 +336,20 @@ static void ppr_thread_build(lv_obj_t *parent)
     lv_obj_center(nx);
     lv_obj_add_event_cb(s_thr_next, ppr_thr_next_cb, LV_EVENT_CLICKED, NULL);
 
-    /* force-refresh this thread (product request 2026-08-26); text button -
-     * the custom bold font has no LV_SYMBOL glyph coverage */
+    /* force-refresh this thread (product request 2026-08-26); sits in the
+     * TITLE row next to "< Thread" (same corner as HOME's top-bar buttons,
+     * user request same day); text button - the custom bold font has no
+     * LV_SYMBOL glyph coverage */
     lv_obj_t *sync_btn = lv_btn_create(s_thr_page);
     lv_obj_set_size(sync_btn, 44, 26);
-    lv_obj_align(sync_btn, LV_ALIGN_TOP_LEFT, 160, 36);
+    lv_obj_align(sync_btn, LV_ALIGN_TOP_RIGHT, -6, 5);
     lv_obj_t *sy = lv_label_create(sync_btn);
     lv_label_set_text(sy, "Sync");
     lv_obj_center(sy);
     lv_obj_add_event_cb(sync_btn, ppr_thr_sync_cb, LV_EVENT_CLICKED, NULL);
 
     s_thr_count = lv_label_create(s_thr_page);
-    lv_obj_align(s_thr_count, LV_ALIGN_TOP_RIGHT, -6, 42);
+    lv_obj_align(s_thr_count, LV_ALIGN_TOP_RIGHT, -58, 42);
     lv_label_set_text(s_thr_count, "-/-");
     lv_obj_set_style_text_font(s_thr_count, &lv_font_montserrat_14, 0);
 
