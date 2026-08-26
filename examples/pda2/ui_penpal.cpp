@@ -687,6 +687,7 @@ static lv_obj_t *s_pals_row = NULL;      /* icon row container */
 static lv_obj_t *s_pals_more = NULL;     /* "+N" label */
 static lv_obj_t *s_row_btn[5];
 static lv_obj_t *s_row_lab[5];
+static lv_obj_t *s_row_sep[5];             /* hairline under each row */
 static lv_obj_t *s_home_nav = NULL;      /* "page 1/2" */
 static lv_obj_t *s_home_prev = NULL;
 static lv_obj_t *s_home_next = NULL;
@@ -703,14 +704,24 @@ void pp_home_render_pals(void)
         if (initial[0] >= 'a' && initial[0] <= 'z') {
             initial[0] = initial[0] - 'a' + 'A';
         }
+        /* flat link-style item (user request 2026-08-26: no boxes on
+         * HOME) - borderless click target, underlined name */
         lv_obj_t *btn = lv_btn_create(s_pals_row);
+        lv_obj_remove_style_all(btn);
         lv_obj_set_size(btn, 66, 52);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_t *lab = lv_label_create(btn);
         lv_label_set_text_fmt(lab, "%s\n%s", initial, p->name);
         lv_obj_set_style_text_font(lab, &lv_font_montserrat_14, 0);
-        lv_obj_align(lab, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_align(lab, LV_ALIGN_TOP_MID, 0, 4);
         lv_obj_set_style_text_align(lab, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(lab, LV_LABEL_LONG_CLIP);
+        lv_obj_t *ul = lv_obj_create(btn);        /* single underline */
+        lv_obj_remove_style_all(ul);
+        lv_obj_set_size(ul, 44, 1);
+        lv_obj_align(ul, LV_ALIGN_BOTTOM_MID, 0, -10);
+        lv_obj_set_style_bg_color(ul, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(ul, LV_OPA_COVER, 0);
         lv_obj_set_user_data(btn, (void *)(intptr_t)i);
         lv_obj_add_event_cb(btn, pp_home_pal_cb, LV_EVENT_CLICKED, NULL);
     }
@@ -737,10 +748,12 @@ void pp_home_render_rows(void)
         int idx = pp.home_page * 5 + i;
         if (idx >= pp.rows_cnt) {
             lv_obj_add_flag(s_row_btn[i], LV_OBJ_FLAG_HIDDEN);
+            if (s_row_sep[i]) lv_obj_add_flag(s_row_sep[i], LV_OBJ_FLAG_HIDDEN);
             continue;
         }
         const pp_thread_row_t *r = &pp.rows[idx];
         lv_obj_clear_flag(s_row_btn[i], LV_OBJ_FLAG_HIDDEN);
+        if (s_row_sep[i]) lv_obj_clear_flag(s_row_sep[i], LV_OBJ_FLAG_HIDDEN);
         /* last_at "2026-08-20T15:10:01" -> "08-20 15:10" (server time is
          * local time, no conversion - §4.1) */
         char when[12] = "";
@@ -934,14 +947,15 @@ static void pp_home_build(lv_obj_t *parent)
     lv_obj_set_style_text_color(status, lv_palette_main(LV_PALETTE_GREY), 0);
     pp_status_register(PP_PAGE_HOME, status);
 
-    /* 5 thread rows x 34px; row = two-line label on a button */
+    /* 5 thread rows x 34px; link-style list (user request 2026-08-26: no
+     * boxes) - borderless click targets, one hairline separator per row */
     for (int i = 0; i < 5; i++) {
         s_row_btn[i] = lv_btn_create(page);
-        lv_obj_set_size(s_row_btn[i], 232, 34);
+        lv_obj_remove_style_all(s_row_btn[i]);
+        lv_obj_set_size(s_row_btn[i], 232, 33);
         lv_obj_align(s_row_btn[i], LV_ALIGN_TOP_MID, 0, 114 + i * 36);
-        lv_obj_set_style_pad_all(s_row_btn[i], 2, 0);
         s_row_lab[i] = lv_label_create(s_row_btn[i]);
-        lv_obj_align(s_row_lab[i], LV_ALIGN_LEFT_MID, 2, 0);
+        lv_obj_align(s_row_lab[i], LV_ALIGN_LEFT_MID, 2, -1);
         lv_obj_set_width(s_row_lab[i], 226);
         lv_label_set_long_mode(s_row_lab[i], LV_LABEL_LONG_CLIP);
         lv_label_set_text(s_row_lab[i], "");
@@ -949,6 +963,14 @@ static void pp_home_build(lv_obj_t *parent)
         lv_obj_add_event_cb(s_row_btn[i], pp_home_row_cb, LV_EVENT_CLICKED,
                             NULL);
         lv_obj_add_flag(s_row_btn[i], LV_OBJ_FLAG_HIDDEN);
+
+        s_row_sep[i] = lv_obj_create(page);       /* the "hyperlink" rule */
+        lv_obj_remove_style_all(s_row_sep[i]);
+        lv_obj_set_size(s_row_sep[i], 232, 1);
+        lv_obj_align(s_row_sep[i], LV_ALIGN_TOP_MID, 0, 114 + i * 36 + 33);
+        lv_obj_set_style_bg_color(s_row_sep[i], lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(s_row_sep[i], LV_OPA_COVER, 0);
+        lv_obj_add_flag(s_row_sep[i], LV_OBJ_FLAG_HIDDEN);
     }
 
     /* bottom nav (hidden until >1 page) */
