@@ -150,6 +150,26 @@ bool penpal_save_config(const char *base, const char *key);
 void penpal_load_ai_provider(char *name, int name_len);
 bool penpal_save_ai_provider(const char *name);
 
+/* ---- response cache (SPIFFS /penpal/*.json, 2-day TTL) --------------------
+ * Product request 2026-08-26: HOME/THREAD render from cache when present;
+ * Sync / per-thread refresh force a network re-fetch (getters overwrite the
+ * cache on success). Load functions parse the cached raw body with the same
+ * parse-only helpers as the network path. */
+
+/** @brief Drop the pals + mailbox cache files (manual Sync path). */
+void penpal_cache_drop_home(void);
+
+/** @brief Load pals from cache (false = miss/expired/bad). */
+bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count);
+
+/** @brief Load the mailbox listing from cache (false = miss/expired/bad). */
+bool penpal_cache_load_mailbox(pp_thread_row_t *out, int max, int *count,
+                               bool *truncated);
+
+/** @brief Load one thread by its root id from cache (false = miss/expired/bad). */
+bool penpal_cache_load_thread(int thread_root_id,
+                              pp_letter_t *out, int max, int *count, int *dropped);
+
 /* ---- idempotency key (design §2.2) ---------------------------------------- */
 
 /** @brief Fill out with a fresh 32-hex Idempotency-Key (hardware RNG,

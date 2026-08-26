@@ -15,6 +15,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <esp_random.h>
+#include <SPIFFS.h>
 
 static const char *PP_TAG = "[PenPal]";
 
@@ -299,27 +300,79 @@ bool penpal_save_ai_provider(const char *name)
     return ok;
 }
 
-/* ---- endpoints -------------------------------------------------------------- */
+/* ---- response cache (product request 2026-08-26, design §5 amendment) ----
+ * SPIFFS-backed, 2-day TTL. File layout: "<fetched_at>\n<raw response body>".
+ * Written by the worker task inside each getter after a successful network
+ * parse; read by the UI thread before deciding to hit the network.
+ * fetched_at == 0 means "written while the clock was unsynced" - treated as
+ * still valid (showing stale data beats a blank screen; manual Sync always
+ * re-fetches). Cache files are non-critical: any read/parse failure is a
+ * plain cache miss. */
 
-bool penpal_get_pals(const char *base, const char *key,
-                     pp_pal_t *out, int max, int *count, string *err)
+#define PP_CACHE_TTL_S (2 * 86400)
+
+static void pp_cache_path(char *buf, int len, const char *kind, int id)
 {
-    if (count) *count = 0;
-    if (!pp_cfg_ok(base, key, err)) return false;
+    if (id > 0) snprintf(buf, len, "/penpal/%s_%d.json", kind, id);
+    else        snprintf(buf, len, "/penpal/%s.json", kind);
+}
 
-    pp_http_t r = pp_request("GET", pp_url(base, "/pen-pals"), NULL, NULL,
-                             key, PP_TIMEOUT_CRUD_MS);
-    if (!r.ok) {
-        if (err) *err = pp_fail(r);
-        Serial.printf("%s pals failed: %s\n", PP_TAG, pp_fail(r).c_str());
+static void pp_cache_write(const char *path, const char *body)
+{
+    File f = SPIFFS.open(path, FILE_WRITE);
+    if (!f) {
+        Serial.printf("%s cache write open failed: %s\n", PP_TAG, path);
+        return;
+    }
+    time_t now = time(nullptr);
+    if (now < 1700000000) now = 0;             /* unsynced clock */
+    f.printf("%lu\n", (unsigned long)now);
+    f.write((const uint8_t *)body, strlen(body));
+    f.close();
+}
+
+static bool pp_cache_read(const char *path, string *body)
+{
+    body->clear();
+    if (!SPIFFS.exists(path)) return false;
+    File f = SPIFFS.open(path, FILE_READ);
+    if (!f) return false;
+    string all;
+    all.resize((size_t)f.size());
+    if (!all.empty() && f.read((uint8_t *)&all[0], all.size()) != (int)all.size()) {
+        f.close();
         return false;
     }
+    f.close();
+    size_t nl = all.find('\n');
+    if (nl == string::npos) return false;
+    unsigned long fetched = strtoul(all.c_str(), NULL, 10);
+    time_t now = time(nullptr);
+    if (fetched != 0 && now >= 1700000000 &&
+        (unsigned long)(now - (time_t)fetched) > PP_CACHE_TTL_S) {
+        Serial.printf("%s cache expired: %s\n", PP_TAG, path);
+        SPIFFS.remove(path);
+        return false;
+    }
+    body->assign(all, nl + 1, string::npos);
+    return true;
+}
 
-    cJSON *root = cJSON_Parse(r.body.c_str());
+void penpal_cache_drop_home(void)
+{
+    SPIFFS.remove("/penpal/pals.json");
+    SPIFFS.remove("/penpal/mailbox.json");
+    Serial.printf("%s home cache dropped\n", PP_TAG);
+}
+
+/* ---- endpoints -------------------------------------------------------------- */
+
+/* parse-only helpers shared by the network getters and the cache loader */
+static bool pp_parse_pals(const char *body, pp_pal_t *out, int max, int *count)
+{
+    cJSON *root = cJSON_Parse(body);
     if (!root || !cJSON_IsArray(root)) {
         cJSON_Delete(root);
-        if (err) *err = "bad JSON (pen-pals)";
-        Serial.printf("%s pals: bad JSON\n", PP_TAG);
         return false;
     }
     int n = 0;
@@ -338,6 +391,37 @@ bool penpal_get_pals(const char *base, const char *key,
     cJSON_Delete(root);
     if (count) *count = n;
     return true;
+}
+
+bool penpal_get_pals(const char *base, const char *key,
+                     pp_pal_t *out, int max, int *count, string *err)
+{
+    if (count) *count = 0;
+    if (!pp_cfg_ok(base, key, err)) return false;
+
+    pp_http_t r = pp_request("GET", pp_url(base, "/pen-pals"), NULL, NULL,
+                             key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);
+        Serial.printf("%s pals failed: %s\n", PP_TAG, pp_fail(r).c_str());
+        return false;
+    }
+
+    if (!pp_parse_pals(r.body.c_str(), out, max, count)) {
+        if (err) *err = "bad JSON (pen-pals)";
+        Serial.printf("%s pals: bad JSON\n", PP_TAG);
+        return false;
+    }
+    pp_cache_write("/penpal/pals.json", r.body.c_str());
+    return true;
+}
+
+bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count)
+{
+    if (count) *count = 0;
+    string body;
+    if (!pp_cache_read("/penpal/pals.json", &body)) return false;
+    return pp_parse_pals(body.c_str(), out, max, count);
 }
 
 bool penpal_get_topics(const char *base, const char *key,
@@ -393,27 +477,14 @@ bool penpal_get_topics(const char *base, const char *key,
     return true;
 }
 
-bool penpal_get_mailbox(const char *base, const char *key,
-                        pp_thread_row_t *out, int max, int *count,
-                        bool *truncated, string *err)
+static bool pp_parse_mailbox(const char *body, pp_thread_row_t *out, int max,
+                             int *count, bool *truncated)
 {
     if (count) *count = 0;
     if (truncated) *truncated = false;
-    if (!pp_cfg_ok(base, key, err)) return false;
-
-    pp_http_t r = pp_request("GET", pp_url(base, "/emails/mailbox"),
-                             NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
-    if (!r.ok) {
-        if (err) *err = pp_fail(r);
-        Serial.printf("%s mailbox failed: %s\n", PP_TAG, pp_fail(r).c_str());
-        return false;
-    }
-
-    cJSON *root = cJSON_Parse(r.body.c_str());
+    cJSON *root = cJSON_Parse(body);
     if (!root || !cJSON_IsArray(root)) {
         cJSON_Delete(root);
-        if (err) *err = "bad JSON (mailbox)";
-        Serial.printf("%s mailbox: bad JSON\n", PP_TAG);
         return false;
     }
     int n = 0;
@@ -444,40 +515,48 @@ bool penpal_get_mailbox(const char *base, const char *key,
     return true;
 }
 
-bool penpal_get_thread(const char *base, const char *key,
-                       int pen_pal_id, int thread_root_id,
-                       pp_letter_t *out, int max, int *count, int *dropped,
-                       string *err)
+bool penpal_get_mailbox(const char *base, const char *key,
+                        pp_thread_row_t *out, int max, int *count,
+                        bool *truncated, string *err)
 {
     if (count) *count = 0;
-    if (dropped) *dropped = 0;
+    if (truncated) *truncated = false;
     if (!pp_cfg_ok(base, key, err)) return false;
 
-    /* pen_pal_id optional since server R9 (2026-08-22, live-verified): when
-     * omitted the thread is read participant-authorized by thread_root_id
-     * alone - the residual channel for deleted-pal leftovers (pal_id 0
-     * sentinel). Both params missing is still a 400. */
-    char path[64];
-    if (pen_pal_id > 0)
-        snprintf(path, sizeof(path), "/emails?pen_pal_id=%d&thread_root_id=%d",
-                 pen_pal_id, thread_root_id);
-    else
-        snprintf(path, sizeof(path), "/emails?thread_root_id=%d", thread_root_id);
-    pp_http_t r = pp_request("GET", pp_url(base, path), NULL, NULL,
-                             key, PP_TIMEOUT_CRUD_MS);
+    pp_http_t r = pp_request("GET", pp_url(base, "/emails/mailbox"),
+                             NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
     if (!r.ok) {
         if (err) *err = pp_fail(r);
-        Serial.printf("%s thread %d failed: %s\n", PP_TAG, thread_root_id,
-                      pp_fail(r).c_str());
+        Serial.printf("%s mailbox failed: %s\n", PP_TAG, pp_fail(r).c_str());
         return false;
     }
 
-    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!pp_parse_mailbox(r.body.c_str(), out, max, count, truncated)) {
+        if (err) *err = "bad JSON (mailbox)";
+        Serial.printf("%s mailbox: bad JSON\n", PP_TAG);
+        return false;
+    }
+    pp_cache_write("/penpal/mailbox.json", r.body.c_str());
+    return true;
+}
+
+bool penpal_cache_load_mailbox(pp_thread_row_t *out, int max, int *count,
+                               bool *truncated)
+{
+    string body;
+    if (!pp_cache_read("/penpal/mailbox.json", &body)) return false;
+    return pp_parse_mailbox(body.c_str(), out, max, count, truncated);
+}
+
+static bool pp_parse_thread(const char *body, int thread_root_id,
+                            pp_letter_t *out, int max, int *count, int *dropped)
+{
+    if (count) *count = 0;
+    if (dropped) *dropped = 0;
+    cJSON *root = cJSON_Parse(body);
     cJSON *emails = root ? cJSON_GetObjectItem(root, "emails") : NULL;
     if (!emails || !cJSON_IsArray(emails)) {
         cJSON_Delete(root);
-        if (err) *err = "bad JSON (thread)";
-        Serial.printf("%s thread %d: bad JSON\n", PP_TAG, thread_root_id);
         return false;
     }
     int n = 0;
@@ -517,6 +596,55 @@ bool penpal_get_thread(const char *base, const char *key,
     }
     if (count) *count = n;
     return true;
+}
+
+bool penpal_get_thread(const char *base, const char *key,
+                       int pen_pal_id, int thread_root_id,
+                       pp_letter_t *out, int max, int *count, int *dropped,
+                       string *err)
+{
+    if (count) *count = 0;
+    if (dropped) *dropped = 0;
+    if (!pp_cfg_ok(base, key, err)) return false;
+
+    /* pen_pal_id optional since server R9 (2026-08-22, live-verified): when
+     * omitted the thread is read participant-authorized by thread_root_id
+     * alone - the residual channel for deleted-pal leftovers (pal_id 0
+     * sentinel). Both params missing is still a 400. */
+    char path[64];
+    if (pen_pal_id > 0)
+        snprintf(path, sizeof(path), "/emails?pen_pal_id=%d&thread_root_id=%d",
+                 pen_pal_id, thread_root_id);
+    else
+        snprintf(path, sizeof(path), "/emails?thread_root_id=%d", thread_root_id);
+    pp_http_t r = pp_request("GET", pp_url(base, path), NULL, NULL,
+                             key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);
+        Serial.printf("%s thread %d failed: %s\n", PP_TAG, thread_root_id,
+                      pp_fail(r).c_str());
+        return false;
+    }
+
+    if (!pp_parse_thread(r.body.c_str(), thread_root_id, out, max, count, dropped)) {
+        if (err) *err = "bad JSON (thread)";
+        Serial.printf("%s thread %d: bad JSON\n", PP_TAG, thread_root_id);
+        return false;
+    }
+    char cpath[40];
+    pp_cache_path(cpath, sizeof(cpath), "th", thread_root_id);
+    pp_cache_write(cpath, r.body.c_str());
+    return true;
+}
+
+bool penpal_cache_load_thread(int thread_root_id,
+                              pp_letter_t *out, int max, int *count, int *dropped)
+{
+    char cpath[40];
+    pp_cache_path(cpath, sizeof(cpath), "th", thread_root_id);
+    string body;
+    if (!pp_cache_read(cpath, &body)) return false;
+    return pp_parse_thread(body.c_str(), thread_root_id, out, max, count, dropped);
 }
 
 bool penpal_send_email(const char *base, const char *key,
