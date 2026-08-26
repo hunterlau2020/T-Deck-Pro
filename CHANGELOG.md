@@ -3,6 +3,24 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-08-26
+
+- **c1c6a14..ff6d906 四方评审结果齐至 + 修复批次**（Codex **C** 2×P2 /
+  Claude **C** P1+2×P2 / Gemini **A** M1-M3 / opencode **C** P2-1+4 Low）：
+  采纳 Claude P1（WiFi 槽位切换静默丢草稿 → 切换即自动保存两框，设计
+  §3.5 语义更新）、Codex/Claude P2×2（PenPal provider 状态行改按当前
+  下拉选择即时预览 + 两步保存分区报告）、Gemini M1（enum 返回值检查，
+  并入状态行重写）、opencode P2-1（中文超时文案在 montserrat_14 下为
+  方块 → 改英文）+ Low×4（UTF-8 截断边界 / provider 焦点 `\b` /
+  `collectHeaders` 让诊断日志生效 / 弹窗吞键后清 FIFO）。拒绝 Gemini
+  M2（失实：`exit4_1` 已清理 popup）、M3（与设计 §6.3 重复登记）。
+  另按 Claude acc3893 复核勘误 §10/CLAUDE.md 根因表述：`create()` 在
+  每次 push 时执行（非注册期），屏幕控件树每访问重建。编译通过；真机
+  回归 ⏸（issue_list §13）
+- **acc3893 / 423b312..bfa7a16 三方评审结果**（各 Codex/Claude/Gemini
+  三份，全部 **A 全量接受**）——无代码改动；acc3893 的 Claude Low
+  （根因表述勘误）落入上述 2026-08-26 批次
+
 ## 2026-08-22
 
 - **PenPal 首轮真机回归：1 崩溃 + 1 导航 + 1 需求全修**（`423b312` /

@@ -291,6 +291,14 @@
   设备每次进入永久卡 busy。修复：自动同步移 entry（gen++/active 之后），
   `s_pp_autosynced` 一次访问一次 + destroy/Cfg 保存复位；**同族路径**
   （后台 SEND 期间退屏）由 stale 丢弃分支补释放 busy
+  - **根因表述勘误（2026-08-26，Claude acc3893 复核）**：`ui_scr_mrg.c:33`
+    的 `create()` 位于 `scr_mgr_default_style()`，仅被
+    `scr_mgr_active()`（push/switch 路径）调用；`scr_mgr_register()`
+    只挂链表节点**不调 `create()`**。实际生命周期 = 每次 push 建
+    create+entry、每次 pop 跑 exit+destroy 并删整棵控件树——"开机建
+    一次"的描述有误。修复本身不受影响（entry 恒在 create 后、gen++
+    恒先于自动同步，两种模型下时序等价；`s_pp_autosynced` 在每访问
+    必重建的生命周期下为防御性冗余）。CLAUDE.md working notes 同步勘误
 - **P2**：READ Close 不中止任务（LLM 最长 180s），连续 Close/重试无界
   堆积 8KiB 栈任务。修复：`s_pp_inflight` 原子计数 + 非链式请求上限 2
   （1 僵尸 + 1 新）；可中止传输登记为可选后续
@@ -353,6 +361,39 @@
   固件 `other/env_writer/`，gitignored；不走 uploadfs 避免 SPIFFS 整区擦除，
   与 /chat.log 等共存）。**sync 真机回归仍 ⏸**：等服务器侧重启为
   `--host 0.0.0.0`（现为 127.0.0.1，设备连不进）+ 防火墙放行 8000 入站。
+
+## 13. c1c6a14..ff6d906 四方评审修复批次（2026-08-26）
+
+> 来源：Codex / Claude / Gemini / opencode 四份结果对同一申请
+> `wifi-config-keyboard-review-request-c1c6a14..ff6d906.md`。
+> 采纳：Claude P1 + Codex/Claude P2×2 + Gemini M1 + opencode P2-1/Low×4；
+> 拒绝：Gemini M2（失实——`exit4_1` 早已调 `wifi_cfg_popup_close_cb`，
+> 见 `ui_deckpro.cpp:2621`）、Gemini M3（与设计 §6.3 既有登记重复）。
+> Gemini 对中文超时提示的正面评价不成立：montserrat_14 无 CJK 字形，
+> 实际渲染为方块（opencode P2-1，已改英文）。
+
+- ✅ **P1（Claude）WiFi 槽位切换静默丢草稿**：`wifi_cfg_set_slot()` 的
+  `wifi_cfg_sync_draft()`（只同步聚焦框）结果两行后被 `wifi_slot_load()`
+  覆盖 = 死代码，未保存的 SSID/Pass 切槽即丢。修复：切换前直接读
+  **两个** textarea 自动保存回旧槽（`wifi_slot_save`），设计文档 §3.5
+  同步改"切换 = 自动保存草稿"语义
+- ✅ **P2（Codex/Claude）PenPal provider 状态行显示旧值**：
+  `pp_cfg_status_text()` 从 NVS 读已保存 provider，下拉切换后预览不跟随。
+  修复：按 `s_cfg_provider_idx` 即时预览（顺带修复 Gemini M1 的
+  `ai_provider_enum` 返回值未检查）；重进屏时下拉先从 NVS 同步，语义不变
+- ✅ **P2（Codex/Claude）两步保存混合状态**：Server 与 provider 分两次
+  NVS 写，第二步失败只报笼统 `save failed`。修复：分区报告
+  `server saved; AI provider save failed`
+- ✅ **P2-1（opencode）中文错误文案 tofu**：`读取响应超时`/
+  `等待返回超时` 在 montserrat_14 下渲染为方块。修复：改英文
+  `Empty response (timeout?)` / `Request timeout\n(check network)`
+- ✅ **Low 批（opencode）**：① `out.resize(200)` 加 UTF-8 边界回退
+  （penpal 同款模式）+ `fail_buf[192]→[240]`；② PenPal Cfg provider 焦点
+  下 `\b` 返回 HOME；③ `http.header()` 诊断日志补 `collectHeaders()`
+  （原日志恒空）；④ WiFi 结果弹窗吞键后 `keypad_clear_chars()` 清残留
+  FIFO（先例：blocking connect 后清队）
+- 真机回归 ⏸：槽位切换自动保存、provider 预览/分区保存、英文超时文案
+  （原批次 PenPal provider 共享回归项一并跑）
 
 ## 附：键盘实测记录
 

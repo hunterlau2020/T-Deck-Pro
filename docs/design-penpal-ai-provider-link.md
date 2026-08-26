@@ -115,7 +115,13 @@ bool penpal_correction(const char *base, const char *key, int email_id,
 
 - **Server URL** + **Server Key**：PenPal 服务仍需要。
 - **AI Provider 下拉**：从 `ai_provider_enum()` 构建选项，最后一项为 `custom`。
-- 状态行显示当前选中 provider 的 `label/model` 与 key 是否存在（例如 `AI: OpenRouter\ndeepseek/...\nkey: set`）。
+- **状态行显示当前选中 provider 的 `label/model` 与 key 是否存在**（2026-08-26
+  评审订正，Codex/Claude P2：原实现从 NVS 读已保存值，Save 前状态行不跟随
+  下拉选择；现按 `s_cfg_provider_idx` 即时预览，重进屏时下拉已从 NVS 同步，
+  显示的自然是已保存状态）。
+- **保存失败分区报告**（同轮订正）：Server 与 provider 两步 NVS 写非原子，
+  部分失败时状态行明确显示 `server saved; AI provider save failed`，
+  不再笼统报 `save failed`。
 
 键盘映射：
 
@@ -187,8 +193,11 @@ POST /api/v1/emails/<id>/correction?provider=openrouter&model=deepseek/deepseek-
 
 ## 7. 验收标准
 
+> 标注说明：`[x]` = 代码已实现；真机项以 TODO / 申请书 §验证状态 的 ⏸ 为准。
+
 - [x] AI Config 中 Save 过的 provider 能在 PenPal Cfg 下拉中列出。
 - [x] 选择 provider 后，PenPal 仅保存 provider 名，不重复保存 base/model/key。
 - [x] PenPal 原有的服务端 base/key 仍可独立编辑保存。
 - [x] Fix/Polish/Tips 调用能附带所选 provider/model 信息。
 - [x] `pio run -e pda2` 编译通过。
+- [ ] 真机：Cfg 下拉显示/保存后状态行/Fix/Polish/Tips 参数被服务端接收（⏸ 待烧录回归）。
