@@ -2010,14 +2010,23 @@ static void wifi_cfg_refresh_labels(void)
 static void wifi_cfg_sync_draft(void);   /* defined below */
 static void wifi_cfg_set_field(int f);   /* defined below */
 
-/* Switch to another slot: sync the outgoing slot's draft, load the new slot,
- * and reset focus to SSID. */
+/* Switch to another slot: auto-save the outgoing slot's draft (BOTH fields -
+ * wifi_cfg_sync_draft only covers the focused one and its result used to be
+ * overwritten by wifi_slot_load two lines later, silently discarding edits,
+ * review finding P1), then load the new slot and reset focus to SSID. */
 static void wifi_cfg_set_slot(int slot)
 {
     if (slot < 0) slot = WIFI_SLOT_COUNT - 1;
     if (slot >= WIFI_SLOT_COUNT) slot = 0;
     if (slot == wifi_cfg_slot) return;
-    wifi_cfg_sync_draft();
+    const char *s = lv_textarea_get_text(wifi_ssid_ta);
+    const char *p = lv_textarea_get_text(wifi_pass_ta);
+    char ssid_out[65], pass_out[65];
+    strncpy(ssid_out, s ? s : "", sizeof(ssid_out) - 1);
+    ssid_out[sizeof(ssid_out) - 1] = '\0';
+    strncpy(pass_out, p ? p : "", sizeof(pass_out) - 1);
+    pass_out[sizeof(pass_out) - 1] = '\0';
+    wifi_slot_save(wifi_cfg_slot, ssid_out, pass_out);
     wifi_cfg_slot = slot;
     wifi_slot_load(wifi_cfg_slot, wifi_ssid, sizeof(wifi_ssid),
                    wifi_pass, sizeof(wifi_pass));
@@ -2314,12 +2323,15 @@ void wifi_cfg_keyboard_poll()
     if (!wifi_cfg_kbd_active || !wifi_ssid_ta || !wifi_pass_ta) return;
 
     /* If a result msgbox is open, any key dismisses it so the underlying
-     * keypad handlers do not process the keypress behind the popup. */
+     * keypad handlers do not process the keypress behind the popup. Keys
+     * queued behind the dismissed one are dropped too (same rationale as
+     * the post-connect clear below). */
     if (wifi_cfg_popup) {
         char c;
         if (keypad_get_val(&c)) {
             keypad_set_flag();
             wifi_cfg_popup_close_cb(NULL);
+            keypad_clear_chars();
         }
         return;
     }
