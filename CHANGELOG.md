@@ -5,6 +5,13 @@
 
 ## 2026-08-26
 
+- **PenPal 响应缓存 + THREAD 强刷 + msgbox 触摸关闭**（产品需求）：
+  SPIFFS `/penpal/*.json` 原始响应缓存（TTL 2 天；getter 成功写 /
+  UI 侧 parse-only 复用读）；HOME 进屏缓存优先（全命中免网络，
+  `cached - press Sync to refresh`）、手动 Sync drop 缓存强拉；THREAD
+  开启缓存优先 + 页内 Sync 按钮强制重拉（dropped 提示挪信头防重叠）；
+  `pp_msgbox_show` 补 Close 按钮（TIPs 失败弹窗触摸不可关）。缓存解析
+  直接进全局 `pp` 状态（无栈中转，§12 规则）。真机回归 ⏸（issue_list §14）
 - **c1c6a14..ff6d906 四方评审结果齐至 + 修复批次**（Codex **C** 2×P2 /
   Claude **C** P1+2×P2 / Gemini **A** M1-M3 / opencode **C** P2-1+4 Low）：
   采纳 Claude P1（WiFi 槽位切换静默丢草稿 → 切换即自动保存两框，设计

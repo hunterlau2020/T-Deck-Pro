@@ -394,6 +394,44 @@
   FIFO（先例：blocking connect 后清队）
 - 真机回归 ⏸：槽位切换自动保存、provider 预览/分区保存、英文超时文案
   （原批次 PenPal provider 共享回归项一并跑）
+- ⬜ **N1（Low，Claude 二轮）**：`openai_api.h` `ai_provider_get()` 头注释
+  "Resolution order (later wins) 1→4" 与实现不符——活动槽 base 匹配时槽内
+  key 优先，env.cfg 不被查询（无 "later wins"）。正确表述见
+  `design-penpal-ai-provider-link.md` §3.1，头注释应同步
+- ⬜ **N2（Low，Claude 二轮）**：`ui_ai_cfg.cpp` 文件头与 `ai_cfg_create()`
+  尾注释仍写 "Save requires a successful Test" / "Run Test to enable Save"，
+  与 c1c6a14 用户明示的 Save/Test 解耦矛盾，应同步注释防止日后恢复门禁
+- ⬜ **仓库卫生（Claude 二轮，非阻塞）**：① `ui_deckpro.cpp` 工作区有未提交
+  菜单布局对调（PenPal/Sleep/Shutdown，2026-08-26），不属任一申请范围；
+  ② 5 个源文件磁盘为 CRLF、仓库 blob 为 LF（无 autocrlf/.gitattributes），
+  git status 应显示已修改——建议恢复 LF 或补 `.gitattributes`
+
+## 14. PenPal 响应缓存 + msgbox 触摸关闭（产品需求，2026-08-26）
+
+> 需求（用户）：① 不点 Sync 时 HOME 从缓存读 mail list，点 Sync 删缓存
+> 重拉；② 点行开线程先读缓存，THREAD 右上角加强制刷新按钮；③ 缓存
+> 有效期 2 天；④ TIPs 错误弹窗无关闭按钮（触摸路径缺失）。
+
+- ✅ **缓存层**（`penpal_api.cpp`）：SPIFFS `/penpal/pals.json` /
+  `mailbox.json` / `th_<root_id>.json`，文件 = `<fetched_at>\n<原始响应体>`；
+  getter 网络成功后写（worker 线程）；`penpal_cache_load_*` 读 + 复用
+  拆出的 parse-only 解析（pals/mailbox/thread 三段从 getter 中拆出共享）。
+  TTL 2 天；时钟未同步期写入（`fetched_at=0`）视为有效——显示旧数据优于
+  空白，手动 Sync 总可强刷。缓存文件非关键数据，读/解析失败一律当 miss。
+- ✅ **HOME**：`pp_entry` 自动同步前先试缓存（pals+mailbox **全命中**才免
+  网络），直接解析进全局 `pp` 状态（**禁止栈中转**——24 行 mailbox
+  ≈3.8KB，§12 规则；miss 时半更新状态被随后的网络 sync 覆盖，无害）；
+  `pp_home_sync(manual=true)` drop home 缓存（键盘 `\n` 与触摸 Sync 同路）。
+  发信后 auto-sync（`manual=false`）不 drop、走网络并覆盖缓存。
+- ✅ **THREAD**：`pp_home_row_cb` 先试 `th_<root_id>` 缓存（升序数组原地
+  反转，消费语义与 PP_RES_THREAD 一致）；页内 nav 行右侧新增 **Sync 按钮**
+  （44×26 文本——自定义粗体字体无 LV_SYMBOL 字形，图标不可用）强制重拉；
+  消费端按 `s_cur_page` 分支：HOME→切页，THREAD（刷新场景）→
+  `ppr_show_thread()` 重渲染。dropped 提示从计数标签挪进信头
+  （长文本会压到 Sync 按钮）。
+- ✅ **msgbox Close**：`pp_msgbox_show` 加 Close 按钮（waitbox 同款），
+  修 TIPs 失败弹窗触摸不可关。
+- 设计文档 §5/§4.1/§4.4/§7 + 变更历史同步；真机回归 ⏸（§7 缓存路径项）
 
 ## 附：键盘实测记录
 

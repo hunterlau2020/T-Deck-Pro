@@ -287,8 +287,12 @@ AI provider/model 本身不保存在 `penpal` namespace 中；`penpal:ai_provide
 - `pen_pal_id=null` 的行**显示**（笔友已删线程残留；R9 上线后凭
   `thread_root_id` 单参只读打开，2026-08-22 复测 §2.1）——行内名称用
   `counterpart`，进 THREAD 只读形态（§4.4）；
+- Sync = 串行 PALS→MAILBOX 刷新（NPC 回信后手动拉取）；**手动 Sync 同时
+  drop home 缓存**（2026-08-26 产品语义：进屏吃缓存、Sync = 强制重拉）。
 - 键盘：`+/-`（Sym/Alt 层）= 翻页，`\n` = Sync，`\b` = 返回菜单；
-- Sync = 串行 PALS→MAILBOX 刷新（NPC 回信后手动拉取）。
+- 进屏首次 entry：pals+mailbox 缓存**全命中** → 渲染缓存（状态行
+  `cached - press Sync to refresh`）；任一 miss → 现有自动 PALS→MAILBOX
+  （缓存随后被网络结果覆盖）。
 - **base/key 未配置**（解析链全空）时：HOME 正常进入，icon 行/列表区显示空、
   状态行 `configure server in Cfg` 引导；Sync 同文案直接报错，不发网络请求
   （kimi §1.11.4）。
@@ -378,7 +382,9 @@ AI provider/model 本身不保存在 `penpal` namespace 中；`penpal:ai_provide
   维持"第 1 页才有"（kimi v2 §3.1）。
 
 - 进入即按 HOME 行的 `thread_root_id` 精确取线程（§2 ④，v3 起——同主题多线程
-  不再被 subject 兼容通道合并）；
+  不再被 subject 兼容通道合并）；**先试 `th_<root_id>` 缓存**（2026-08-26），
+  命中直接显示，nav 行右侧 **Sync 按钮强制重拉本线程**（dropped 提示从
+  计数标签挪到信头，防与按钮重叠）；
 - 数据：线程信件**时间逆序**分页，**每页 1 封**，index 0 = 最新（首页）；
 - `|◀ Start` = 回到 index 0；`< Prev` = 更旧一封；`Next ▶` = 更新一封；
   到边界时按钮置灰；
@@ -464,9 +470,21 @@ typedef struct { int id; bool mine; char sender[24];
   边界）；累计超 16KB 时**丢弃最旧信**（emails 升序数组前部），THREAD 顶栏计数
   相应减少，首次逐出状态行提示 `oldest dropped (size limit)`（kimi §1.6/T3）。
 - 静态数组 + `std::string` 正文（`ui_ai_chat.cpp` 同款堆分配）；估算峰值 <32KB，PSRAM/堆充足；
-- 无本地持久化：mailbox/线程状态以服务端为准（薄客户端），断电无损失语义；
-  COMPOSE 草稿 v1 **不落盘**（RAM 内跨页保留；退出屏即丢——评审如要求再按
-  chat.draft 模式补 `/penpal.draft`）。
+- **响应缓存（产品需求 2026-08-26，替代"无本地持久化"）**：pals/mailbox/
+  thread 的**原始响应体**缓存到 SPIFFS `/penpal/*.json`（文件 =
+  `<fetched_at>\n<body>`），TTL **2 天**（时钟未同步期写入的 `fetched_at=0`
+  视为有效——显示旧数据优于空白，手动 Sync 总可强刷）。读写均在
+  `penpal_api.cpp`：getter 网络成功后写（worker 线程）；UI 侧
+  `penpal_cache_load_*` 读 + 复用 parse-only 解析（UI 线程，直接解析进
+  全局 `pp` 状态——24 行 mailbox ≈3.8KB，禁止栈中转，§12 规则）。
+  HOME 首次 entry 缓存全命中（pals+mailbox）→ 直接渲染不拉网络，状态行
+  `cached - press Sync to refresh`；Sync（键/按钮）drop home 缓存后强制
+  PALS→MAILBOX。THREAD 打开先试 `th_<root_id>` 缓存，命中直接显示；
+  页内新增 **Sync 按钮**（顶栏 nav 行右侧，44×26 文本按钮）强制重拉，
+  结果消费路径按 `s_cur_page` 分支重渲染（在 THREAD 页时
+  `ppr_show_thread()`）。邮件状态以服务端为准不变——缓存只是展示层
+  加速，所有写操作（SEND）后的 auto-sync 仍走网络并覆盖缓存；
+  COMPOSE 草稿依旧不落盘（R7 维持）。
 
 ## 6. 文件规划与集成点
 
@@ -522,7 +540,11 @@ typedef struct { int id; bool mine; char sender[24];
      （`pal removed - read only` 信头 + 隐藏 Reply；R9 上线，§4.4）
    - 菜单第 3 页：第 19 项图标显示；左右滑 3 页往返；第 3 页继续左滑**不越界**
      （kimi §1.1 回归——18 项存量幽灵页已由 `de78338` 修复，19 项后同款验证）
-   - 断网（关热点）下各操作报错不卡死；waitbox Close 可取消
+    - **缓存路径（2026-08-26）**：正常 Sync 一次后退出重进 → HOME 免网络
+      即出列表（状态行 `cached`）；点行开线程免网络即显示；THREAD Sync
+      按钮强拉后内容/计数刷新；设备时间正常时 2 天后进 HOME 自动转网络
+      拉取（可临时改 TTL 验证）；TIPs 出错弹窗有 Close 按钮（触摸可关）
+    - 断网（关热点）下各操作报错不卡死；waitbox Close 可取消
 5. **互通**（可选）：Cfg 改 terry key，重复关键路径。
 
 ## 8. 风险与开放问题
@@ -621,6 +643,11 @@ typedef struct { int id; bool mine; char sender[24];
     两参皆缺 400）→ §2/§2.1 契约更新；v3.1 的"HOME 过滤 null 行"过渡方案
     退役，恢复"**显示 + 只读**"（§4.1/§4.4/§5/§7 同步、§8 R9 关闭）；随实现
     commit 2 落地（`penpal_get_thread` 在 `pen_pal_id<=0` 时省略该参数）。
+- 2026-08-26 **缓存修订（产品需求）**：§5 "无本地持久化"收敛为"写操作
+  薄客户端 + 只读响应缓存"——SPIFFS `/penpal/*.json` 原始响应体、
+  TTL 2 天、HOME/THREAD 缓存优先、Sync（home/线程内）= 强制重拉；
+  §4.1/§4.4/§7 同步。顺带修复：`pp_msgbox_show` 加 Close 按钮
+  （TIPs 失败弹窗此前只有键盘任意键可关，触摸用户无关闭路径）。
 - 2026-08-22 **实现落地**（§9 全部完成，代码不再变 Design-follow）：
   `b48f584`（API client）→ `16c13e3`（R9 恢复，即上条）→ `b231dd3`
   （屏幕 UI 三件）→ `5329383`（菜单第 3 页 + 图标）+ docs/评审申请 commit。
