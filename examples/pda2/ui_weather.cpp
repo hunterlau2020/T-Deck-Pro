@@ -113,6 +113,14 @@ static uint32_t last_fetch_time = 0;
  * the on-screen data, not the last attempt. */
 static bool partial_refresh = false;
 
+/* Async IPC contract (docs/async_ipc_contract.md, issue_list §11 Medium):
+ * the fetch task runs to completion - it is NEVER vTaskDelete()d mid-
+ * flight (that used to destroy stack-lived HTTPClient/Preferences
+ * objects). A page generation invalidates whatever a still-running
+ * task publishes; refresh_cb drops stale results and only a task whose
+ * generation is still current may advance the timestamp/cache. */
+static volatile uint32_t weather_page_gen = 0;   /* bumped on entry/destroy/cancel */
+
 // --- UI state ---
 static lv_timer_t *refresh_timer = NULL;
 static TaskHandle_t fetch_task = NULL;
@@ -378,6 +386,7 @@ static void fetch_city_name(float lat, float lon, const char *key)
 
 static void weather_fetch_task(void *param)
 {
+    const uint32_t gen = (uint32_t)(uintptr_t)param;
     char key[96];
     weather_owm_key(key, sizeof(key));
     if (key[0] == '\0') {
@@ -453,7 +462,10 @@ static void weather_fetch_task(void *param)
                       resp.status_code, resp.error.c_str());
     }
 
-    if (cur_ok && fc_ok) {
+    bool stale = (gen != weather_page_gen);
+    if (stale) {
+        Serial.println("[Weather] page left/re-entered - result dropped");
+    } else if (cur_ok && fc_ok) {
         partial_refresh = false;
         last_fetch_time = millis();
         /* re-resolve the city EVERY fetch so the name follows the
@@ -482,6 +494,9 @@ static void start_fetch()
         if (status_label) lv_label_set_text(status_label, "WiFi not connected");
         return;
     }
+    /* B4-L2 fix: only clear the timestamp once a task will really run -
+     * the old order (clear then maybe bail) left the cache permanently
+     * expired when WiFi dropped or the key was missing */
     char key[96];
     weather_owm_key(key, sizeof(key));
     if (key[0] == '\0') {
@@ -492,7 +507,15 @@ static void start_fetch()
     if (fetch_task) return;
     if (cache_is_fresh()) return;
     if (status_label) lv_label_set_text(status_label, "Fetching...");
-    xTaskCreatePinnedToCore(weather_fetch_task, "weather", 16384, NULL, 5, &fetch_task, 0);
+    last_fetch_time = 0;              /* manual 'r' path reuses this entry too */
+    /* gen snapshot at launch: entry/destroy bumps invalidate the result */
+    if (xTaskCreatePinnedToCore(weather_fetch_task, "weather", 16384,
+                                (void *)(uintptr_t)weather_page_gen, 5,
+                                &fetch_task, 0) != pdPASS) {
+        fetch_task = NULL;
+        last_fetch_time = 0;          /* stays expired: next entry retries */
+        if (status_label) lv_label_set_text(status_label, "Task create failed");
+    }
 }
 
 // --- UI update ---
@@ -584,7 +607,10 @@ static void weather_cleanup()
 {
     weather_kbd_active = false;
     if (refresh_timer) { lv_timer_del(refresh_timer); refresh_timer = NULL; }
-    if (fetch_task) { vTaskDelete(fetch_task); fetch_task = NULL; }
+    /* Contract semantics: bump the generation so the in-flight task's
+     * result is dropped on arrival; the task itself is NEVER killed -
+     * HTTPClient/Preferences live on its stack until it finishes. */
+    weather_page_gen++;
 }
 
 static void show_page(int idx)
@@ -618,8 +644,9 @@ void weather_keyboard_poll()
             scr_mgr_pop(false);
         }
     } else if (c == 'r') {
-        /* manual refresh (user request): bypass the 1 h cache */
-        last_fetch_time = 0;
+        /* manual refresh (user request): bypass the 1 h cache - the
+         * timestamp is cleared inside start_fetch only once the task is
+         * really about to launch (B4-L2) */
         start_fetch();
     } else if (c == '\n' || c == ' ' || c == '+' || c == '-') {
         /* Enter/Space or Sym-layer +/- cycle the 3 pages (user report:
@@ -765,7 +792,7 @@ static void weather_create(lv_obj_t *parent)
     weather_kbd_active = true;
 }
 
-static void weather_entry(void) { ui_disp_full_refr(); }
+static void weather_entry(void) { weather_page_gen++; ui_disp_full_refr(); }
 static void weather_exit(void) { ui_disp_full_refr(); }
 static void weather_destroy(void)
 {
