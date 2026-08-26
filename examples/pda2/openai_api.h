@@ -147,11 +147,16 @@ int ai_provider_find(const char *name);
 /**
  * @brief Resolve the effective config for a named provider.
  *
- * Resolution order (later wins):
- *   1. Registry defaults (base_url, model).
- *   2. NVS "ai" namespace: active slot fields.
- *   3. /env.cfg (if readable) for key.
- *   4. Compile-time AI_KEY_DEFAULT_DEV if non-empty.
+ * Resolution is a two-way branch (matches design-penpal-ai-provider-link
+ * §3.1; the active slot is consulted FIRST, it does not layer over the
+ * registry - a matching base means the user saved this provider in AI
+ * Config and the whole slot wins including its key, env.cfg is then NOT
+ * consulted):
+ *   A. Active AI Config slot base == registry base_url:
+ *      use the slot's base/model/key verbatim (user-customised).
+ *   B. Otherwise: registry base/model + key chain
+ *      NVS "ai"/key.<name> -> /env.cfg <NAME>_KEY ->
+ *      (openrouter only) AI_KEY_DEFAULT_DEV -> empty.
  *
  * @param name Provider name ("openrouter", "deepseek", ...).
  * @param base  Output buffer for endpoint URL.

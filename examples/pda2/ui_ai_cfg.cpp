@@ -8,17 +8,19 @@
  *   - Test sends a minimal chat-completion against the DRAFT base/model/key
  *     (finding 1.7): the draft model is actually exercised, not just listed
  *     by /models; a reply proves the endpoint+key+model triplet works
- *   - Save validates all fields and requires a successful Test since the
- *     last edit (finding 1.7); NVS write never leaves a mixed config
- *   - the msgbox countdown is the ABSOLUTE deadline: HTTP timeout 10s +
- *     5s worst-case NTP = 15s; on deadline the request generation is
+ *   - Save validates all fields (2026-08-25 user decision: Save and Test
+ *     are DECOUPLED - a passing Test is no longer required to Save; do not
+ *     reinstate that gate from older design notes)
+ *   - the msgbox countdown is the ABSOLUTE deadline: HTTP timeout 45s +
+ *     5s worst-case NTP = 50s; on deadline the request generation is
  *     bumped so a late result is dropped (finding 1.9)
  *   - Close = Cancel: bumps the request generation (finding 1.8)
  *   - async results travel over a FreeRTOS queue as heap-allocated structs
  *     carrying the request generation; the task works on its own snapshot
  *     of the draft config (findings 1.4/1.5, contract: async_ipc_contract.md)
- *   - Save UX (finding 1.4): the status line states why Save is blocked
- *     (never tested / test stale after an edit)
+ *   - Status hint (finding 1.4, decoupled since 2026-08-25): reflects the
+ *     Test state ("Testing..."/"Test OK"/"Save / Test") - it is a hint,
+ *     not a Save gate
  *
  * Keypad map:
  *   \n : commit the active field -> next field; on the last field -> save
@@ -727,7 +729,7 @@ static void ai_cfg_create(lv_obj_t *parent)
     ai_cfg_field = 0;
     s_ai_test_passed = false;
     ai_cfg_refresh_labels();
-    ai_cfg_status_hint();                       /* "Run Test to enable Save" */
+    ai_cfg_status_hint();                       /* "Save / Test" (decoupled) */
     ai_cfg_kbd_active = true;
 }
 
