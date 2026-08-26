@@ -130,9 +130,16 @@ void pp_home_note(const char *fmt, ...)
     }
 }
 
-/* ---- notice msgbox (any key closes, +/- scrolls the body) --------------- */
+/* ---- notice msgbox (any key closes; Close button since 2026-08-26 -
+ * TIPs error boxes had no touch dismiss path) --------------- */
 static lv_obj_t *s_msgbox = NULL;
 static lv_obj_t *s_msgbox_body = NULL;
+
+static void pp_msgbox_close_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    pp_msgbox_close();
+}
 
 void pp_msgbox_show(const char *title, const char *text)
 {
@@ -156,11 +163,19 @@ void pp_msgbox_show(const char *title, const char *text)
 
     s_msgbox_body = lv_label_create(s_msgbox);
     lv_obj_set_width(s_msgbox_body, lv_pct(100));
-    lv_obj_set_height(s_msgbox_body, 116);
+    lv_obj_set_height(s_msgbox_body, 104);
     lv_label_set_long_mode(s_msgbox_body, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_msgbox_body, text);
     lv_obj_set_style_text_font(s_msgbox_body, &lv_font_montserrat_14, 0);
     lv_obj_set_flex_grow(s_msgbox_body, 1);
+
+    lv_obj_t *close_btn = lv_btn_create(s_msgbox);
+    lv_obj_set_size(close_btn, 64, 26);
+    lv_obj_t *close_lab = lv_label_create(close_btn);
+    lv_label_set_text(close_lab, "Close");
+    lv_obj_center(close_lab);
+    lv_obj_add_event_cb(close_btn, pp_msgbox_close_btn_cb,
+                        LV_EVENT_CLICKED, NULL);
 }
 
 void pp_msgbox_close(void)
@@ -597,6 +612,11 @@ static void pp_consume(pp_result_t *res)
             pp.thr_dropped = res->dropped;
             if (s_cur_page == PP_PAGE_HOME) {
                 pp_set_page(PP_PAGE_THREAD);
+            } else if (s_cur_page == PP_PAGE_THREAD) {
+                /* in-page Sync button refresh (2026-08-26): the page is
+                 * already up - re-render with the fresh letters */
+                ppr_show_thread();
+                ui_disp_full_refr();
             }
         } else {
             pp_status_set("%s", res->err.c_str());
@@ -753,10 +773,14 @@ void pp_home_render_rows(void)
 }
 
 /* HOME sync: serial PALS -> MAILBOX (§3.2). manual=true (Sync key/btn) drops
- * the one-cycle note; the post-send auto sync keeps it. */
+ * the one-cycle note AND the home cache (product request: Sync = force
+ * re-fetch); the post-send auto sync keeps it. */
 void pp_home_sync(bool manual)
 {
-    if (manual) s_home_note[0] = 0;
+    if (manual) {
+        s_home_note[0] = 0;
+        penpal_cache_drop_home();
+    }
     pp_task_req_t rq = {};
     rq.gen = s_pp_gen;
     rq.type = PP_RES_PALS;
@@ -789,6 +813,24 @@ static void pp_home_row_cb(lv_event_t *e)
     pp.thr_root = pp.rows[idx].root_id;
     pp.thr_pal = pp.rows[idx].pal_id;      /* 0 = residual, read-only (R9) */
     strlcpy(pp.thr_subject, pp.rows[idx].subject, sizeof(pp.thr_subject));
+    /* thread cache first (product request 2026-08-26): parse straight into
+     * the global letters array (64 rows, too fat for the UI stack); the
+     * in-page Sync button force-refreshes over the network */
+    if (penpal_cache_load_thread(pp.thr_root, pp.letters, PP_THREAD_MAX,
+                                 &pp.letters_cnt, &pp.thr_dropped)) {
+        /* cached body is server order (oldest-first) -> store newest-first,
+         * exactly like the PP_RES_THREAD consumer below */
+        for (int i = 0; i < pp.letters_cnt / 2; i++) {
+            pp_letter_t tmp = std::move(pp.letters[i]);
+            pp.letters[i] = std::move(pp.letters[pp.letters_cnt - 1 - i]);
+            pp.letters[pp.letters_cnt - 1 - i] = std::move(tmp);
+        }
+        pp.thr_idx = 0;
+        pp_set_page(PP_PAGE_THREAD);
+        Serial.printf("[PenPal] thread %d served from cache (%d letters)\n",
+                      pp.thr_root, pp.letters_cnt);
+        return;
+    }
     pp_task_req_t rq = {};
     rq.gen = s_pp_gen;
     rq.type = PP_RES_THREAD;
@@ -1262,9 +1304,10 @@ static void pp_create(lv_obj_t *parent)
     pp_set_page(PP_PAGE_HOME);
     pp_home_render_pals();
     pp_home_render_rows();
-    /* widgets only - scr_mgr runs create() at REGISTER time (boot), any
-     * request started here would be invalidated by entry()'s gen++ before
-     * its result arrives (Codex P1). Auto-sync lives in pp_entry(). */
+    /* widgets only - scr_mgr runs create() just before entry() on every
+     * push (per-visit rebuild; see issue_list §10 erratum), any request
+     * started here would be invalidated by entry()'s gen++ before its
+     * result arrives (Codex P1). Auto-sync lives in pp_entry(). */
 }
 
 static void pp_entry(void)
@@ -1273,9 +1316,30 @@ static void pp_entry(void)
     s_pp_gen++;                           /* invalidate prior-visit results */
     s_pp_active = true;
     /* auto-sync on the FIRST entry of a visit, after gen++ so the request
-     * carries the generation that will consume it (§4.1, Codex P1) */
+     * carries the generation that will consume it (§4.1, Codex P1).
+     * Product request 2026-08-26: render from the 2-day cache instead of
+     * auto-fetching when both halves hit - Sync (key/btn) drops the cache
+     * and re-fetches explicitly. */
     if (!s_pp_autosynced) {
         s_pp_autosynced = true;
+        /* parse straight into the global pp state - no stack staging
+         * arrays (24 mailbox rows ~= 3.8KB would violate the no-fat-
+         * aggregates-on-the-UI-stack rule, issue_list §12). A miss before
+         * the second load leaves a half-updated state that the network
+         * sync below overwrites anyway. */
+        bool trunc = false;
+        if (penpal_cache_load_mailbox(pp.rows, PP_MAILBOX_MAX,
+                                      &pp.rows_cnt, &trunc) &&
+            penpal_cache_load_pals(pp.pals, PP_PAL_MAX, &pp.pals_cnt)) {
+            pp.mailbox_truncated = trunc;
+            pp.home_page = 0;
+            pp_home_render_pals();
+            pp_home_render_rows();
+            pp_status_set("cached - press Sync to refresh");
+            Serial.printf("[PenPal] home served from cache (%d pals, %d rows)\n",
+                          pp.pals_cnt, pp.rows_cnt);
+            return;
+        }
         char base[PP_BASE_MAX], key[PP_KEY_MAX];
         pp_cfg_load(base, sizeof(base), key, sizeof(key));
         if (base[0] && key[0]) {

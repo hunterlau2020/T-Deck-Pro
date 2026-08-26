@@ -116,19 +116,20 @@ void ppr_show_thread(void)
         snprintf(pp.fmt + strlen(pp.fmt),
                  sizeof(pp.fmt) - strlen(pp.fmt), "   %s", when);
     }
+    if (pp.thr_dropped > 0) {
+        /* dropped note lives in the header, not the counter - the counter
+         * stays short so it never runs into the Sync button (2026-08-26) */
+        snprintf(pp.fmt + strlen(pp.fmt),
+                 sizeof(pp.fmt) - strlen(pp.fmt),
+                 "\n%d old dropped (size limit)", pp.thr_dropped);
+    }
     lv_label_set_text(s_thr_head, pp.fmt);
 
     lv_label_set_text(s_thr_body_lab, l->content.c_str());
     lv_obj_scroll_to_y(s_thr_body, 0, LV_ANIM_OFF);
 
-    /* counter + oldest-dropped visibility (§5) */
-    if (pp.thr_dropped > 0) {
-        lv_label_set_text_fmt(s_thr_count, "%d/%d · %d old dropped",
-                              pp.thr_idx + 1, pp.letters_cnt, pp.thr_dropped);
-    } else {
-        lv_label_set_text_fmt(s_thr_count, "%d/%d", pp.thr_idx + 1,
-                              pp.letters_cnt);
-    }
+    /* counter (short form only; dropped note moved into the header) */
+    lv_label_set_text_fmt(s_thr_count, "%d/%d", pp.thr_idx + 1, pp.letters_cnt);
 
     /* nav: index 0 = newest, so "older" grows the index (§4.4) */
     if (pp.thr_idx == 0) lv_obj_add_state(s_thr_start, LV_STATE_DISABLED);
@@ -178,6 +179,24 @@ static void ppr_thr_next_cb(lv_event_t *e)
         pp.thr_idx--;
         ppr_show_thread();
         ui_disp_full_refr();
+    }
+}
+
+/* In-page thread refresh (product request 2026-08-26): force a network
+ * re-fetch of THIS thread; the worker overwrites the thread cache and the
+ * PP_RES_THREAD consumer re-renders the page (see ui_penpal.cpp). */
+static void ppr_thr_sync_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_pp_busy) return;                 /* pp_start would reject anyway */
+    if (pp.thr_root <= 0) return;
+    pp_task_req_t rq = {};
+    rq.gen = s_pp_gen;
+    rq.type = PP_RES_THREAD;
+    rq.pen_pal_id = pp.thr_pal;
+    rq.thread_root_id = pp.thr_root;
+    if (pp_start(&rq, false)) {
+        pp_status_set("refreshing thread...");
     }
 }
 
@@ -316,6 +335,16 @@ static void ppr_thread_build(lv_obj_t *parent)
     lv_label_set_text(nx, "Next >");
     lv_obj_center(nx);
     lv_obj_add_event_cb(s_thr_next, ppr_thr_next_cb, LV_EVENT_CLICKED, NULL);
+
+    /* force-refresh this thread (product request 2026-08-26); text button -
+     * the custom bold font has no LV_SYMBOL glyph coverage */
+    lv_obj_t *sync_btn = lv_btn_create(s_thr_page);
+    lv_obj_set_size(sync_btn, 44, 26);
+    lv_obj_align(sync_btn, LV_ALIGN_TOP_LEFT, 160, 36);
+    lv_obj_t *sy = lv_label_create(sync_btn);
+    lv_label_set_text(sy, "Sync");
+    lv_obj_center(sy);
+    lv_obj_add_event_cb(sync_btn, ppr_thr_sync_cb, LV_EVENT_CLICKED, NULL);
 
     s_thr_count = lv_label_create(s_thr_page);
     lv_obj_align(s_thr_count, LV_ALIGN_TOP_RIGHT, -6, 42);
