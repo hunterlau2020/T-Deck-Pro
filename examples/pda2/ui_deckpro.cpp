@@ -1516,7 +1516,19 @@ static void wifi_test_task_func(void *param)
     uint32_t gen = (uint32_t)(uintptr_t)param;
     wifi_test_result_t *res = new wifi_test_result_t;
     res->gen = gen;
+    /* Heap snapshot at launch: TLS handshakes need ~40-50KB of
+     * CONTIGUOUS internal heap; concurrent network tasks (weather 16KB
+     * stack + its own TLS, chat/penpal workers) or fragmentation can
+     * starve it - 'SSL - Memory allocation failed' is that condition. */
+    Serial.printf("[WiFiTest] heap before: free=%u largest=%u (min free=%u)\n",
+                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(),
+                  (unsigned)ESP.getMinFreeHeap());
     res->resp = http_get_ua(WIFI_TEST_URL, "curl/8.5.0", 15000);
+    if (!res->resp.success) {
+        Serial.printf("[WiFiTest] heap after fail: free=%u largest=%u err=%s\n",
+                      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(),
+                      res->resp.error.c_str());
+    }
     if (s_wifi_test_q) {
         xQueueSend(s_wifi_test_q, &res, portMAX_DELAY);
     } else {
