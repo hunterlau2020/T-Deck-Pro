@@ -714,7 +714,10 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
             out = buf;
         }
         if (out.length() > 200) {
-            out.resize(200);
+            /* UTF-8 boundary rollback (same pattern as penpal pp_trunc_mark) */
+            size_t cut = 200;
+            while (cut > 0 && ((unsigned char)out[cut] & 0xC0) == 0x80) cut--;
+            out.resize(cut);
             out += "...";
         }
         return false;
@@ -722,7 +725,7 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
 
     /* Parse choices[0].message.content */
     if (resp.body.empty()) {
-        out = "读取响应超时";
+        out = "Empty response (timeout?)";
         Serial.printf("[AI] fail: empty response body (status=%d, error=%s)\n",
                       resp.status_code, resp.error.empty() ? "(none)" : resp.error.c_str());
         return false;

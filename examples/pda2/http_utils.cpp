@@ -352,6 +352,10 @@ http_response_t http_post_with_headers(const char *url, const string &body,
     }
 
     http.addHeader("Content-Type", content_type);
+    /* header() only returns collected headers - without collectHeaders() the
+     * Content-Type/Content-Encoding diagnostics below always logged empty. */
+    static const char *s_resp_hdrs[] = { "Content-Type", "Content-Encoding" };
+    http.collectHeaders(s_resp_hdrs, 2);
     http.addHeader("Accept-Encoding", "identity");  /* ESP32 HTTPClient does not
         decompress gzip; force uncompressed responses (OpenRouter etc.). */
     http.addHeader("Connection", "close");          /* help HTTPClient detect

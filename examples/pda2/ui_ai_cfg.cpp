@@ -456,7 +456,9 @@ void ai_cfg_keyboard_poll(void)
             ai_msgbox_countdown_active = false;
             s_ai_test_busy = false;
             s_ai_test_req_gen++;                /* finding 1.9: a late result is dropped */
-            ai_msgbox_set_text("等待返回超时");
+            /* montserrat_14 has no CJK glyphs - keep UI text ASCII (the
+             * earlier Chinese wording rendered as tofu blocks) */
+            ai_msgbox_set_text("Request timeout\n(check network)");
             ai_cfg_status_hint();
         } else if (secs != ai_msgbox_last_secs) {
             ai_msgbox_last_secs = secs;
@@ -484,7 +486,7 @@ void ai_cfg_keyboard_poll(void)
                 Serial.printf("[AICfg] test OK, reply len=%u\n",
                               (unsigned)tr->reply.length());
             } else {
-                char fail_buf[192];
+                char fail_buf[240];   /* "Test fail:\n" + up-to-203-char reply */
                 snprintf(fail_buf, sizeof(fail_buf), "Test fail:\n%s",
                          tr->reply.c_str());
                 ai_msgbox_show(fail_buf, 180);
