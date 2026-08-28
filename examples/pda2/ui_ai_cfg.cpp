@@ -36,6 +36,7 @@
 #include "config_keys.h"
 #include "ui_scr_mrg.h"
 #include "http_utils.h"
+#include "secret_mask.h"
 #include <Preferences.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -61,6 +62,23 @@ static int  ai_cfg_field = 0;            /* 0=base 1=model 2=key */
 static char ai_base[160] = {0};
 static char ai_model[80] = {0};
 static char ai_key[80] = {0};
+/* Key masking: the box shows the middle third as '*' while the real value
+ * lives in s_ai_key_real. An untouched mask means "unchanged" on
+ * sync/save/Test; the first edit clears the box (retype mode) so stars
+ * never reach the draft, NVS or a request. */
+static char s_ai_key_real[80] = {0};
+static bool s_ai_key_masked = false;
+
+/* Show ai_key masked in the key box and park the real value in the shadow. */
+static void ai_key_show_masked(void)
+{
+    char masked[sizeof(ai_key)];
+    secret_mask_middle(ai_key, masked, sizeof(masked), 1);
+    lv_textarea_set_text(ai_key_ta, masked);
+    strncpy(s_ai_key_real, ai_key, sizeof(s_ai_key_real) - 1);
+    s_ai_key_real[sizeof(s_ai_key_real) - 1] = '\0';
+    s_ai_key_masked = ai_key[0] != '\0';
+}
 
 
 /* The task works on its OWN snapshot of the draft (finding 1.6 pattern):
@@ -101,10 +119,10 @@ static void ai_provider_apply(void)
         /* custom: start from scratch */
         lv_textarea_set_text(ai_base_ta, "");
         lv_textarea_set_text(ai_model_ta, "");
-        lv_textarea_set_text(ai_key_ta, "");
         ai_base[0] = '\0';
         ai_model[0] = '\0';
         ai_key[0] = '\0';
+        ai_key_show_masked();                     /* clears the box + shadow */
     } else {
         ai_provider_info_t p;
         ai_provider_enum(ai_provider_idx, &p);
@@ -113,9 +131,9 @@ static void ai_provider_apply(void)
                         ai_model, sizeof(ai_model), k, sizeof(k));
         lv_textarea_set_text(ai_base_ta, ai_base);
         lv_textarea_set_text(ai_model_ta, ai_model);
-        lv_textarea_set_text(ai_key_ta, k);
         strncpy(ai_key, k, sizeof(ai_key) - 1);
         ai_key[sizeof(ai_key) - 1] = '\0';
+        ai_key_show_masked();
         if (k[0] != '\0') Serial.printf("[AICfg] key for %s loaded\n", p.name);
     }
     s_ai_test_passed = false;               /* base/model changed: Test is stale */
@@ -223,6 +241,16 @@ static void ai_cfg_sync_draft(void)
                 (ai_cfg_field == 1) ? ai_model : ai_key;
     int cap = (ai_cfg_field == 0) ? (int)sizeof(ai_base) :
               (ai_cfg_field == 1) ? (int)sizeof(ai_model) : (int)sizeof(ai_key);
+    if (ai_cfg_field == 2 && s_ai_key_masked) {
+        /* untouched mask in the box: the draft keeps the real key */
+        char masked[sizeof(ai_key)];
+        secret_mask_middle(s_ai_key_real, masked, sizeof(masked), 1);
+        if (strcmp(lv_textarea_get_text(ta), masked) == 0) {
+            strncpy(buf, s_ai_key_real, cap - 1);
+            buf[cap - 1] = '\0';
+            return;
+        }
+    }
     strncpy(buf, lv_textarea_get_text(ta), cap - 1);
     buf[cap - 1] = '\0';
 }
@@ -283,6 +311,7 @@ static void ai_cfg_save(void)
             pr.end();
         }
         lv_label_set_text(ai_status_lab, "Saved");
+        ai_key_show_masked();                     /* re-mask what was stored */
         Serial.println("[AICfg] saved");
     } else {
         /* state the reason (main finding 1.9): dual-slot save fails either
@@ -546,7 +575,14 @@ void ai_cfg_keyboard_poll(void)
         }
     } else if (c == '\b') {
         const char *txt = lv_textarea_get_text(ta);
-        if (txt && txt[0] != '\0') {
+        if (ai_cfg_field == 2 && s_ai_key_masked && txt && txt[0] != '\0') {
+            /* the box shows stars, not the key: clear it (retype mode)
+             * instead of "deleting" a '*' */
+            lv_textarea_set_text(ta, "");
+            s_ai_key_masked = false;
+            s_ai_test_passed = false;           /* edited: Test is stale */
+            ai_cfg_status_hint();
+        } else if (txt && txt[0] != '\0') {
             lv_textarea_del_char(ta);
             s_ai_test_passed = false;           /* edited: Test is stale */
             ai_cfg_status_hint();               /* finding 1.4: show the reason */
@@ -558,6 +594,10 @@ void ai_cfg_keyboard_poll(void)
             break;
         }
     } else {
+        if (ai_cfg_field == 2 && s_ai_key_masked) {
+            lv_textarea_set_text(ta, "");       /* first edit: retype from scratch */
+            s_ai_key_masked = false;
+        }
         lv_textarea_add_char(ta, c);
         s_ai_test_passed = false;               /* edited: Test is stale */
         ai_cfg_status_hint();                   /* finding 1.4: show the reason */
@@ -711,7 +751,7 @@ static void ai_cfg_create(lv_obj_t *parent)
                        ai_key, sizeof(ai_key));
     lv_textarea_set_text(ai_base_ta, ai_base);
     lv_textarea_set_text(ai_model_ta, ai_model);
-    lv_textarea_set_text(ai_key_ta, ai_key);
+    ai_key_show_masked();
     /* match the saved base to a provider preset (custom when unknown);
      * DISPLAY only - the saved values stay untouched. The dropdown is set
      * BEFORE its change callback is attached, so init never re-applies. */
