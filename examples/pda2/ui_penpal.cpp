@@ -34,6 +34,7 @@
 #include "ui_scr_mrg.h"
 #include "http_utils.h"
 #include "openai_api.h"
+#include "secret_mask.h"
 #include "src/assets.h"
 #include <Preferences.h>
 #include <freertos/FreeRTOS.h>
@@ -1032,6 +1033,11 @@ enum {
     PP_CFG_FOCUS_NUM
 };
 static int s_cfg_focus = PP_CFG_FOCUS_BASE;
+/* Key masking: the box shows the middle third as '*' while the real value
+ * lives in s_cfg_key_real. An untouched mask means "unchanged" on Save;
+ * the first edit clears the box (retype mode) so stars never reach NVS. */
+static char s_cfg_key_real[PP_KEY_MAX] = {0};
+static bool s_cfg_key_masked = false;    /* key box still shows the mask */
 
 static int pp_cfg_provider_count(void)
 {
@@ -1078,7 +1084,12 @@ void pp_cfg_prefill(void)
     char base[PP_BASE_MAX], key[PP_KEY_MAX];
     pp_cfg_load(base, sizeof(base), key, sizeof(key));
     lv_textarea_set_text(s_cfg_base_ta, base);
-    lv_textarea_set_text(s_cfg_key_ta, key);
+    strncpy(s_cfg_key_real, key, sizeof(s_cfg_key_real) - 1);
+    s_cfg_key_real[sizeof(s_cfg_key_real) - 1] = '\0';
+    char key_masked[PP_KEY_MAX];
+    secret_mask_middle(s_cfg_key_real, key_masked, sizeof(key_masked), 1);
+    lv_textarea_set_text(s_cfg_key_ta, key_masked);
+    s_cfg_key_masked = s_cfg_key_real[0] != '\0';
 
     char provider_name[32] = "";
     penpal_load_ai_provider(provider_name, sizeof(provider_name));
@@ -1105,11 +1116,23 @@ static void pp_cfg_save_cb(lv_event_t *e)
     const char *base = lv_textarea_get_text(s_cfg_base_ta);
     const char *key = lv_textarea_get_text(s_cfg_key_ta);
     if (!base || !key) return;
+    const char *save_key = key;
+    char key_masked[PP_KEY_MAX];
+    secret_mask_middle(s_cfg_key_real, key_masked, sizeof(key_masked), 1);
+    if (s_cfg_key_masked && strcmp(key, key_masked) == 0) {
+        save_key = s_cfg_key_real;    /* untouched mask: keep the stored key */
+    }
     /* Two independent NVS writes are not atomic (Codex/Claude P2): report
      * exactly which half stuck instead of one vague "save failed". */
-    bool server_ok = penpal_save_config(base, key);
+    bool server_ok = penpal_save_config(base, save_key);
     bool prov_ok = false;
     if (server_ok) {
+        /* re-mask what was stored (the box may hold a freshly typed key) */
+        strncpy(s_cfg_key_real, save_key, sizeof(s_cfg_key_real) - 1);
+        s_cfg_key_real[sizeof(s_cfg_key_real) - 1] = '\0';
+        secret_mask_middle(s_cfg_key_real, key_masked, sizeof(key_masked), 1);
+        lv_textarea_set_text(s_cfg_key_ta, key_masked);
+        s_cfg_key_masked = s_cfg_key_real[0] != '\0';
         ai_provider_info_t p;
         const char *provider_name = "";
         if (ai_provider_enum(s_cfg_provider_idx, &p)) provider_name = p.name;
@@ -1235,12 +1258,24 @@ static void pp_cfg_key(char c)
     if (!ta) return;
     if (c == '\b') {
         const char *txt = lv_textarea_get_text(ta);
-        if (txt && txt[0] != '\0') lv_textarea_del_char(ta);
-        else pp_set_page(PP_PAGE_HOME);
+        if (ta == s_cfg_key_ta && s_cfg_key_masked && txt && txt[0] != '\0') {
+            /* the box shows stars, not the key: clear it (retype mode)
+             * instead of "deleting" a '*' */
+            lv_textarea_set_text(ta, "");
+            s_cfg_key_masked = false;
+        } else if (txt && txt[0] != '\0') {
+            lv_textarea_del_char(ta);
+        } else {
+            pp_set_page(PP_PAGE_HOME);
+        }
         return;
     }
     if (c == '\n') return;                /* one-line fields */
     if (c >= 0x20) {
+        if (ta == s_cfg_key_ta && s_cfg_key_masked) {
+            lv_textarea_set_text(ta, "");  /* first edit: retype from scratch */
+            s_cfg_key_masked = false;
+        }
         lv_textarea_add_char(ta, c);
     }
 }
