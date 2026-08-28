@@ -3,6 +3,22 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-08-29
+
+- **PenPal 点击死机根治：LVGL 内存池 48K→64K**（真机三段 bisect 定位，
+  `721e04a`）：进入 PenPal 后点任何链接死机/重启，多轮上报。设备 bisect：
+  `1269bf7` 稳定 → `f8d73f6`（行表头拆分，+10 label）一点即崩（回溯
+  `pp_waitbox_show → lv_btn_create`，EXCVADDR 0x22）→ 空对象探针同样崩。
+  探针带 `pp_dbg_pool()` 池水位实锤：点击时 48K 池仅剩 **524B**，等待框
+  分配失败；`1269bf7` 的"稳定"只是 ~1K 余量勉强够，早就在悬崖边——
+  1269bf7 时代的偶发 topic 死机、诊断构建的崩溃点漂移
+  （`lv_mem_buf_get` 挂死等）都是同一池耗尽的不同表现。修复后 RAM
+  50.1%→55.1%，同点水位 ~17K；真机全路径复测通过（用户确认）。
+  附带坑：改 `config/lv_conf.h` 不触发重编（`-include` 无依赖跟踪），必须
+  `-t clean`，否则池"假扩容"（build 文档坑 7）。`pp_dbg_pool()` 留作
+  观测点。诊断批次（心跳/栈扫描/面包屑，stash）随根因落定整体弃置；
+  `ui_penpal_write.cpp` 的 [PPW] 面包屑同撤（topic 冻结即本条）。
+
 ## 2026-08-28
 
 - **TLS 信任切换为全量 Mozilla 根证书包**（用户决策，`07c5fdb..32204bb` 2 个

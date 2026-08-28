@@ -434,6 +434,47 @@
   修 TIPs 失败弹窗触摸不可关。
 - 设计文档 §5/§4.1/§4.4/§7 + 变更历史同步；真机回归 ⏸（§7 缓存路径项）
 
+## 15. PenPal 点击死机根因：LVGL 48K 池耗尽（2026-08-28..29 定位，修复 `721e04a`）
+
+**现象**（真机多轮上报）：进入 PenPal 后点任何链接（Sync / 邮件行 / topic
+pick）死机或重启；1269bf7 时代已有偶发 topic 选择死机（当时无日志）。
+
+**定位过程**（设备三段 bisect + 池水位探针）：
+- `1269bf7` 整刷实测**稳定**；`f8d73f6`（邮件行表头拆两 label，净 +10 个
+  LVGL 对象）进列表后**一点即崩**。回溯解码：
+  `indev_proc_release → pp_home_sync_cb → pp_start → pp_waitbox_show →
+  lv_btn_create → lv_obj_mark_layout_as_dirty`，LoadProhibited `0x22`
+  （对象树父链已坏，等待框按钮创建时走到 garbage parent）。
+- **Step B 探针**：1269bf7 + 10 个"只创建、不写文本"的空 label（渲染逻辑
+  完全不动）**同样崩** → 排除渲染逻辑，锁定"多 10 个对象"本身。
+- 探针带 `pp_dbg_pool()` 池水位（[PD] 串口行）实锤：
+
+  | 检查点 | 48K 池剩余 |
+  |---|---|
+  | `create`（7 页控件树建完） | 2172 B |
+  | `cached`（pals+mailbox 缓存渲染后） | 540 B |
+  | `wbshow`（点击 Sync、建等待框前） | **524 B** |
+
+  等待框（box + 2 label + btn + 文本缓冲）需要数百字节 → 分配失败 →
+  冻结/panic（本版表现为死机无 panic，与"分配失败后 LVGL 内部断言死循环"
+  相符；f8d73f6 版本表现为 LoadProhibited——TLSF 边缘行为不定）。
+
+**根因**：PenPal 7 页控件树 + pals/mailbox 渲染把 48K LVGL 池吃到 ~0.5K。
+`1269bf7` 的"稳定"只是 ~1K 余量**勉强塞下**等待框——早已在悬崖边，任何
+多分配一点的路径（topic 列表、行表头 +10 label）都翻车。诊断构建里崩溃点
+漂移（`lv_mem_buf_get` 挂死 / layout-dirty panic）同样是池耗尽的不同表现，
+不是独立 bug。
+
+**修复**（`721e04a`）：`LV_MEM_SIZE` 48K→64K（`config/lv_conf.h`），app RAM
+50.1%→55.1%；同检查点水位 ~17K。`pp_dbg_pool()` 留作观测点
+（create/cached/wbshow）。真机复测：邮件列表 + Sync + 开信 + topic pick
+全稳定（用户确认 2026-08-29）。
+
+**教训**：① 改 `config/lv_conf.h` 必须先 `pio run -t clean`——它经
+`-include` 进编译，**不被依赖跟踪**，增量编译会用旧 .o 假装生效（build
+文档坑 7）；② "稳定版"池余量 ~1K 就应视为临界——水位观测点进主线，别再
+靠"没崩"判断健康。
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：

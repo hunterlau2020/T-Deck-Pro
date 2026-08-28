@@ -187,6 +187,16 @@ pio run -e factory -t upload -t monitor   # 烧录 + 打开串口监视器（115
   ```
   实测 8 块中 2 块各需重试一次，全部写入后设备正常启动。
 
+### 坑 7：改 `config/lv_conf.h` 不触发重编（2026-08-29，池扩容"假生效"）
+
+- 现象：`LV_MEM_SIZE` 48K→64K 后增量编译直接 SUCCESS，但 size 报告 RAM 只
+  +40B——LVGL 所有 .o 还是旧的，固件里池根本没变大（若直接刷机就是假修复）。
+- 原因：`-include config/lv_conf.h` 是编译器强制包含，SCons 依赖图里没有
+  这个头，改它不会 dirty 任何目标。
+- 规则：改 `config/lv_conf.h`（或任何只经 `-include` 引入的头）后必须
+  `python -m platformio run -e pda2 -t clean` 再编；验收看 size 报告的
+  RAM 涨幅是否符合预期（本次 50.1%→55.1%，+16384B = 池增量）。
+
 ## 6. 示例功能与依赖总览
 
 | 示例 | 主要功能 | 外部库 |
