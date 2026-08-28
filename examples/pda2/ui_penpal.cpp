@@ -688,6 +688,8 @@ static lv_obj_t *s_pals_row = NULL;      /* icon row container */
 static lv_obj_t *s_pals_more = NULL;     /* "+N" label */
 static lv_obj_t *s_row_btn[5];
 static lv_obj_t *s_row_lab[5];
+static lv_obj_t *s_row_who[5];             /* header line: sender, left */
+static lv_obj_t *s_row_when[5];            /* header line: time, right */
 static lv_obj_t *s_row_sep[5];             /* hairline under each row */
 static lv_obj_t *s_home_nav = NULL;      /* "page 1/2" */
 static lv_obj_t *s_home_prev = NULL;
@@ -765,11 +767,11 @@ void pp_home_render_rows(void)
         char st[8];
         pp_state_abbr(r->state, st, sizeof(st));
         const char *who = r->last_sender[0] ? r->last_sender : r->from;
-        snprintf(pp.fmt, sizeof(pp.fmt),
-                 "%s  %s%s\n%s  %s",
-                 who, when,
-                 r->unread > 0 ? "  [new]" : "",
-                 r->subject, st);
+        snprintf(pp.fmt, sizeof(pp.fmt), "%s%s", who,
+                 r->unread > 0 ? "  [new]" : "");
+        lv_label_set_text(s_row_who[i], pp.fmt);
+        lv_label_set_text(s_row_when[i], when);
+        snprintf(pp.fmt, sizeof(pp.fmt), "%s  %s", r->subject, st);
         lv_label_set_text(s_row_lab[i], pp.fmt);
         lv_obj_set_user_data(s_row_btn[i], (void *)(intptr_t)idx);
     }
@@ -955,8 +957,20 @@ static void pp_home_build(lv_obj_t *parent)
         lv_obj_remove_style_all(s_row_btn[i]);
         lv_obj_set_size(s_row_btn[i], 232, 33);
         lv_obj_align(s_row_btn[i], LV_ALIGN_TOP_MID, 0, 114 + i * 36);
+        /* header line = sender (left) + time (right-aligned, user request
+         * 2026-08-29); s_row_lab keeps the subject line below */
+        s_row_who[i] = lv_label_create(s_row_btn[i]);
+        lv_obj_align(s_row_who[i], LV_ALIGN_TOP_LEFT, 2, 1);
+        lv_obj_set_width(s_row_who[i], 140);
+        lv_label_set_long_mode(s_row_who[i], LV_LABEL_LONG_CLIP);
+        lv_label_set_text(s_row_who[i], "");
+        lv_obj_set_style_text_font(s_row_who[i], &lv_font_montserrat_14, 0);
+        s_row_when[i] = lv_label_create(s_row_btn[i]);
+        lv_obj_align(s_row_when[i], LV_ALIGN_TOP_RIGHT, -2, 1);
+        lv_label_set_text(s_row_when[i], "");
+        lv_obj_set_style_text_font(s_row_when[i], &lv_font_montserrat_14, 0);
         s_row_lab[i] = lv_label_create(s_row_btn[i]);
-        lv_obj_align(s_row_lab[i], LV_ALIGN_LEFT_MID, 2, -1);
+        lv_obj_align(s_row_lab[i], LV_ALIGN_TOP_LEFT, 2, 17);
         lv_obj_set_width(s_row_lab[i], 226);
         lv_label_set_long_mode(s_row_lab[i], LV_LABEL_LONG_CLIP);
         lv_label_set_text(s_row_lab[i], "");
