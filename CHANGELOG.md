@@ -5,6 +5,18 @@
 
 ## 2026-08-28
 
+- **TLS 信任切换为全量 Mozilla 根证书包**（用户决策，`07c5fdb..32204bb` 2 个
+  commit）：继 deepseek/minimax X509 修复（`78239c5` 手工补两根）后，用户
+  决定不再逐家补根。新增 `scripts/gen_ca_bundle.py` 把 curl.se Mozilla 信任库
+  （121 根）转为 esp_crt_bundle 二进制格式生成 `ca_bundle_full.h`（55.6KB，
+  const 驻 flash）；`http_apply_tls` 改 `setCACertBundle()`。实测代价：flash
+  31.4%→32.0%，heap 反而更省（旧 `setCACert` 每次请求把全部 PEM 解析成 heap
+  证书链；新路径只在 heap 建 ~0.5KB 指针索引、握手时按主体名二分查找、仅解析
+  命中的一把公钥）。PC 端 openssl 对五家 provider 链以同一信任集验证全 OK；
+  生成头回读校验（格式游走/严格排序/SPKI 可解析/主体集合=源）通过；分块烧录
+  9/9 + 开机冒烟 ✅。`ca_bundle_check.py` 被生成器自检取代并删除。真机 AI
+  Test 复测 ⏸；申请 `07c5fdb..32204bb`
+
 - **CA bundle 补根：deepseek/minimax X509 校验失败**（真机反馈，
   `78239c5`）：AI Config Test 在 CA 校验模式下对 deepseek/minimax 报
   `X509 - Certificate verification failed`——服务端链分别锚定 Amazon
