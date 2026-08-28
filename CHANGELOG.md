@@ -5,6 +5,15 @@
 
 ## 2026-08-28
 
+- **CA bundle 补根：deepseek/minimax X509 校验失败**（真机反馈，
+  `78239c5`）：AI Config Test 在 CA 校验模式下对 deepseek/minimax 报
+  `X509 - Certificate verification failed`——服务端链分别锚定 Amazon
+  Root CA 1（Starfield 交叉签）与 USERTrust RSA（Comodo 交叉签），均不在
+  原 6 根 bundle 内（PC 侧 openssl 实测五家 provider 链定位）。追加两个
+  自签根（官方 amazontrust.com / Mozilla bundle，均至 2038）；PC 用固件
+  bundle 原文对三链 `openssl verify` 全 OK，`ca_bundle_check.py` 8/8 解析
+  通过，分块烧录后开机冒烟 ✅。真机 Test 复测 ⏸；申请 `78239c5`
+
 - **配置界面秘密遮蔽显示**（用户安全需求，`e8379b3..3a92971` 4 个模块
   commit，基于 2d00f3f 重落地）：PenPal Cfg key / AI Config key / Wifi
   Config pass 三处输入框不再明文渲染存储的秘密——中间 1/3 用星号替代
