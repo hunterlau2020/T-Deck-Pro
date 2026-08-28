@@ -92,7 +92,8 @@ NVS 槽位或发进 HTTP 请求。配套机制（三处一致）：
 |---|---|---|
 | 算法核对 | ✅ | 同逻辑 Python 副本对 len=2/3/4/5/6/7/8/9/16/73 逐例核对输出（16 位 key → `abcde*****456789`；8 位 pass → `ab****45`；len≤4 → 全遮蔽） |
 | 编译 | ✅ | `pio run -e pda2` SUCCESS（基于 2d00f3f + 本轮 4 commit，无新警告） |
-| 烧录 | ❌ 阻塞 | COM5 上传在 ~21-29% 处 USB CDC 持续失联（pySerial `PermissionError 13`，固定偏移附近；重试 6 次 / 降速 115200 / `--before usb_reset` / `--no-stub` 均无效）。设备侧问题（线缆/接口/供电），待重插后重刷。设备当前运行旧基线首版（等效逻辑，未含远端 8-26 演进） |
+| 烧录 | ✅（恢复后完成） | 首轮整刷在 ~21-29% 处 USB CDC 持续失联（pySerial `PermissionError 13`；降速/`usb_reset`/`--no-stub` 均无效，且失败重试已把 app 分区擦掉大半→设备一度无法启动）。改用**分块烧录**恢复：firmware.bin 切 8×256KB，逐块 `write_flash` + 失败幂等重试（2 块各重试 1 次成功），写入后设备正常启动进主菜单。方案沉淀至 `docs/build-and-code-structure.md` §5 坑 6 |
+| 开机冒烟 | ✅ | 烧录后串口：I2C/EPD/触摸/键盘就绪进主菜单，无 panic；`[WiFi] Connecting slot 0 to HONOR-60...` 证明新基线多槽位固件在跑且 **NVS 槽位凭据完好**（中断烧录未伤配置分区，遮蔽轮从未写入星号的旁证） |
 | ① PenPal Cfg | ⏸ 待用户实测 | Server Key 框显示遮蔽串；直接 Save 后服务器仍可用；首键清空重输；provider 切换后状态行 "key: set" 不受影响 |
 | ② AI Config | ⏸ 待用户实测 | key 框遮蔽；不动 key 直接 Test 通过；provider 切换重遮蔽；改 key 首键清空 |
 | ③ Wifi Config | ⏸ 待用户实测 | pass 框遮蔽；不动 pass 直接 Connect 成功；`+/-` 换槽后重遮蔽且原槽密码不丢；Clear 后空框；改 pass 首键清空 |

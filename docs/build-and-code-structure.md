@@ -155,6 +155,38 @@ pio run -e factory -t upload -t monitor   # 烧录 + 打开串口监视器（115
 - 不设置 `src_dir` 时默认指向 `<工程>/src`（不存在则报 `Nothing to build`）。
 - 原仓库的做法是手动改 `[platformio] src_dir` 后 `pio run -e T-Deck-Pro`——每次只能编一个示例。本项目用 §坑3 的脚本替代了这个流程。
 
+### 坑 6：COM5 烧录中途 USB CDC 失联（2026-08-28，分块烧录恢复）
+
+- 现象：`-t upload` 固定在总进度 ~21-29% 处掉线，pySerial 报
+  `PermissionError(13)`（"设备不识别此命令"/"连到系统上的设备没有发挥作用"）；
+  降速 115200、`--before usb_reset`、`--no-stub` 均无效。当天首次整刷曾
+  成功，之后设备侧（线缆/接口/供电）状态劣化。
+- 危险点：esptool **先擦后写**——失败重试后 app 分区已被擦掉大半，设备
+  无法正常启动（bootloader/分区表/NVS/SPIFFS 在别的分区，不受影响）。
+- 恢复方案（无需重插线缆即可走通）：把 `firmware.bin` 切成 256KB 块，
+  逐块 `write_flash`（每块独立连接、失败幂等重试，单块传输量低于失联
+  阈值），最后一块换 `--after hard_reset` 启动：
+  ```bash
+  ESPTOOL=~/.platformio/packages/tool-esptoolpy/esptool.py
+  python - "$ESPTOOL" <<'EOF'   # 切块：0x10000 起 8×256KB
+  import sys, os
+  data = open(".pio/build/pda2/firmware.bin","rb").read()
+  os.makedirs(".pio/build/pda2/chunks", exist_ok=True)
+  for n, off in enumerate(range(0, len(data), 0x40000)):
+      open(f".pio/build/pda2/chunks/chunk{n:02d}.bin","wb").write(data[off:off+0x40000])
+  EOF
+  for i in 00 01 02 03 04 05 06 07; do
+    off=$((0x10000 + 16#$i * 0x40000))
+    for try in 1 2 3 4 5; do
+      python "$ESPTOOL" --chip esp32s3 --port COM5 --baud 115200 \
+        --before default_reset --after no_reset \
+        write_flash $off .pio/build/pda2/chunks/chunk$i.bin && break
+      sleep 3
+    done
+  done
+  ```
+  实测 8 块中 2 块各需重试一次，全部写入后设备正常启动。
+
 ## 6. 示例功能与依赖总览
 
 | 示例 | 主要功能 | 外部库 |
