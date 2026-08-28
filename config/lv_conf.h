@@ -49,7 +49,13 @@
 #define LV_MEM_CUSTOM 0
 #if LV_MEM_CUSTOM == 0
     /*Size of the memory available for `lv_mem_alloc()` in bytes (>= 2kB)*/
-    #define LV_MEM_SIZE (48U * 1024U)          /*[bytes]*/
+    /* 48K -> 64K (2026-08-29): PenPal's 7-page widget tree + pals/mailbox
+     * renders left the 48K pool at ~0.5K free; the HOME sync waitbox then
+     * failed to allocate and the device froze/panicked on first click
+     * ([PD] pool telemetry, serial 2026-08-29). 64K leaves ~16K headroom;
+     * app RAM goes 50% -> 55%. Watch with pp_dbg_pool() prints if the
+     * widget tree grows again. */
+    #define LV_MEM_SIZE (64U * 1024U)          /*[bytes]*/
 
     /*Set an address for the memory pool instead of allocating it as a normal array. Can be in external SRAM too.*/
     #define LV_MEM_ADR 0     /*0: unused*/

@@ -193,6 +193,19 @@ bool pp_msgbox_open(void) { return s_msgbox != NULL; }
 /* ---- waitbox (§3.2; Close semantics split by request kind) -------------- */
 typedef enum { PP_WAIT_READ = 0, PP_WAIT_SEND } pp_wait_kind_t;
 
+/* Pool telemetry (2026-08-29): the 48K pool-exhaustion hunt - keep until the
+ * enlargement (LV_MEM_SIZE 64K) is device-verified, then trim to a boot-time
+ * line or drop. */
+static void pp_dbg_pool(const char *tag)
+{
+    lv_mem_monitor_t m;
+    lv_mem_monitor(&m);
+    Serial.printf("[PD] %s t=%lu heap=%u pool used=%u free=%u frag=%u%%\n",
+                  tag, (unsigned long)millis(), (unsigned)ESP.getFreeHeap(),
+                  (unsigned)(m.total_size - m.free_size),
+                  (unsigned)m.free_size, (unsigned)m.frag_pct);
+}
+
 static lv_obj_t *s_waitbox = NULL;
 static lv_obj_t *s_wait_body = NULL;
 static pp_wait_kind_t s_wait_kind = PP_WAIT_READ;
@@ -232,6 +245,7 @@ static void pp_wait_close_cb(lv_event_t *e)
 
 static void pp_waitbox_show(pp_wait_kind_t kind, const char *title)
 {
+    pp_dbg_pool("wbshow");
     pp_waitbox_hide();
     s_waitbox = lv_obj_create(lv_layer_top());
     lv_obj_set_size(s_waitbox, 220, 130);
@@ -1372,6 +1386,7 @@ static void pp_create(lv_obj_t *parent)
     ppw_build(parent);                    /* COMPOSE + TOPICS */
     ppr_build(parent);                    /* THREAD + FB + PROFILE */
     pp_cfg_build(parent);
+    pp_dbg_pool("create");
     pp_set_page(PP_PAGE_HOME);
     pp_home_render_pals();
     pp_home_render_rows();
@@ -1409,6 +1424,7 @@ static void pp_entry(void)
             pp_status_set("cached - press Sync to refresh");
             Serial.printf("[PenPal] home served from cache (%d pals, %d rows)\n",
                           pp.pals_cnt, pp.rows_cnt);
+            pp_dbg_pool("cached");
             return;
         }
         char base[PP_BASE_MAX], key[PP_KEY_MAX];
