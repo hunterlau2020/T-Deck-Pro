@@ -1829,6 +1829,7 @@ static scr_lifecycle_t screen4 = {
 #include <WiFi.h>
 #include <esp_wifi.h>       /* esp_wifi_scan_stop(): actually abort an async scan */
 #include <Preferences.h>
+#include "secret_mask.h"    /* pass box shows the middle of the password masked */
 
 static lv_obj_t *wifi_ssid_lab = NULL;
 static lv_obj_t *wifi_ssid_ta = NULL;
@@ -1892,6 +1893,12 @@ static int  wifi_scan_idx = 0;                  // currently shown candidate
 static char wifi_ssid_pre_scan[65] = {0};       // box content before entering scan mode
 static char wifi_ssid[65] = {0};
 static char wifi_pass[65] = {0};
+/* Pass masking: the box shows the middle third as '*' (>=4 stars) while the
+ * real value of the CURRENT slot lives in wifi_pass_real. An untouched mask
+ * means "unchanged" on sync/slot-switch/connect; the first edit clears the
+ * box (retype mode) so stars never reach a slot, NVS or WiFi.begin(). */
+static char wifi_pass_real[65] = {0};
+static bool wifi_pass_masked = false;           // pass box still shows the mask
 static char wifi_status[96] = {0};
 
 #define WIFI_SLOT_COUNT 5
@@ -2022,6 +2029,7 @@ static void wifi_cfg_refresh_labels(void)
 
 static void wifi_cfg_sync_draft(void);   /* defined below */
 static void wifi_cfg_set_field(int f);   /* defined below */
+static void wifi_pass_remask(void);      /* defined below */
 
 /* Switch to another slot: auto-save the outgoing slot's draft (BOTH fields -
  * wifi_cfg_sync_draft only covers the focused one and its result used to be
@@ -2039,12 +2047,21 @@ static void wifi_cfg_set_slot(int slot)
     ssid_out[sizeof(ssid_out) - 1] = '\0';
     strncpy(pass_out, p ? p : "", sizeof(pass_out) - 1);
     pass_out[sizeof(pass_out) - 1] = '\0';
+    if (wifi_pass_masked) {
+        /* untouched mask in the box: the outgoing slot keeps its real pass */
+        char masked[sizeof(wifi_pass)];
+        secret_mask_middle(wifi_pass_real, masked, sizeof(masked), 4);
+        if (strcmp(pass_out, masked) == 0) {
+            strncpy(pass_out, wifi_pass_real, 64);
+            pass_out[64] = '\0';
+        }
+    }
     wifi_slot_save(wifi_cfg_slot, ssid_out, pass_out);
     wifi_cfg_slot = slot;
     wifi_slot_load(wifi_cfg_slot, wifi_ssid, sizeof(wifi_ssid),
                    wifi_pass, sizeof(wifi_pass));
     lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
-    lv_textarea_set_text(wifi_pass_ta, wifi_pass);
+    wifi_pass_remask();
     wifi_cfg_scan_mode = false;
     wifi_scan_gen++;
     wifi_cfg_set_field(0);
@@ -2057,8 +2074,31 @@ static void wifi_cfg_sync_draft(void)
 {
     lv_obj_t *ta = (wifi_cfg_field == 0) ? wifi_ssid_ta : wifi_pass_ta;
     char *buf = (wifi_cfg_field == 0) ? wifi_ssid : wifi_pass;
+    if (wifi_cfg_field == 1 && wifi_pass_masked) {
+        /* untouched mask in the box: the draft keeps the real password */
+        char masked[sizeof(wifi_pass)];
+        secret_mask_middle(wifi_pass_real, masked, sizeof(masked), 4);
+        if (strcmp(lv_textarea_get_text(ta), masked) == 0) {
+            strncpy(buf, wifi_pass_real, 64);
+            buf[64] = '\0';
+            return;
+        }
+    }
     strncpy(buf, lv_textarea_get_text(ta), 64);
     buf[64] = '\0';
+}
+
+/* (Re)mask the pass box from the CURRENT slot's draft; called after
+ * create-load / slot switch and after a successful connect-or-save so the
+ * stored value is the truth. */
+static void wifi_pass_remask(void)
+{
+    char masked[sizeof(wifi_pass)];
+    secret_mask_middle(wifi_pass, masked, sizeof(masked), 4);
+    lv_textarea_set_text(wifi_pass_ta, masked);
+    strncpy(wifi_pass_real, wifi_pass, 64);
+    wifi_pass_real[64] = '\0';
+    wifi_pass_masked = wifi_pass[0] != '\0';
 }
 
 /* Start an asynchronous WiFi scan (Alt+Enter in the SSID field). Keeps the
@@ -2425,6 +2465,7 @@ void wifi_cfg_keyboard_poll()
             if (wifi_cfg_connect()) {
                 wifi_cfg_save();                 /* persist only on success */
                 wifi_slot_set_active(wifi_cfg_slot);
+                wifi_pass_remask();              /* re-mask what was stored */
                 wifi_cfg_show_msgbox("Connected",
                                      wifi_status[0] ? wifi_status : "WiFi connected");
             } else {
@@ -2434,12 +2475,21 @@ void wifi_cfg_keyboard_poll()
             wifi_cfg_refresh_labels();
         } else if (c == '\b') {
             const char *txt = lv_textarea_get_text(wifi_pass_ta);
-            if (txt && txt[0] != '\0') {
+            if (wifi_pass_masked && txt && txt[0] != '\0') {
+                /* the box shows stars, not the pass: clear it (retype mode)
+                 * instead of "deleting" a '*' */
+                lv_textarea_set_text(wifi_pass_ta, "");
+                wifi_pass_masked = false;
+            } else if (txt && txt[0] != '\0') {
                 lv_textarea_del_char(wifi_pass_ta);
             } else {
                 wifi_cfg_set_field(0);
             }
         } else {
+            if (wifi_pass_masked) {
+                lv_textarea_set_text(wifi_pass_ta, "");  /* first edit: retype */
+                wifi_pass_masked = false;
+            }
             lv_textarea_add_char(wifi_pass_ta, c);
         }
     }
@@ -2463,6 +2513,7 @@ static void wifi_connect_btn_cb(lv_event_t *e)
     if (wifi_cfg_connect()) {
         wifi_cfg_save();                         /* persist only on success */
         wifi_slot_set_active(wifi_cfg_slot);
+        wifi_pass_remask();                      /* re-mask what was stored */
         wifi_cfg_show_msgbox("Connected",
                              wifi_status[0] ? wifi_status : "WiFi connected");
     } else {
@@ -2478,6 +2529,7 @@ static void wifi_save_btn_cb(lv_event_t *e)
 {
     wifi_cfg_sync_draft();
     wifi_cfg_save();
+    wifi_pass_remask();                  /* re-mask what was stored */
     snprintf(wifi_status, sizeof(wifi_status), "Slot %d saved", wifi_cfg_slot + 1);
     wifi_cfg_refresh_labels();
 }
@@ -2491,6 +2543,8 @@ static void wifi_clear_btn_cb(lv_event_t *e)
 {
     wifi_ssid[0] = '\0';
     wifi_pass[0] = '\0';
+    wifi_pass_real[0] = '\0';
+    wifi_pass_masked = false;
     lv_textarea_set_text(wifi_ssid_ta, "");
     lv_textarea_set_text(wifi_pass_ta, "");
     wifi_cfg_scan_mode = false;
@@ -2631,7 +2685,7 @@ static void create4_1(lv_obj_t *parent)
     wifi_scan_idx = 0;
     wifi_cfg_load();
     lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
-    lv_textarea_set_text(wifi_pass_ta, wifi_pass);
+    wifi_pass_remask();                          /* pass box: middle masked */
     wifi_cfg_refresh_labels();
     wifi_cfg_kbd_active = true;
 }
