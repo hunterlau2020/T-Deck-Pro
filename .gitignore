@@ -11,6 +11,7 @@ script/*
 !script/set_srcdir.py
 !script/flash_backup.py
 !script/probe_capture.py
+!script/stt_test.py
 build
 firmware/\[H693\] T-Deck-Pro test/
 docs/image_source/img_start - 副本.xcf
