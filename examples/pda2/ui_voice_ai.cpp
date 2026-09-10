@@ -245,7 +245,7 @@ static bool resolve_chat_cfg(char *base, int base_len, char *model,
 static void ai_text_task(void *param)
 {
     char *prompt = (char *)param;
-    char base[160], model[80], key[96];
+    char base[160], model[80], key[160];
     if (!resolve_chat_cfg(base, sizeof(base), model, sizeof(model),
                           key, sizeof(key))) {
         ui_post(UI_MSG_APPEND, "No AI provider configured (AI Cfg)");
@@ -277,7 +277,7 @@ static void ai_text_task(void *param)
 
 static void ai_voice_task(void *param)
 {
-    char akey[96];
+    char akey[160];
     if (!minimax_audio_key(akey, sizeof(akey))) {
         ui_post(UI_MSG_APPEND,
                 "No MiniMax key (AI Cfg minimax or env MINIMAX_AUDIO_KEY)");
@@ -321,7 +321,7 @@ static void ai_voice_task(void *param)
         return;
     }
 
-    char base[160], model[80], ckey[96];
+    char base[160], model[80], ckey[160];
     if (!resolve_chat_cfg(base, sizeof(base), model, sizeof(model),
                           ckey, sizeof(ckey))) {
         ui_post(UI_MSG_APPEND, "No AI provider configured (AI Cfg)");
@@ -414,7 +414,7 @@ static void start_tts()
         return;
     }
 
-    char key[96];
+    char key[160];
     if (!minimax_audio_key(key, sizeof(key))) {
         if (status_label)
             lv_label_set_text(status_label,

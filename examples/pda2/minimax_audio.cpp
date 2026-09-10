@@ -29,7 +29,7 @@
 bool minimax_audio_key(char *key, int key_len)
 {
     key[0] = '\0';
-    char base[160], model[80], k[96];
+    char base[160], model[80], k[160];
     if (ai_provider_get("minimax", base, sizeof(base), model, sizeof(model),
                         k, sizeof(k)) && k[0]) {
         strncpy(key, k, key_len - 1);

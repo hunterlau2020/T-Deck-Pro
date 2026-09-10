@@ -18,11 +18,14 @@
 #include <SPIFFS.h>
 
 #define ENV_PATH   "/env.cfg"
-#define ENV_MAX_ENTRIES 8
+#define ENV_MAX_ENTRIES 12
 
 typedef struct {
     char key[24];
-    char val[96];
+    char val[160];      /* MiniMax sk-api keys run ~125 chars - the old
+                         * 96 cap silently truncated them and auth failed
+                         * with "login fail: carry the api secret key"
+                         * (device report 2026-09-11) */
 } env_entry_t;
 
 static env_entry_t s_env[ENV_MAX_ENTRIES];

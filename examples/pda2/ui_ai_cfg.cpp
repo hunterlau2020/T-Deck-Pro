@@ -692,7 +692,7 @@ static void ai_cfg_create(lv_obj_t *parent)
     lv_obj_set_width(ai_key_ta, lv_pct(100));
     lv_obj_set_height(ai_key_ta, 30);
     lv_textarea_set_one_line(ai_key_ta, true);
-    lv_textarea_set_max_length(ai_key_ta, 79);
+    lv_textarea_set_max_length(ai_key_ta, 159);  /* sk-api keys ~125 chars */
     lv_textarea_set_placeholder_text(ai_key_ta, "sk-or-v1-...");
     lv_obj_set_style_text_font(ai_key_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
