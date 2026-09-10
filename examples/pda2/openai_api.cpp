@@ -597,6 +597,8 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
         ep += "/chat/completions";
     }
     base_url = ep.c_str();
+    Serial.printf("[AI] POST %s (model %s, key len %d)\n",
+                  base_url, model ? model : "?", (int)strlen(api_key));
 
     /* reasoning.exclude is an OpenRouter extension; DeepSeek direct and other
      * OpenAI-compatible providers may ignore it or behave unexpectedly. */

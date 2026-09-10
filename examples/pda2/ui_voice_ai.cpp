@@ -222,7 +222,7 @@ static void ui_timer_cb(lv_timer_t *t)
 static bool resolve_chat_cfg(char *base, int base_len, char *model,
                              int model_len, char *key, int key_len)
 {
-    char b[160], m[80], k[96];
+    char b[160], m[80], k[160];
     if (ai_provider_get("minimax", b, sizeof(b), m, sizeof(m), k, sizeof(k))
         && k[0]) {
         strncpy(base, b, base_len - 1);

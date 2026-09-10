@@ -64,7 +64,8 @@ static void env_load(void)
         e->key[sizeof(e->key) - 1] = '\0';
         strncpy(e->val, v.c_str(), sizeof(e->val) - 1);
         e->val[sizeof(e->val) - 1] = '\0';
-        Serial.printf("[env] %s loaded\n", e->key);
+        Serial.printf("[env] %s loaded (len %d)\n", e->key,
+                      (int)strlen(e->val));
     }
     f.close();
 }
