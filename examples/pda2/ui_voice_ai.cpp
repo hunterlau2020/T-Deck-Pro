@@ -1,15 +1,19 @@
 /**
  * @file      ui_voice_ai.cpp
- * @brief     Voice AI app using Google Gemini API (text mode).
- *            Chat interface: type question, get AI response.
- *            Uses pagination for long responses.
+ * @brief     Voice AI app: MiniMax speech_to_text (ASR) + AI Config chat
+ *            provider + MiniMax t2a_v2 (TTS). Google-free per user
+ *            request 2026-09-11 (Gemini + connecttospeech removed -
+ *            unreachable in CN networks).
+ *            Keys: AI Config minimax first, /env.cfg MINIMAX_AUDIO_KEY
+ *            as fallback (minimax_audio.h).
  */
 #include "Arduino.h"
 #include "ui_deckpro.h"
 #include "ui_deckpro_port.h"
-#include "gemini_api.h"
 #include "pdm_recorder.h"
-#include "config_keys.h"
+#include "minimax_audio.h"
+#include "openai_api.h"
+#include "penpal_api.h"
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <freertos/queue.h>
@@ -136,28 +140,47 @@ static void ui_timer_cb(lv_timer_t *t)
     }
 }
 
+/* Chat endpoint resolution: the AI Config "current" provider (same source
+ * PenPal uses). Returns false when nothing usable is configured. */
+static bool resolve_chat_cfg(char *base, int base_len, char *model,
+                             int model_len, char *key, int key_len)
+{
+    char name[32] = "";
+    penpal_load_ai_provider(name, sizeof(name));
+    if (!name[0]) return false;
+    if (!ai_provider_get(name, base, base_len, model, model_len,
+                         key, key_len)) return false;
+    return key[0] != '\0';
+}
+
 static void ai_text_task(void *param)
 {
     char *prompt = (char *)param;
-#ifdef GEMINI_API_KEY
-    Serial.printf("[VoiceAI] prompt: %s\n", prompt);
-    ui_post(UI_MSG_STATUS, "Waiting for Gemini...");
+    char base[160], model[80], key[96];
+    if (!resolve_chat_cfg(base, sizeof(base), model, sizeof(model),
+                          key, sizeof(key))) {
+        ui_post(UI_MSG_APPEND, "No AI provider configured (AI Cfg)");
+        ui_post(UI_MSG_STATUS, "V:voice Enter:text");
+        free(prompt);
+        ai_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+    Serial.printf("[VoiceAI] prompt: %s -> %s\n", prompt, model);
+    ui_post(UI_MSG_STATUS, "Asking AI...");
 
-    gemini_response_t resp = gemini_send_text(prompt, GEMINI_API_KEY);
-    if (resp.success) {
+    string reply;
+    if (openai_chat(prompt, base, model, key, reply, 30000)) {
         if (last_response) free(last_response);
-        last_response = strdup(resp.text.c_str());
-        ui_post(UI_MSG_APPEND, resp.text.c_str());
+        last_response = strdup(reply.c_str());
+        ui_post(UI_MSG_APPEND, reply.c_str());
         ui_post(UI_MSG_STATUS, "V:voice R:read Enter:text");
     } else {
         char buf[256];
-        snprintf(buf, sizeof(buf), "Error: %s", resp.error.c_str());
+        snprintf(buf, sizeof(buf), "Error: %.200s", reply.c_str());
         ui_post(UI_MSG_APPEND, buf);
         ui_post(UI_MSG_STATUS, "V:voice Enter:text");
     }
-#else
-    ui_post(UI_MSG_APPEND, "Set GEMINI_API_KEY in config_keys.h");
-#endif
     free(prompt);
     ai_task = NULL;
     vTaskDelete(NULL);
@@ -165,7 +188,14 @@ static void ai_text_task(void *param)
 
 static void ai_voice_task(void *param)
 {
-#ifdef GEMINI_API_KEY
+    char akey[96];
+    if (!minimax_audio_key(akey, sizeof(akey))) {
+        ui_post(UI_MSG_APPEND,
+                "No MiniMax key (AI Cfg minimax or env MINIMAX_AUDIO_KEY)");
+        ai_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
     ui_post(UI_MSG_STATUS, "Recording 5 sec...");
     ui_post(UI_MSG_APPEND, "> [Voice recording]");
 
@@ -174,30 +204,56 @@ static void ai_voice_task(void *param)
     bool ok = pdm_record_wav(5, 16000, &wav, &wav_len);
     pdm_restore_audio();
 
+    char text[256] = "";
     if (ok && wav && wav_len > 0) {
-        ui_post(UI_MSG_STATUS, "Sending to Gemini...");
-        gemini_response_t resp = gemini_send_audio(wav, wav_len, GEMINI_API_KEY);
+        ui_post(UI_MSG_STATUS, "ASR (minimax)...");
+        char err[128];
+        ok = minimax_asr(wav, wav_len, akey, text, sizeof(text),
+                         err, sizeof(err));
         free(wav);
-
-        if (resp.success) {
-            if (last_response) free(last_response);
-            last_response = strdup(resp.text.c_str());
-            ui_post(UI_MSG_APPEND, resp.text.c_str());
-            tts_auto_read = true;
-        } else {
-            char buf[256];
-            snprintf(buf, sizeof(buf), "Error: %s", resp.error.c_str());
+        if (!ok) {
+            char buf[192];
+            snprintf(buf, sizeof(buf), "ASR failed: %.150s", err);
             ui_post(UI_MSG_APPEND, buf);
             ui_post(UI_MSG_STATUS, "V:voice Enter:text");
+            ai_task = NULL;
+            vTaskDelete(NULL);
+            return;
         }
+        char shown[270];
+        snprintf(shown, sizeof(shown), "> %s", text);
+        ui_post(UI_MSG_APPEND, shown);
     } else {
         if (wav) free(wav);
         ui_post(UI_MSG_APPEND, "Recording failed");
         ui_post(UI_MSG_STATUS, "V:voice Enter:text");
+        ai_task = NULL;
+        vTaskDelete(NULL);
+        return;
     }
-#else
-    ui_post(UI_MSG_APPEND, "Set GEMINI_API_KEY in config_keys.h");
-#endif
+
+    char base[160], model[80], ckey[96];
+    if (!resolve_chat_cfg(base, sizeof(base), model, sizeof(model),
+                          ckey, sizeof(ckey))) {
+        ui_post(UI_MSG_APPEND, "No AI provider configured (AI Cfg)");
+        ui_post(UI_MSG_STATUS, "V:voice Enter:text");
+        ai_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+    ui_post(UI_MSG_STATUS, "Asking AI...");
+    string reply;
+    if (openai_chat(text, base, model, ckey, reply, 30000)) {
+        if (last_response) free(last_response);
+        last_response = strdup(reply.c_str());
+        ui_post(UI_MSG_APPEND, reply.c_str());
+        tts_auto_read = true;
+    } else {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Error: %.200s", reply.c_str());
+        ui_post(UI_MSG_APPEND, buf);
+    }
+    ui_post(UI_MSG_STATUS, "V:voice R:read Enter:text");
     ai_task = NULL;
     vTaskDelete(NULL);
 }
@@ -268,28 +324,34 @@ static void start_tts()
         return;
     }
 
-    Serial.println("[VoiceAI] TTS: ensuring audio init...");
-    ensure_audio_init();
-    Serial.println("[VoiceAI] TTS: audio init done");
-
-    /* Truncate to ~200 chars for TTS to reduce memory pressure */
-    char tts_buf[201];
-    strncpy(tts_buf, last_response, 200);
-    tts_buf[200] = '\0';
-
-    /* Strip any special chars that might cause issues */
-    for (int i = 0; tts_buf[i]; i++) {
-        if (tts_buf[i] == '\n' || tts_buf[i] == '\r') tts_buf[i] = ' ';
+    char key[96];
+    if (!minimax_audio_key(key, sizeof(key))) {
+        if (status_label)
+            lv_label_set_text(status_label,
+                              "No MiniMax key (AI Cfg / env)");
+        return;
     }
 
-    Serial.printf("[VoiceAI] TTS: speaking %d chars: \"%.50s...\"\n", (int)strlen(tts_buf), tts_buf);
+    if (status_label) lv_label_set_text(status_label, "Synthesizing...");
+    Serial.printf("[VoiceAI] TTS: minimax t2a, %d chars\n",
+                  (int)strlen(last_response));
+
+    char err[128];
+    if (!minimax_tts(last_response, key, "/tts.mp3", err, sizeof(err))) {
+        Serial.printf("[VoiceAI] TTS failed: %s\n", err);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "TTS failed: %.120s", err);
+        if (status_label) lv_label_set_text(status_label, buf);
+        return;
+    }
+
+    /* PDM recording killed the Audio lib's I2S0 driver - rebuild it with
+     * the ctor-replica recipe before the first playback (16.1 rule 2) */
+    ensure_audio_init();
+
     if (status_label) lv_label_set_text(status_label, "Reading aloud...");
-
-    Serial.printf("[VoiceAI] TTS: free heap=%d, PSRAM=%d\n",
-                  ESP.getFreeHeap(), ESP.getFreePsram());
-
-    bool ok = audio.connecttospeech(tts_buf, "en");
-    Serial.printf("[VoiceAI] TTS: connecttospeech returned %d\n", ok);
+    bool ok = audio.connecttoFS(SPIFFS, "/tts.mp3");
+    Serial.printf("[VoiceAI] TTS: play /tts.mp3 = %d\n", ok ? 1 : 0);
     tts_playing = ok;
 }
 
@@ -385,11 +447,9 @@ static void ai_create(lv_obj_t *parent)
     lv_obj_set_style_text_font(response_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_label_set_long_mode(response_label, LV_LABEL_LONG_WRAP);
 
-#ifdef GEMINI_API_KEY
-    lv_label_set_text(response_label, "Enter: send text\nV: voice (5s record)\nR: read last response");
-#else
-    lv_label_set_text(response_label, "Set GEMINI_API_KEY\nin config_keys.h");
-#endif
+    lv_label_set_text(response_label,
+                      "Enter: send text\nV: voice (5s record)\n"
+                      "R: read last response");
 
     /* Status line */
     status_label = lv_label_create(cont);
