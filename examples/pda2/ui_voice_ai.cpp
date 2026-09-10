@@ -13,7 +13,7 @@
 #include "pdm_recorder.h"
 #include "minimax_audio.h"
 #include "openai_api.h"
-#include "penpal_api.h"
+
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <freertos/queue.h>
@@ -140,16 +140,15 @@ static void ui_timer_cb(lv_timer_t *t)
     }
 }
 
-/* Chat endpoint resolution: the AI Config "current" provider (same source
- * PenPal uses). Returns false when nothing usable is configured. */
+/* Chat endpoint resolution: IDENTICAL to the AI Text app - the AI Config
+ * dual-slot storage with the env OPENROUTER_KEY fallback
+ * (openai_load_config). The first cut used PenPal's provider-name chain
+ * and reported "No AI provider configured" on any device that never made
+ * a PenPal provider pick (device report 2026-09-11). */
 static bool resolve_chat_cfg(char *base, int base_len, char *model,
                              int model_len, char *key, int key_len)
 {
-    char name[32] = "";
-    penpal_load_ai_provider(name, sizeof(name));
-    if (!name[0]) return false;
-    if (!ai_provider_get(name, base, base_len, model, model_len,
-                         key, key_len)) return false;
+    openai_load_config(base, base_len, model, model_len, key, key_len);
     return key[0] != '\0';
 }
 
