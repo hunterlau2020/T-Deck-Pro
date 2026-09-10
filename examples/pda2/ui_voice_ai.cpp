@@ -588,8 +588,9 @@ static void ai_create(lv_obj_t *parent)
     lv_textarea_set_max_length(input_ta, 256);
     /* no cursor blink: each blink redraws -> a blocking EPD partial flush
      * every ~400 ms starves audio.loop() during TTS playback (device
-     * report 2026-09-11: choppy noise in-app, clean audio after exit) */
-    lv_textarea_set_cursor_blink_time(input_ta, 0);
+     * report 2026-09-11: choppy noise in-app, clean audio after exit).
+     * Blink time lives on the LV_PART_CURSOR style anim_time (0 = off). */
+    lv_obj_set_style_anim_time(input_ta, 0, LV_PART_CURSOR);
     lv_obj_set_style_text_font(input_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
     response_page = 0;
