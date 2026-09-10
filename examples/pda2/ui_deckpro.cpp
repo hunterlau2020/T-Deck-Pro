@@ -459,7 +459,8 @@ static void create0(lv_obj_t *parent)
             if(menu_btn_list[i].idx == SCREEN8_ID)
             {
                 menu_btn_list[i].idx = SCREEN10_ID;
-                menu_btn_list[i].name = "PCM5012";
+                menu_btn_list[i].name = "PCM5102";  /* upstream typo'd
+                    * "PCM5012"; the chip/title/Test row all say PCM5102A */
                 menu_btn_list[i].icon = &img_PCM5102;
             }
         }
