@@ -20,11 +20,13 @@
 // Shift = uppercase layer, Sym = sym layer lock.
 
 // Primary layer (normal)
+//   (3,6) Mic key -> '\f' (dedicated code, like '\v' for volume - apps
+//   that care can bind it, text inputs filter control chars out)
 const char keymap[KEYPAD_ROWS][KEYPAD_COLS] = {
     {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'},
     {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', '\b'},
     {  0, 'z', 'x', 'c', 'v', 'b', 'n', 'm', '$', '\n'},
-    {  0,   0,   0,   0,   0,   0,   0, ' ',   0,   0},
+    {  0,   0,   0,   0,   0,   0, '\f', ' ',  0,   0},
 };
 
 // Secondary layer (sym; locked by Sym, momentary by Alt)

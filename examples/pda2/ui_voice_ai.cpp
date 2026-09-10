@@ -487,10 +487,12 @@ void voiceai_keyboard_poll()
         }
         lv_textarea_add_char(input_ta, c);
         return;
+    } else if (c == '\f') {
+        /* dedicated MIC-key code (keymap (3,6), like '\v' for volume):
+         * always starts a 5 s voice take - it never inserts text */
+        if (ai_task == NULL) start_voice_record();
     } else if ((c == 'v' || c == 'V') && ai_task == NULL) {
-        /* V (either case) starts a 5 s voice take; the keyboard's MIC
-         * key doubles as SPACE in the normal layer, so it cannot be a
-         * distinct trigger (keymap, issue_list 1.3) */
+        /* V (either case) also starts a take when the input is empty */
         const char *text = lv_textarea_get_text(input_ta);
         if (!text || text[0] == '\0') {
             start_voice_record();
