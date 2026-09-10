@@ -26,6 +26,7 @@ import urllib.request
 from datetime import date, timezone
 
 from cryptography import x509
+from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.serialization import (
     Encoding, PublicFormat)
 
@@ -45,7 +46,25 @@ REQUIRED_SUBJECT = [
     "CN=GTS Root R4",                         # openrouter.ai
     "OU=GlobalSign Root CA - R3",             # dashscope.aliyuncs.com (via R46)
     "CN=DigiCert Global Root G2",             # tokenhub.tencentmaas.com
+    # 2026-09-10 finding: servers fronted by Google send the CROSS-SIGNED
+    # GTS Root R4 (issuer = the 1998 GlobalSign Root CA) as the chain top;
+    # esp_crt_bundle's callback anchors on the TOP cert's ISSUER, and
+    # Mozilla has retired the old GlobalSign R1 - so cacert.pem alone can
+    # never satisfy those chains (device X509 fatal on openrouter.ai).
+    "CN=GlobalSign Root CA,OU=Root CA,O=GlobalSign nv-sa,C=BE",  # extra root
 ]
+
+# Roots beyond the Mozilla set, PEM files in scripts/extra_roots/*.pem.
+# The old GlobalSign R1 (still valid 1998-2028, trusted by the major
+# platform stores) is the anchor for every cross-signed GTS root chain
+# (openrouter.ai etc.). Pinned by SHA-256 fingerprint at load time.
+EXTRA_ROOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "extra_roots")
+EXTRA_ROOT_SHA256 = {
+    # CN=GlobalSign Root CA (1998 R1), secure.globalsign.com/cacert/root-r1.crt
+    "globalsign-root-r1.pem":
+        "EBD41040E4BB3EC742C9E381D31EF2A41A48B6685C96E7CEF3C1DF6CD4331C99",
+}
 
 
 def load_pems(path):
@@ -77,6 +96,24 @@ def main():
         spki = cert.public_key().public_bytes(
             Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
         entries.append((subject, spki, cert.subject.rfc4514_string()))
+
+    # extra roots (fingerprint-pinned) beyond the Mozilla set
+    if os.path.isdir(EXTRA_ROOT_DIR):
+        for fn in sorted(os.listdir(EXTRA_ROOT_DIR)):
+            if not fn.endswith(".pem"):
+                continue
+            path = os.path.join(EXTRA_ROOT_DIR, fn)
+            cert = x509.load_pem_x509_certificate(open(path, "rb").read())
+            fp = cert.fingerprint(SHA256()).hex().upper()
+            want = EXTRA_ROOT_SHA256.get(fn)
+            assert want, f"{fn}: no pinned fingerprint in EXTRA_ROOT_SHA256"
+            assert fp == want, f"{fn}: fingerprint {fp} != pin {want}"
+            subject = cert.subject.public_bytes(Encoding.DER)
+            spki = cert.public_key().public_bytes(
+                Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+            entries.append((subject, spki, cert.subject.rfc4514_string()))
+            print(f"extra root: {fn} ({cert.subject.rfc4514_string()}) "
+                  f"fp ok")
 
     entries.sort(key=lambda e: e[0])        # memcmp order for binary search
     for a, b in zip(entries, entries[1:]):  # binary search needs strict order
