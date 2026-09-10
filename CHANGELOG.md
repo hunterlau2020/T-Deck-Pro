@@ -3,6 +3,28 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-11（第二批：AI Chat 语音全链路）
+
+- **AI Chat 语音链路重构并全链路跑通**（`c3eb661..8409527`，真机最终验
+  收"所有问题解决"）：去 Google 化——ASR 走 MiniMax `speech_to_text`
+  （multipart，curl 风格横线边界、不带 response_format 否则 400）、对话
+  直连 MiniMax M3（`api.minimax.io/v1`，AI Config minimax 条目优先、
+  env `MINIMAX_AUDIO_KEY` 兜底）、TTS 走 `t2a_v2`（hex mp3 流式落
+  PSRAM→SPIFFS→`connecttoFS`）。**MIC 键=按住说话**（按下录音提示、松
+  开进入 Waiting；键位 (3,6) 双机实测一致，正常层专属码 `'\f'`）。
+- **途中修复的一串坑**：① 96/79 字符上限把 126 字符的 sk-api key 截成
+  95/79（env 解析 val、resolve_chat_cfg 的 k[96]、AI Config 输入框，最
+  后一处漏网靠三行判据日志锁定）；② provider 表 minimax 默认 base 是国
+  内域 minimaxi.com，sk-api key 在那里 401——默认改 `api.minimax.io`；
+  ③ minimax.io 对"无 key"与"坏 key"回同一段 1004 文案，易误判为请求格
+  式错误；④ M3 回复带 `<think>` 思考块，统一剥离（否则原话被挤出屏幕、
+  TTS 念标签汤）；⑤ **光标闪烁→EPD 局部刷新阻塞主循环→音频泵断粮**：
+  app 内 TTS 断续噪声、退出反而清晰——关光标闪烁 + 播放期抑制 EPD 刷
+  新（退出钩子兜底释放）；⑥ 发送等待弹窗（AI Text 同款）补齐，录音阶
+  段不再被"Waiting server reply"误导。
+- **文档/工具**：键盘双机映射复测（附表更新，`baf2e86`）；openai_chat
+  打印实际端点+key 长度、env 解析打印各项长度（判据日志常驻）。
+
 ## 2026-09-11
 
 - **§3.3 推翻：4G 批次（机 #1）音频输出可用**：机 #1 刷入含
