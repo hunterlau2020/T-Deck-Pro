@@ -9,6 +9,7 @@ A PDA (Personal Digital Assistant) firmware for the **LilyGo T-Deck Pro v1.1** b
 - **Keyboard**: TCA8418 4×10 matrix with sym/alt modifiers
 - **Touch**: CST226SE capacitive (HYN driver)
 - **Peripherals**: SX1262 LoRa, GPS, BHI260AP IMU, BQ25896/BQ27220 power, DRV2605 haptic, A7682E GSM, PCM5102A audio (**4G/A7682E 版无 PCM5102A DAC**——耳机孔无 I2S 输出，MP3 播放不可行，见 issue_list §3.3)
+- **测试机 #2**（2026-08-29 入池，COM6）：**V1.1 音频选配版**——有 DRV2605（V1.1 批次特征）、**无 A7682E**（AT 无响应 + 原厂固件菜单门控把 A7682E 项替换为 PCM5012 app）、**PCM5102A 实测出声**（耳机播放 `/iphone_call.mp3`）。触摸为 CST328 @0x1a（机 #1 是 Hynitron CST66xx/hyn 驱动；两者同地址不同驱动，LilyGo issue #37）。TTS 播放硬件路径在本机可用，见 issue_list §16
 - **SD card**: FAT16/FAT32 only（exFAT/NTFS 挂载失败显示 0MB，About System 屏有 `SD hint` 提示）；FAT32 上限 2TB，>32GB 卡需第三方工具格式化
 
 ## Key Functions
