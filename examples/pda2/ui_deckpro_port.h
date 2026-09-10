@@ -169,6 +169,7 @@ void ui_shutdown_on(void);
 // [ screen 10 ] --- A7682E
 bool ui_pcm5102_cb(const char *at_cmd);void ui_pcm5102_stop(void);
 void ui_pcm5102_stop(void);
+void ui_pcm5102_play_tone(void);
 
 // [ screen 12 ] --- Motor
 void ui_motor_loop(int i);

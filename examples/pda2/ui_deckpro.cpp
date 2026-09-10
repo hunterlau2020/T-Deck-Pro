@@ -3084,7 +3084,14 @@ static void test_scr_event(lv_event_t *e)
 {
     ui_test_handle *h = (ui_test_handle *)e->user_data;
 
-    if ((e->code == LV_EVENT_CLICKED) && h && (h->sub_id >= 0)) {
+    if (e->code != LV_EVENT_CLICKED || !h) return;
+
+    /* PCM5102A has no sub-screen; tapping it plays the generated tone so
+     * the PASS status is backed by an actual sound (on the 4G variant the
+     * rail is dead and it stays silent - issue_list 3.3). */
+    if (h->peri_id == E_PERI_PCM5102A) ui_pcm5102_play_tone();
+
+    if (h->sub_id >= 0) {
         scr_mgr_push(h->sub_id, false);
     }
 }

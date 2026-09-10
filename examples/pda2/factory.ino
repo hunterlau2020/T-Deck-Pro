@@ -543,13 +543,44 @@ bool pcm5102a_init(void)
 {
     bool ret = audio.setPinout(BOARD_I2S_BCLK, BOARD_I2S_LRC, BOARD_I2S_DOUT);
 
-    if (ret == false) 
+    if (ret == false)
         Serial.printf("[%d] Execution error\n", __LINE__);
 
     audio.setVolume(21); // 0...21
 
     pinMode(BOARD_6609_EN, OUTPUT);
     digitalWrite(BOARD_6609_EN, HIGH);
+
+    /* One-time 0.4 s / 440 Hz cue so the Test screen's PCM5102A row has
+     * something to play (user request 2026-09-10: tapping it must sound).
+     * 44.1 kHz stereo - the only playback domain proven audible on the
+     * audio-variant board (issue_list 16.1 rule 4). SPIFFS is mounted
+     * earlier in setup() than the peri-init pass. */
+    if (SPIFFS.begin(false) && !SPIFFS.exists("/pcmtone.wav")) {
+        const uint32_t sr = 44100;
+        const uint32_t frames = sr * 2 / 5;
+        File f = SPIFFS.open("/pcmtone.wav", FILE_WRITE);
+        if (f) {
+            uint8_t h[44];
+            uint32_t data = frames * 4;
+            memcpy(h, "RIFF", 4);        *(uint32_t *)(h + 4) = 36 + data;
+            memcpy(h + 8, "WAVE", 4);
+            memcpy(h + 12, "fmt ", 4);   *(uint32_t *)(h + 16) = 16;
+            *(uint16_t *)(h + 20) = 1;   *(uint16_t *)(h + 22) = 2;
+            *(uint32_t *)(h + 24) = sr;  *(uint32_t *)(h + 28) = sr * 4;
+            *(uint16_t *)(h + 32) = 4;   *(uint16_t *)(h + 34) = 16;
+            memcpy(h + 36, "data", 4);   *(uint32_t *)(h + 40) = data;
+            f.write(h, 44);
+            for (uint32_t i = 0; i < frames; i++) {
+                int16_t v = (int16_t)(25000 * sin(2 * PI * 440 * i / sr));
+                uint8_t b[4] = {(uint8_t)v, (uint8_t)(v >> 8),
+                                (uint8_t)v, (uint8_t)(v >> 8)};
+                f.write(b, 4);
+            }
+            f.close();
+            Serial.println("[PCM] test tone written to /pcmtone.wav");
+        }
+    }
 
     // audio_paly_flag = audio.connecttoFS(SD, "/voice_time/BBIBBI.mp3");
 

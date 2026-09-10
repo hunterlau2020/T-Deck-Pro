@@ -663,6 +663,22 @@ void ui_shutdown_on(void)
     Serial.println("Shutdown .....");
 }
 
+/* Test-screen tap (user request 2026-09-10): actually sound the DAC -
+ * the row used to show boot status only, which read as "no audio". The
+ * tone is generated once at boot by pcm5102a_init(); the main loop's
+ * audio.loop() pumps the playback. */
+void ui_pcm5102_play_tone(void)
+{
+    extern Audio audio;
+    if (!peri_init_st[E_PERI_PCM5102A]) return;
+    if (!SPIFFS.exists("/pcmtone.wav")) {
+        Serial.println("[PCM] /pcmtone.wav missing - no tone");
+        return;
+    }
+    bool ok = audio.connecttoFS(SPIFFS, "/pcmtone.wav");
+    Serial.printf("[PCM] tone play: %d\n", ok ? 1 : 0);
+}
+
 //************************************[ screen 10 ]****************************************** PCM5102
 bool ui_pcm5102_cb(const char *at_cmd)
 {
