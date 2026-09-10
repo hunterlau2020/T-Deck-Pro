@@ -771,6 +771,22 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
     bool ok = (content != NULL) && cJSON_IsString(content) && content->valuestring != NULL;
     if (ok) {
         out = content->valuestring;
+        /* Reasoning models (MiniMax-M3 etc.) prefix their chain of thought
+         * with <think>...</think> - strip it or the UI buries the user's
+         * line and TTS reads the tag soup (device report 2026-09-11). */
+        size_t think = out.find("<think>");
+        if (think != string::npos) {
+            size_t end = out.find("</think>", think);
+            if (end != string::npos) {
+                out.erase(think, end + 8 - think);
+            } else {
+                out.erase(think);          /* unterminated: keep the tail after
+                                             * the reply would be garbage anyway */
+            }
+            /* trim leading whitespace/newlines left behind */
+            size_t first = out.find_first_not_of(" \t\r\n");
+            if (first != string::npos) out.erase(0, first);
+        }
     } else {
         out = "Invalid API response (no content)";
         Serial.println("[AI] fail: response has no choices[0].message.content");
