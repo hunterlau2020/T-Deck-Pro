@@ -12,6 +12,7 @@
 #include "ui_deckpro_port.h"
 #include "pdm_recorder.h"
 #include "minimax_audio.h"
+#include "env_secrets.h"
 #include "openai_api.h"
 
 #include <WiFi.h>
