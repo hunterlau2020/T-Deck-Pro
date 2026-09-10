@@ -9,6 +9,7 @@ hardware/T-Deckpro 24-01-08
 hardware/T-Deckpro 23-09-28/
 script/*
 !script/set_srcdir.py
+!script/flash_backup.py
 build
 firmware/\[H693\] T-Deck-Pro test/
 docs/image_source/img_start - 副本.xcf
@@ -18,3 +19,6 @@ config_keys.h
 
 # Device-side secrets backups (never commit)
 env.cfg
+
+# Full-flash backup dumps (16MB binaries, never commit)
+backups/
