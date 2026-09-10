@@ -134,6 +134,44 @@ bool pdm_record_wav(int duration_sec, int sample_rate, uint8_t **wav_out, size_t
     int actual_samples = (offset - 44) / 2;
     write_wav_header(wav, sample_rate, actual_samples);
 
+    /* Post-chain, device+STT proven 2026-09-10 (issue_list 16.1): the mic
+     * is ~25 dB deaf and rides on a -1494 DC pedestal. Strip DC + 200 Hz
+     * one-pole high-pass + normalize to ~91% FS (24x cap) - exactly the
+     * chain GLM-ASR transcribed letter-perfect. */
+    {
+        int16_t *s = (int16_t *)(wav + 44);
+        int n = actual_samples;
+        if (n > 2) {
+            int64_t sum = 0;
+            for (int i = 0; i < n; i++) sum += s[i];
+            double mean = (double)sum / n;
+
+            double lp = 0.0;
+            const double hp_a = exp(-2.0 * M_PI * 200.0 / sample_rate);
+            for (int i = 0; i < n; i++) {
+                double x = s[i] - mean;
+                lp = lp * hp_a + x * (1.0 - hp_a);
+                s[i] = (int16_t)lround(x - lp);
+            }
+
+            int32_t peak = 1;
+            for (int i = 0; i < n; i++) {
+                int32_t a = s[i] < 0 ? -s[i] : s[i];
+                if (a > peak) peak = a;
+            }
+            double gain = 30000.0 / peak;
+            if (gain > 24.0) gain = 24.0;
+            for (int i = 0; i < n; i++) {
+                int32_t v = (int32_t)lround(s[i] * gain);
+                if (v > 32000) v = 32000;
+                if (v < -32000) v = -32000;
+                s[i] = (int16_t)v;
+            }
+            Serial.printf("[PDM] post: dc=%.1f peak=%d gain=%.1fx\n",
+                          mean, peak, gain);
+        }
+    }
+
     *wav_out = wav;
     *wav_len = offset;
     Serial.printf("[PDM] Recorded %zu bytes (%d samples)\n", offset, actual_samples);
@@ -142,10 +180,10 @@ bool pdm_record_wav(int duration_sec, int sample_rate, uint8_t **wav_out, size_t
 
 void pdm_restore_audio(void)
 {
-    /* Re-init I2S for audio output is handled by the Audio library
-     * when audio.connecttoFS or similar is called next.
-     * Nothing needed here — the Audio library re-installs I2S on demand. */
-    Serial.println("[PDM] Audio restored (I2S freed for audio player)");
+    /* Note: the Audio lib does NOT reinstall its I2S driver - recording
+     * killed it. Callers must run the ensure_audio_init() rebuild (ctor-
+     * replica recipe, issue_list 16.1 rule 2) before the next playback. */
+    Serial.println("[PDM] Audio port freed for the player (rebuild first)");
 }
 
 #else

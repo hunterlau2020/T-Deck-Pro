@@ -216,17 +216,25 @@ static void ensure_audio_init()
 {
     Serial.println("[VoiceAI] Re-initializing audio...");
 
-    /* The Audio library's internal I2S handle is stale after PDM recording.
-     * We must install a basic I2S TX driver so setPinout has a valid handle.
-     * The Audio library will reconfigure it as needed for playback. */
+    /* The Audio lib installs its I2S_NUM_0 TX driver ONCE in its ctor and
+     * never reinstalls it; PDM recording needs the same port and kills it.
+     * Rebuild field-for-field like the ctor (16000 Hz, RIGHT_LEFT,
+     * tx_desc_auto_clear=true, APLL off) - the previous hand-rolled config
+     * (44100, no auto-clear) decoded fine but stayed SILENT. Recipe is
+     * device-proven on the audio-variant board 2026-09-10, issue_list
+     * §16.1 rule 2. */
     i2s_config_t cfg = {};
     cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
-    cfg.sample_rate = 44100;
+    cfg.sample_rate = 16000;
     cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
     cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
     cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
     cfg.dma_buf_count = 8;
     cfg.dma_buf_len = 1024;
+    cfg.use_apll = false;
+    cfg.tx_desc_auto_clear = true;
+    cfg.fixed_mclk = I2S_PIN_NO_CHANGE;
 
     esp_err_t err = i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL);
     Serial.printf("[VoiceAI] i2s_driver_install: %s\n", esp_err_to_name(err));
