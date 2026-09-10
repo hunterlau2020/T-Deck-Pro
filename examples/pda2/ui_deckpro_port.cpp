@@ -682,8 +682,13 @@ void ui_pcm5102_play_tone(void)
 //************************************[ screen 10 ]****************************************** PCM5102
 bool ui_pcm5102_cb(const char *at_cmd)
 {
-    audio.connecttoFS(SPIFFS, "/iphone_call.mp3");
-    return true;
+    /* /iphone_call.mp3 was a stock-demo asset; it is gone on any unit
+     * whose SPIFFS was provisioned with env.cfg (machine #2, 2026-09-10)
+     * and the app went silent. Play the boot-generated tone instead, keep
+     * the old asset as a fallback for units that still carry it. */
+    const char *path = SPIFFS.exists("/pcmtone.wav") ? "/pcmtone.wav"
+                                                     : "/iphone_call.mp3";
+    return audio.connecttoFS(SPIFFS, path);
 }
 
 void ui_pcm5102_stop(void)
