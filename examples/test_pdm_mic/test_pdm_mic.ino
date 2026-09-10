@@ -3,11 +3,14 @@
  * @brief     PDM microphone probe with earphone playback (T-Deck-Pro).
  *
  * FINAL VERDICT (2026-09-10, v1..v11): the audio-variant board's PDM mic
- * is NOT usable - across ~200 6-second windows, GPIO41 high/low/floating,
- * both PDM half-bit streams and supervised close-talk, speech never rose
- * above the ambient electrical floor (per-second VU), while that floor
- * stayed constant (-1494 pedestal). Mic unpopulated or acoustically
- * ported nowhere; not firmware-fixable. Details: issue_list §16.1.
+ * IS populated and acoustically alive, but ~20-30 dB less sensitive than
+ * a normal mic. Ambient floor 150-650 counts; a close, loud sustained
+ * vowel lifts the whole window to 1450-3394 (first-ever SIGNAL verdict,
+ * gain 8.8x); room music is audible in the 16x-normalized playback.
+ * Normal-conversation voice (600-1300) overlaps the floor - which is why
+ * ~200 earlier windows read "quiet". Usable with loud close speech plus
+ * the digital gain chain; STT uplink quality still to be verified.
+ * Details: issue_list §16.1.
  *
  * Kept for the four audio rules it established (all needed by the future
  * letter-TTS feature):
