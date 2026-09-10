@@ -700,6 +700,17 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
             if (err_msg && cJSON_IsString(err_msg) && err_msg->valuestring) {
                 out = err_msg->valuestring;
             }
+            /* OpenRouter wraps the real cause in error.metadata.raw while
+             * message stays generic ("Provider returned error") - surface
+             * it so the user sees "rate-limited upstream" etc. instead of
+             * a dead end (device report 2026-09-11) */
+            cJSON *meta = err_obj ? cJSON_GetObjectItem(err_obj, "metadata") : NULL;
+            cJSON *raw = meta ? cJSON_GetObjectItem(meta, "raw") : NULL;
+            if (raw && cJSON_IsString(raw) && raw->valuestring[0] &&
+                out.find(raw->valuestring) == string::npos) {
+                out += " - ";
+                out += raw->valuestring;
+            }
             cJSON_Delete(err_root);
         }
         if (out.empty()) {

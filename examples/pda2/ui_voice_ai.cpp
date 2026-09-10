@@ -120,6 +120,70 @@ static void ui_post(int type, const char *text)
 
 static void start_tts();
 
+/* ---- send-wait overlay (user request 2026-09-11, same pattern as the
+ * AI Text app): pops on Send/Voice, countdown ticks on second changes
+ * only (EPD-friendly), stays with "still waiting..." until the worker
+ * task ends; ui_timer_cb hides it when ai_task clears. */
+static lv_obj_t *vai_waitbox = NULL;
+static lv_obj_t *vai_waitbox_body = NULL;
+static uint32_t vai_wait_t0 = 0;
+static uint32_t vai_wait_last = 99;
+
+static void vai_waitbox_hide(void)
+{
+    if (vai_waitbox) {
+        lv_obj_del(vai_waitbox);
+        vai_waitbox = NULL;
+        vai_waitbox_body = NULL;
+    }
+}
+
+static void vai_waitbox_show(void)
+{
+    vai_waitbox_hide();
+    vai_waitbox = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(vai_waitbox, 220, 110);
+    lv_obj_align(vai_waitbox, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(vai_waitbox, lv_color_white(), 0);
+    lv_obj_set_style_border_width(vai_waitbox, 1, 0);
+    lv_obj_set_style_border_color(vai_waitbox, lv_color_black(), 0);
+    lv_obj_set_style_radius(vai_waitbox, 6, 0);
+    lv_obj_set_style_pad_all(vai_waitbox, 8, 0);
+    lv_obj_clear_flag(vai_waitbox, LV_OBJ_FLAG_SCROLLABLE);
+
+    vai_waitbox_body = lv_label_create(vai_waitbox);
+    lv_obj_set_width(vai_waitbox_body, lv_pct(100));
+    lv_label_set_long_mode(vai_waitbox_body, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(vai_waitbox_body, "Waiting server reply... 15s");
+    lv_obj_set_style_text_font(vai_waitbox_body, &lv_font_montserrat_14, 0);
+    lv_obj_center(vai_waitbox_body);
+
+    vai_wait_t0 = millis();
+    vai_wait_last = 99;
+}
+
+static void vai_waitbox_tick(void)
+{
+    if (!vai_waitbox || !vai_waitbox_body) return;
+    int32_t remain = 15000 - (int32_t)(millis() - vai_wait_t0);
+    if (remain <= 0) {
+        if (vai_wait_last != 0) {
+            vai_wait_last = 0;
+            lv_label_set_text(vai_waitbox_body,
+                              "still waiting...\n(voice: rec+ASR+chat+TTS)");
+        }
+        return;
+    }
+    uint32_t secs = ((uint32_t)remain + 999) / 1000;
+    if (secs != vai_wait_last) {
+        vai_wait_last = secs;
+        char buf[48];
+        snprintf(buf, sizeof(buf), "Waiting server reply... %lus",
+                 (unsigned long)secs);
+        lv_label_set_text(vai_waitbox_body, buf);
+    }
+}
+
 static void ui_timer_cb(lv_timer_t *t)
 {
     ui_msg_t msg;
@@ -127,6 +191,12 @@ static void ui_timer_cb(lv_timer_t *t)
         if (msg.type == UI_MSG_APPEND) chat_append(msg.text);
         else if (msg.type == UI_MSG_STATUS) chat_show_status(msg.text);
         free(msg.text);
+    }
+
+    if (ai_task) {
+        vai_waitbox_tick();
+    } else if (vai_waitbox) {
+        vai_waitbox_hide();               /* worker finished */
     }
 
     if (tts_auto_read && ai_task == NULL) {
@@ -264,6 +334,7 @@ static void start_voice_record()
         chat_append("WiFi not connected.");
         return;
     }
+    vai_waitbox_show();
     xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 16384, NULL, 5, &ai_task, 0);
 }
 
@@ -372,8 +443,10 @@ static void do_send()
 
     char *prompt = strdup(text);
     lv_textarea_set_text(input_ta, "");
-    if (prompt)
+    if (prompt) {
+        vai_waitbox_show();
         xTaskCreatePinnedToCore(ai_text_task, "ai_text", 16384, prompt, 5, &ai_task, 0);
+    }
 }
 
 /* Keyboard */
@@ -394,13 +467,16 @@ void voiceai_keyboard_poll()
         }
         lv_textarea_add_char(input_ta, c);
         return;
-    } else if (c == 'v' && ai_task == NULL) {
+    } else if ((c == 'v' || c == 'V') && ai_task == NULL) {
+        /* V (either case) starts a 5 s voice take; the keyboard's MIC
+         * key doubles as SPACE in the normal layer, so it cannot be a
+         * distinct trigger (keymap, issue_list 1.3) */
         const char *text = lv_textarea_get_text(input_ta);
         if (!text || text[0] == '\0') {
             start_voice_record();
             return;
         }
-        lv_textarea_add_char(input_ta, c);
+        if (c == 'v') lv_textarea_add_char(input_ta, c);
         return;
     } else if (c == '\b') {
         const char *text = lv_textarea_get_text(input_ta);
