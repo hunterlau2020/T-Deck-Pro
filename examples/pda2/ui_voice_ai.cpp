@@ -210,16 +210,35 @@ static void ui_timer_cb(lv_timer_t *t)
     }
 }
 
-/* Chat endpoint resolution: IDENTICAL to the AI Text app - the AI Config
- * dual-slot storage with the env OPENROUTER_KEY fallback
- * (openai_load_config). The first cut used PenPal's provider-name chain
- * and reported "No AI provider configured" on any device that never made
- * a PenPal provider pick (device report 2026-09-11). */
+/* Chat endpoint resolution (user rule 2026-09-11): MiniMax DIRECT,
+ * 1. AI Config's minimax provider entry (base/model/key) when its key is
+ *    configured, else
+ * 2. /env.cfg MINIMAX_AUDIO_KEY with the international chat defaults.
+ * sk-api keys only work on api.minimax.io - the CN api.minimaxi.com
+ * rejects them with 401 (PC-verified 2026-09-11); configure the base
+ * accordingly when filling AI Config's minimax slot. */
 static bool resolve_chat_cfg(char *base, int base_len, char *model,
                              int model_len, char *key, int key_len)
 {
-    openai_load_config(base, base_len, model, model_len, key, key_len);
-    return key[0] != '\0';
+    char b[160], m[80], k[96];
+    if (ai_provider_get("minimax", b, sizeof(b), m, sizeof(m), k, sizeof(k))
+        && k[0]) {
+        strncpy(base, b, base_len - 1);
+        base[base_len - 1] = '\0';
+        strncpy(model, m, model_len - 1);
+        model[model_len - 1] = '\0';
+        strncpy(key, k, key_len - 1);
+        key[key_len - 1] = '\0';
+        return true;
+    }
+    if (!env_get("MINIMAX_AUDIO_KEY", k, sizeof(k)) || !k[0]) return false;
+    strncpy(base, "https://api.minimax.io/v1", base_len - 1);
+    base[base_len - 1] = '\0';
+    strncpy(model, "MiniMax-M3", model_len - 1);
+    model[model_len - 1] = '\0';
+    strncpy(key, k, key_len - 1);
+    key[key_len - 1] = '\0';
+    return true;
 }
 
 static void ai_text_task(void *param)
