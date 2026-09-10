@@ -168,7 +168,12 @@ static const ai_provider_internal_t s_providers[] = {
       "https://api.deepseek.com/v1",
       "deepseek-v4-flash",                "DEEPSEEK_KEY" },
     { "minimax",    "MiniMax",
-      "https://api.minimaxi.com/v1",
+      "https://api.minimax.io/v1",        /* INTERNATIONAL domain: sk-api
+                                           * keys 401 on the CN
+                                           * api.minimaxi.com (PC-verified
+                                           * 2026-09-11); /v1/chat/
+                                           * completions is OpenAI-
+                                           * compatible here */
       "MiniMax-M3",                       "MINIMAX_KEY" },
     { "qwen",       "Qwen",
       "https://dashscope.aliyuncs.com/compatible-mode/v1",
