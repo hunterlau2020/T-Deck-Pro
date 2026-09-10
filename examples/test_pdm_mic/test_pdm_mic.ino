@@ -44,6 +44,7 @@
 #include "Audio.h"
 #include "FS.h"
 #include "SPIFFS.h"
+#include "sample_audio.h"      /* embedded English shadowing sentence */
 
 #define MIC_DATA     17
 #define MIC_CLOCK    18
@@ -216,6 +217,13 @@ static bool pdm_record(void)
 }
 
 static double s_last_gain = 16.0;
+/* raw (pre-normalize) AC peak of the last take, measured over seconds
+ * 1..5 only - second 0 carries a boot/cue artifact peak (1000-1250) that
+ * would false-positive at realistic thresholds. The mic is ~25 dB deaf
+ * (16.1): a real read-aloud lands at ~1100-1600 counts, quiet ambient
+ * secs run 130-650 - threshold 900 splits them. */
+static int32_t s_raw_peak = 0;
+#define SPEECH_RAW_THRESHOLD 900
 
 /* DC-removal + gain normalization so the playback is audible regardless
  * of speech level: the raw PDM stream rides on a ~-1500 pedestal which
@@ -230,18 +238,34 @@ static void normalize_record(uint32_t data_bytes)
     for (int i = 0; i < n; i++) sum += s[i];
     double mean = (double)sum / n;
 
+    /* speech metric: AC peak over seconds 1..5 (skip the sec-0 artifact) */
+    int skip = SAMPLE_RATE;                    /* 1 s of samples */
     int32_t peak = 1;
-    for (int i = 0; i < n; i++) {
+    for (int i = skip; i < n; i++) {
         int32_t a = (int32_t)lround(s[i] - mean);
         if (a < 0) a = -a;
         if (a > peak) peak = a;
     }
 
-    double gain = 30000.0 / peak;               /* target ~91% FS */
-    if (gain > 16.0) gain = 16.0;               /* don't blow up silence */
-    s_last_gain = gain;
+    /* one-pole high-pass ~200 Hz: the noise floor is concentrated below
+     * the voice band, stripping it makes the playback voice stand out */
+    double lp = 0.0;
+    const double hp_a = exp(-2.0 * M_PI * 200.0 / SAMPLE_RATE);
     for (int i = 0; i < n; i++) {
-        int32_t v = (int32_t)lround((s[i] - mean) * gain);
+        double x = s[i] - mean;
+        lp = lp * hp_a + x * (1.0 - hp_a);
+        s[i] = (int16_t)lround(x - lp);
+    }
+
+    double gain = 30000.0 / peak;               /* target ~91% FS */
+    if (gain > 24.0) gain = 24.0;               /* don't blow up silence */
+    s_last_gain = gain;
+    s_raw_peak = peak;
+    for (int i = 0; i < n; i++) {
+        /* s[i] is ALREADY DC-free (the HPF pass subtracted the pedestal) -
+         * do not subtract mean again: v13 double-subtracted and clamped
+         * the whole take to constant +32000 */
+        int32_t v = (int32_t)lround(s[i] * gain);
         if (v > 32000) v = 32000;
         if (v < -32000) v = -32000;
         s[i] = (int16_t)v;
@@ -274,12 +298,14 @@ static void print_stats(void)
                   peak, rms, mean,
                   (unsigned)(zeros * 100 / n), (unsigned)(clipped * 100 / n),
                   (unsigned)(xings / REC_SECONDS));
-    if (s_last_gain < 15.0)
-        Serial.printf("[probe] VERDICT: SPEECH captured (gain %.1fx) - "
-                      "confirm by listening\n", s_last_gain);
+    if (s_raw_peak > SPEECH_RAW_THRESHOLD)
+        Serial.printf("[probe] VERDICT: SPEECH captured (raw peak %d > %d) - "
+                      "confirm by listening\n", s_raw_peak,
+                      SPEECH_RAW_THRESHOLD);
     else
-        Serial.println("[probe] VERDICT: quiet window - speak right after "
-                       "the long beep");
+        Serial.printf("[probe] VERDICT: quiet window (raw peak %d <= %d) - "
+                      "speak right after the long beep\n", s_raw_peak,
+                      SPEECH_RAW_THRESHOLD);
 }
 
 /* Upsample the normalized 16k mono capture to 44.1k stereo and write it -
@@ -392,6 +418,25 @@ static void make_cues(void)
      * was - make the verdict beeps long and loud */
     write_tone("/cue_play.wav", 988, 300, 2);   /* beep-beep: quiet window */
     write_tone("/cue_hit.wav", 988, 300, 3);    /* beep-beep-beep: VOICE */
+
+    /* shadowing sentence from PROGMEM to SPIFFS (once) */
+    if (!SPIFFS.exists("/sample_en.wav")) {
+        File f = SPIFFS.open("/sample_en.wav", FILE_WRITE);
+        if (f) {
+            uint8_t buf[4096];
+            size_t off = 0;
+            while (off < SAMPLE_EN_LEN) {
+                size_t n = SAMPLE_EN_LEN - off;
+                if (n > sizeof(buf)) n = sizeof(buf);
+                memcpy_P(buf, SAMPLE_EN_WAV + off, n);
+                f.write(buf, n);
+                off += n;
+            }
+            f.close();
+        }
+        Serial.printf("[probe] English sample written: %u bytes\n",
+                      (unsigned)SAMPLE_EN_LEN);
+    }
 }
 
 void setup()
@@ -453,24 +498,82 @@ static void play_gated(const char *path)
     audio_pad_release();
 }
 
-void loop()
+/* ---- shadowing take + serial command state machine (v12, user flow) ---- */
+static void run_take(void)
 {
-    Serial.println("\n[probe] --- cycle ---");
-    play_gated("/cue_rec.wav");             /* long beep: REC NOW */
-    delay(400);                             /* pad released already */
-    if (!pdm_record()) { delay(3000); return; }
+    Serial.println("\n[probe] === TAKE: listen to the English sentence ===");
+    play_gated("/sample_en.wav");
+    delay(300);
+    Serial.println("[probe] REPEAT it after the beep");
+    play_gated("/cue_rec.wav");             /* long beep: your turn */
+    delay(400);
+    if (!pdm_record()) return;
     normalize_record(REC_BYTES);
     print_stats();
-    if (!save_wav()) { delay(3000); return; }
-    /* audible verdict: 3 high beeps = voice in this window, then playback;
-     * 2 beeps = quiet window, skip listening */
-    bool speech = s_last_gain < 15.0;
+    if (!save_wav()) { Serial.println("[probe] save failed"); return; }
+    bool speech = s_raw_peak > SPEECH_RAW_THRESHOLD;
     play_gated(speech ? "/cue_hit.wav" : "/cue_play.wav");
-    /* v11 (user request): ALWAYS play the window back - the ear is the
-     * final judge of what the mic captured, hiss or voice */
-    Serial.println(speech ? "[probe] PLAYBACK - LISTEN (your voice)"
-                          : "[probe] PLAYBACK - ambient (hiss = quiet "
-                            "window)");
+    Serial.println("[probe] PLAYBACK of your take - listen");
     play_gated("/probe_mic.wav");
-    delay(3000);
+    Serial.println("\n[probe] TAKE COMPLETE (program stopped). "
+                   "Send R=retry  D=dump-to-PC  P=replay");
+}
+
+/* base64 dump of the last take between [DUMP]/[/DUMP] markers so the PC
+ * can capture and decode it (the shadowing-audio export path). */
+static void dump_last(void)
+{
+    uint32_t data;
+    memcpy(&data, wav_buf + 40, 4);
+    size_t len = 44 + data;
+    static const char b64[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    Serial.printf("[DUMP] %u\n", (unsigned)len);
+    char line[77];
+    int col = 0;
+    uint32_t acc = 0;
+    int bits = 0;
+    for (size_t i = 0; i < len; i++) {
+        acc = (acc << 8) | wav_buf[i];
+        bits += 8;
+        while (bits >= 6) {
+            bits -= 6;
+            line[col++] = b64[(acc >> bits) & 0x3F];
+            if (col == 76) {
+                line[col] = 0;
+                Serial.println(line);
+                Serial.flush();
+                delay(4);             /* CDC has no flow control - pace it
+                                       * (first attempt dropped ~17 lines) */
+                col = 0;
+            }
+        }
+    }
+    if (bits > 0) line[col++] = b64[(acc << (6 - bits)) & 0x3F];
+    if (col) {
+        line[col] = 0;
+        Serial.println(line);
+    }
+    Serial.println("[/DUMP]");
+    Serial.println("[probe] dump done");
+}
+
+static bool s_first_take = true;
+
+void loop()
+{
+    if (s_first_take) {                  /* user flow: one take, then stop */
+        s_first_take = false;
+        run_take();
+        return;
+    }
+    if (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == 'R') run_take();
+        else if (c == 'P') {
+            Serial.println("[probe] replay:");
+            play_gated("/probe_mic.wav");
+        } else if (c == 'D') dump_last();
+    }
+    delay(20);
 }
