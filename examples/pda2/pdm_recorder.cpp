@@ -88,6 +88,18 @@ static void write_wav_header(uint8_t *buf, int sample_rate, int num_samples)
 
 bool pdm_record_wav(int duration_sec, int sample_rate, uint8_t **wav_out, size_t *wav_len)
 {
+    return pdm_record_wav_hold(duration_sec, sample_rate, wav_out, wav_len,
+                               NULL);
+}
+
+/* Hold-to-talk variant (user request 2026-09-11): records up to
+ * duration_sec but stops early once stop_when(elapsed_ms) returns true
+ * (after a 700 ms minimum). Used with keypad_mic_held() so releasing
+ * the MIC key ends the take; NULL predicate = fixed-length take. */
+bool pdm_record_wav_hold(int duration_sec, int sample_rate,
+                         uint8_t **wav_out, size_t *wav_len,
+                         bool (*stop_when)(uint32_t elapsed_ms))
+{
     *wav_out = NULL;
     *wav_len = 0;
 
@@ -112,10 +124,17 @@ bool pdm_record_wav(int duration_sec, int sample_rate, uint8_t **wav_out, size_t
     i2s_read(I2S_PORT, flush_buf, sizeof(flush_buf), &flush_read, portMAX_DELAY);
 
     /* Record */
-    Serial.printf("[PDM] Recording %d sec at %d Hz...\n", duration_sec, sample_rate);
+    Serial.printf("[PDM] Recording up to %d sec at %d Hz...\n",
+                  duration_sec, sample_rate);
+    uint32_t t0 = millis();
     size_t offset = 44;
     size_t remaining = total_bytes;
     while (remaining > 0) {
+        if (stop_when && millis() - t0 > 700 && stop_when(millis() - t0)) {
+            Serial.printf("[PDM] early stop at %lu ms\n",
+                          (unsigned long)(millis() - t0));
+            break;
+        }
         size_t to_read = remaining > 4096 ? 4096 : remaining;
         size_t bytes_read = 0;
         esp_err_t err = i2s_read(I2S_PORT, wav + offset, to_read, &bytes_read, pdMS_TO_TICKS(1000));

@@ -56,6 +56,9 @@ const char keymap_shift[KEYPAD_ROWS][KEYPAD_COLS] = {
 #define KEY_SHIFT_R_COL 9   /* bottom-row right Shift */
 #define KEY_SYM_ROW     3
 #define KEY_SYM_COL     8
+#define KEY_MIC_ROW     3
+#define KEY_MIC_COL     6   /* emits '' in the normal layer; tracked for
+                             * hold-to-talk (keypad_mic_held) */
 
 Adafruit_TCA8418 keypad;
 keypad_cb keypad_listener = NULL;
@@ -155,6 +158,13 @@ extern "C" void keypad_clear_chars(void)
     Serial.printf("[KBD] char fifo cleared (screen switch, hw flushed %u)\n", flushed);
 }
 
+static volatile bool mic_held = false;
+
+bool keypad_mic_held(void)
+{
+    return mic_held;
+}
+
 void keypad_loop(void)
 {
     /* Drain the whole FIFO each pass: during slow operations (e.g. WiFi
@@ -193,6 +203,10 @@ void keypad_loop(void)
             alt_pressed = pressed;
             Serial.printf("[KBD] alt=%d\n", alt_pressed);
             continue;
+        }
+
+        if (row == KEY_MIC_ROW && col == KEY_MIC_COL) {
+            mic_held = pressed;          /* fall through: PRESS emits '' */
         }
 
         if (row == KEY_SHIFT_L_ROW && col == KEY_SHIFT_L_COL) {

@@ -48,6 +48,7 @@ int keypad_get_val(char *c);
 void keypad_loop(void);
 void keypad_regetser_cb(keypad_cb cb);
 void keypad_set_flag(void);
+bool keypad_mic_held(void);   /* MIC key currently held (hold-to-talk) */
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -36,7 +36,7 @@ static char *last_response = NULL;
 extern Audio audio;
 
 /* Thread-safe UI queue */
-enum { UI_MSG_APPEND = 1, UI_MSG_STATUS = 2 };
+enum { UI_MSG_APPEND = 1, UI_MSG_STATUS = 2, UI_MSG_WAITBOX = 3 };
 struct ui_msg_t { int type; char *text; };
 static QueueHandle_t ui_queue = NULL;
 static lv_timer_t *ui_timer = NULL;
@@ -191,6 +191,7 @@ static void ui_timer_cb(lv_timer_t *t)
     while (xQueueReceive(ui_queue, &msg, 0) == pdTRUE) {
         if (msg.type == UI_MSG_APPEND) chat_append(msg.text);
         else if (msg.type == UI_MSG_STATUS) chat_show_status(msg.text);
+        else if (msg.type == UI_MSG_WAITBOX) vai_waitbox_show();
         free(msg.text);
     }
 
@@ -233,6 +234,7 @@ static bool resolve_chat_cfg(char *base, int base_len, char *model,
         return true;
     }
     if (!env_get("MINIMAX_AUDIO_KEY", k, sizeof(k)) || !k[0]) return false;
+    Serial.printf("[VoiceAI] chat key: env.cfg (len %d)\n", (int)strlen(k));
     strncpy(base, "https://api.minimax.io/v1", base_len - 1);
     base[base_len - 1] = '\0';
     strncpy(model, "MiniMax-M3", model_len - 1);
@@ -275,8 +277,17 @@ static void ai_text_task(void *param)
     vTaskDelete(NULL);
 }
 
+static bool mic_released(uint32_t elapsed_ms)
+{
+    (void)elapsed_ms;
+    return !keypad_mic_held();
+}
+
+/* param: NULL = fixed 5 s take (V key); non-NULL = hold-to-talk on the
+ * MIC key - record while held (max 10 s), stop 700 ms minimum. */
 static void ai_voice_task(void *param)
 {
+    const bool hold = (param != NULL);
     char akey[160];
     if (!minimax_audio_key(akey, sizeof(akey))) {
         ui_post(UI_MSG_APPEND,
@@ -285,13 +296,19 @@ static void ai_voice_task(void *param)
         vTaskDelete(NULL);
         return;
     }
-    ui_post(UI_MSG_STATUS, "Recording 5 sec...");
+    ui_post(UI_MSG_STATUS, hold ? "Recording... release MIC to send"
+                                : "Recording 5 sec...");
     ui_post(UI_MSG_APPEND, "> [Voice recording]");
 
     uint8_t *wav = NULL;
     size_t wav_len = 0;
-    bool ok = pdm_record_wav(5, 16000, &wav, &wav_len);
+    bool ok = hold
+        ? pdm_record_wav_hold(10, 16000, &wav, &wav_len, mic_released)
+        : pdm_record_wav(5, 16000, &wav, &wav_len);
     pdm_restore_audio();
+    /* network stages from here on - this is where the wait overlay
+     * belongs (user feedback 2026-09-11: it must not cover recording) */
+    ui_post(UI_MSG_WAITBOX, "");
 
     char text[256] = "";
     if (ok && wav && wav_len > 0) {
@@ -347,15 +364,17 @@ static void ai_voice_task(void *param)
     vTaskDelete(NULL);
 }
 
-static void start_voice_record()
+static void start_voice_record(bool hold)
 {
     if (ai_task) return;
     if (WiFi.status() != WL_CONNECTED) {
         chat_append("WiFi not connected.");
         return;
     }
-    vai_waitbox_show();
-    xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 16384, NULL, 5, &ai_task, 0);
+    if (!hold) vai_waitbox_show();   /* hold-to-talk: waitbox only after
+                                      * the take, posted by the task */
+    xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 16384,
+                            hold ? (void *)1 : NULL, 5, &ai_task, 0);
 }
 
 static void ensure_audio_init()
@@ -489,13 +508,13 @@ void voiceai_keyboard_poll()
         return;
     } else if (c == '\f') {
         /* dedicated MIC-key code (keymap (3,6), like '\v' for volume):
-         * always starts a 5 s voice take - it never inserts text */
-        if (ai_task == NULL) start_voice_record();
+         * hold-to-talk - record while held, release to send */
+        if (ai_task == NULL) start_voice_record(true);
     } else if ((c == 'v' || c == 'V') && ai_task == NULL) {
-        /* V (either case) also starts a take when the input is empty */
+        /* V (either case) also starts a fixed 5 s take when empty */
         const char *text = lv_textarea_get_text(input_ta);
         if (!text || text[0] == '\0') {
-            start_voice_record();
+            start_voice_record(false);
             return;
         }
         if (c == 'v') lv_textarea_add_char(input_ta, c);

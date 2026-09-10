@@ -19,6 +19,15 @@
 bool pdm_record_wav(int duration_sec, int sample_rate, uint8_t **wav_out, size_t *wav_len);
 
 /**
+ * @brief Hold-to-talk variant: records up to duration_sec, stopping
+ *        early once stop_when(elapsed_ms) returns true (700 ms minimum
+ *        enforced). NULL predicate = fixed-length take.
+ */
+bool pdm_record_wav_hold(int duration_sec, int sample_rate,
+                         uint8_t **wav_out, size_t *wav_len,
+                         bool (*stop_when)(uint32_t elapsed_ms));
+
+/**
  * @brief Re-initialize the I2S audio player after PDM recording.
  *        Call this after pdm_record_wav to restore audio output.
  */
