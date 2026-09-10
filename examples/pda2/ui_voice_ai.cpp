@@ -208,6 +208,7 @@ static void ui_timer_cb(lv_timer_t *t)
 
     if (tts_playing && !audio.isRunning()) {
         tts_playing = false;
+        ui_disp_suppress_flush(false);   /* release the EPD held during play */
         if (status_label) lv_label_set_text(status_label, "V:voice R:read Enter:text");
     }
 }
@@ -462,6 +463,10 @@ static void start_tts()
     bool ok = audio.connecttoFS(SPIFFS, "/tts.mp3");
     Serial.printf("[VoiceAI] TTS: play /tts.mp3 = %d\n", ok ? 1 : 0);
     tts_playing = ok;
+    /* any EPD flush while playing blocks audio.loop() for hundreds of ms
+     * and the take plays as choppy noise (same device report) - hold all
+     * flushes until the playback-end check in ui_timer_cb releases them */
+    if (tts_playing) ui_disp_suppress_flush(true);
 }
 
 static void do_send()
@@ -581,6 +586,10 @@ static void ai_create(lv_obj_t *parent)
     lv_textarea_set_placeholder_text(input_ta, "Ask anything...");
     lv_textarea_set_one_line(input_ta, true);
     lv_textarea_set_max_length(input_ta, 256);
+    /* no cursor blink: each blink redraws -> a blocking EPD partial flush
+     * every ~400 ms starves audio.loop() during TTS playback (device
+     * report 2026-09-11: choppy noise in-app, clean audio after exit) */
+    lv_textarea_set_cursor_blink_time(input_ta, 0);
     lv_obj_set_style_text_font(input_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
     response_page = 0;
@@ -589,7 +598,14 @@ static void ai_create(lv_obj_t *parent)
 }
 
 static void ai_entry(void) { ui_disp_full_refr(); }
-static void ai_exit(void) { ui_disp_full_refr(); }
+static void ai_exit(void)
+{
+    /* playback continues after exit (global audio object) - the timer
+     * that releases the flush suppression dies with the screen, so do
+     * it here or the EPD stays frozen app-wide */
+    ui_disp_suppress_flush(false);
+    ui_disp_full_refr();
+}
 static void ai_destroy(void)
 {
     ai_kbd_active = false;
