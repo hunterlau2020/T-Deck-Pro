@@ -1888,6 +1888,9 @@ static void wifi_scan_done_cb(arduino_event_id_t event, arduino_event_info_t inf
     }
 }
 static char wifi_scan_ssids[UI_WIFI_SCAN_ITEM_MAX][33];
+/* SSID tapped on the WIFI Scan screen, waiting for entry4_1 to drop it
+ * into slot 0's box (user request 2026-09-10: scan rows are links). */
+static char wifi_scan_pick_ssid[33] = {0};
 static int  wifi_scan_cnt = 0;                  // visible SSIDs from last scan
 static int  wifi_scan_idx = 0;                  // currently shown candidate
 static char wifi_ssid_pre_scan[65] = {0};       // box content before entering scan mode
@@ -2690,7 +2693,32 @@ static void create4_1(lv_obj_t *parent)
     wifi_cfg_kbd_active = true;
 }
 
-static void entry4_1(void) { ui_disp_full_refr(); }
+static void entry4_1(void)
+{
+    ui_disp_full_refr();
+    if (wifi_scan_pick_ssid[0]) {
+        /* a row was tapped on WIFI Scan: land on slot 0 with that SSID and
+         * the cursor in the password box */
+        if (wifi_cfg_slot != 0) {
+            wifi_cfg_set_slot(0);            /* masked-aware outgoing save */
+        } else {
+            wifi_scan_gen++;                 /* drop any in-flight scan */
+        }
+        lv_textarea_set_text(wifi_ssid_ta, wifi_scan_pick_ssid);
+        strncpy(wifi_ssid, wifi_scan_pick_ssid, sizeof(wifi_ssid) - 1);
+        wifi_ssid[sizeof(wifi_ssid) - 1] = '\0';
+        wifi_pass[0] = wifi_pass_real[0] = '\0';   /* new network: retype */
+        wifi_pass_masked = false;
+        lv_textarea_set_text(wifi_pass_ta, "");
+        wifi_cfg_scan_mode = false;
+        wifi_cfg_set_field(1);               /* next input is the password */
+        wifi_cfg_refresh_labels();
+        wifi_banner_show("Scan pick - enter password");
+        Serial.printf("[WiFi] scan pick: \"%s\" -> slot 0\n",
+                      wifi_scan_pick_ssid);
+        wifi_scan_pick_ssid[0] = '\0';
+    }
+}
 static void exit4_1(void) {
     /* The scan overlay/banner live on lv_layer_top() and would outlive a
      * plain push (exit runs, destroy does not): hide them so they don't
@@ -2890,6 +2918,7 @@ static scr_lifecycle_t screen4_1 = {
 #if 1
 static lv_obj_t *scr4_2_cont;
 static lv_obj_t *wifi_scan_lab;
+static lv_obj_t *wifi_scan_rows = NULL;      /* clickable link rows */
 static lv_timer_t *wifi_scan_timer = NULL;
 
 static ui_wifi_scan_info_t wifi_info_list[UI_WIFI_SCAN_ITEM_MAX];
@@ -2901,32 +2930,60 @@ static void scr4_2_btn_event_cb(lv_event_t * e)
     }
 }
 
+/* Row tap: carry the SSID over to WIFI Config slot 0 (entry4_1 applies it).
+ * user_data points into wifi_info_list[] - stable between refreshes, and we
+ * copy out immediately, so the next refresh can't invalidate it. */
+static void wifi_scan_row_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    const char *ssid = (const char *)lv_event_get_user_data(e);
+    if (!ssid || !ssid[0]) return;
+    strncpy(wifi_scan_pick_ssid, ssid, sizeof(wifi_scan_pick_ssid) - 1);
+    wifi_scan_pick_ssid[sizeof(wifi_scan_pick_ssid) - 1] = '\0';
+    scr_mgr_push(SCREEN4_1_ID, false);
+}
+
 static void show_wifi_scan(void)
 {
-#define BUFF_LEN 400
-    char buf[BUFF_LEN];
-    int ret = 0, offs = 0;
+    if (!wifi_scan_rows || !wifi_scan_lab) return;
 
-    ret = lv_snprintf(buf + offs, BUFF_LEN, "       NAME      | RSSI\n");
-    offs = offs + ret;
-    ret = lv_snprintf(buf + offs, BUFF_LEN, "-----------------------\n");
-    offs = offs + ret;
-
-    for(int i = 0; i < UI_WIFI_SCAN_ITEM_MAX; i++) {
-        if(strcmp(wifi_info_list[i].name, "") == 0 && wifi_info_list[i].rssi == 0)
-        {
+    lv_obj_clean(wifi_scan_rows);
+    int shown = 0;
+    for (int i = 0; i < UI_WIFI_SCAN_ITEM_MAX; i++) {
+        if (wifi_info_list[i].name[0] == '\0' && wifi_info_list[i].rssi == 0)
             break;
-        }
-        if(i == UI_WIFI_SCAN_ITEM_MAX - 1) {
-            ret = lv_snprintf(buf + offs, BUFF_LEN, "%-16.16s | %4d", wifi_info_list[i].name, wifi_info_list[i].rssi);
-            break;
-        }
 
-        ret = lv_snprintf(buf + offs, BUFF_LEN, "%-16.16s | %4d\n", wifi_info_list[i].name, wifi_info_list[i].rssi);
-        offs = offs + ret;
+        /* link-style row (penpal-home pattern): borderless click target,
+         * SSID left, RSSI right, hairline rule below */
+        lv_obj_t *row = lv_btn_create(wifi_scan_rows);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_size(row, 232, 30);
+        lv_obj_add_event_cb(row, wifi_scan_row_cb, LV_EVENT_CLICKED,
+                            wifi_info_list[i].name);
+        lv_obj_t *name = lv_label_create(row);
+        lv_obj_align(name, LV_ALIGN_TOP_LEFT, 2, 5);
+        lv_obj_set_width(name, 172);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
+        lv_label_set_text(name, wifi_info_list[i].name);
+        lv_obj_set_style_text_font(name, FONT_BOLD_MONO_SIZE_15, 0);
+
+        lv_obj_t *rssi = lv_label_create(row);
+        lv_obj_align(rssi, LV_ALIGN_TOP_RIGHT, -2, 5);
+        char rb[12];
+        snprintf(rb, sizeof(rb), "%ddB", wifi_info_list[i].rssi);
+        lv_label_set_text(rssi, rb);
+        lv_obj_set_style_text_font(rssi, FONT_BOLD_MONO_SIZE_15, 0);
+
+        lv_obj_t *sep = lv_obj_create(wifi_scan_rows);
+        lv_obj_remove_style_all(sep);
+        lv_obj_set_size(sep, 232, 1);
+        lv_obj_set_style_bg_color(sep, DECKPRO_COLOR_FG, 0);
+        lv_obj_set_style_bg_opa(sep, LV_OPA_COVER, 0);
+        shown++;
     }
-    lv_label_set_text(wifi_scan_lab, buf);
-#undef BUFF_LEN
+    lv_label_set_text(wifi_scan_lab,
+                      shown ? "Scanned APs - tap one to config"
+                            : "Scanning... (updates every 10s)");
 }
 
 static void wifi_scan_timer_event(lv_timer_t *t)
@@ -2956,10 +3013,21 @@ static void create4_2(lv_obj_t *parent)
     lv_obj_set_style_text_font(wifi_scan_lab, FONT_BOLD_MONO_SIZE_15, LV_PART_MAIN);
     lv_obj_set_style_border_width(wifi_scan_lab, 0, LV_PART_MAIN);
     lv_label_set_long_mode(wifi_scan_lab, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(wifi_scan_lab, "Scanning... (updates every 10s)");
+
+    /* scrollable stack of clickable AP rows (scr4_2_cont itself is fixed) */
+    wifi_scan_rows = lv_obj_create(scr4_2_cont);
+    lv_obj_set_width(wifi_scan_rows, lv_pct(100));
+    lv_obj_set_flex_grow(wifi_scan_rows, 1);
+    lv_obj_set_flex_flow(wifi_scan_rows, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(wifi_scan_rows, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(wifi_scan_rows, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_width(wifi_scan_rows, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(wifi_scan_rows, LV_OPA_TRANSP, LV_PART_MAIN);
 
     lv_obj_t *back4_label = scr_back_btn_create(parent, ("Wifi"), scr4_2_btn_event_cb);
 }
-static void entry4_2(void) 
+static void entry4_2(void)
 {
     ui_disp_full_refr();
     wifi_scan_timer = lv_timer_create(wifi_scan_timer_event, 10000, NULL);
@@ -2973,7 +3041,7 @@ static void exit4_2(void) {
     }
 }
 
-static void destroy4_2(void) { }
+static void destroy4_2(void) { wifi_scan_rows = NULL; wifi_scan_lab = NULL; }
 
 static scr_lifecycle_t screen4_2 = {
     .create = create4_2,
