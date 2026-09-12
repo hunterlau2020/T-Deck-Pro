@@ -5,6 +5,13 @@
 
 ## 2026-09-11（第二批：AI Chat 语音全链路）
 
+- **OTA 固件远程升级——设计稿待评审**（[`docs/ota-update-design.md`](
+  ota-update-design.md)）：核实 A/B 双槽 + 预编译 bootloader 已开回滚
+  开关；方案为 Settings 手动触发的 HTTPS OTA（清单 JSON + HTTPUpdate +
+  电量前置 + 新固件自证），三层失败模型（无操作回退/自动回滚/USB 兜底）。
+  含 6 项请评审重点（自动更新、自证点、明文限制、签名、组件选型、回滚
+  实测）。**未实施**，等专家评审后开工。
+
 - **AI Chat 语音链路重构并全链路跑通**（`c3eb661..8409527`，真机最终验
   收"所有问题解决"）：去 Google 化——ASR 走 MiniMax `speech_to_text`
   （multipart，curl 风格横线边界、不带 response_format 否则 400）、对话
