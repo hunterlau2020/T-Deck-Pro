@@ -24,3 +24,6 @@ env.cfg
 
 # Full-flash backup dumps (16MB binaries, never commit)
 backups/
+
+# ZCode session-local files (plans etc.)
+.zcode/
