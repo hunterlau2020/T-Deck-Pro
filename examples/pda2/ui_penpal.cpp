@@ -1127,6 +1127,11 @@ static void pp_cfg_provider_dd_cb(lv_event_t *e)
 void pp_cfg_prefill(void)
 {
     if (!s_cfg_base_ta) return;
+    /* focus state survives across page visits (static); every entry must
+     * re-sync it with the freshly refilled boxes, else Backspace edits the
+     * URL box while the user believes the cursor is in the key box
+     * (device report 2026-09-13) */
+    s_cfg_focus = PP_CFG_FOCUS_BASE;
     char base[PP_BASE_MAX], key[PP_KEY_MAX];
     pp_cfg_load(base, sizeof(base), key, sizeof(key));
     lv_textarea_set_text(s_cfg_base_ta, base);
