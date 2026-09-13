@@ -63,6 +63,11 @@
       单元直接编译测试（现 Python 镜像存在漂移风险，Cop 1.6）。
 - [ ] **音量键 `'\v'` 处理器**：Sym 层音量键目前仅被文本输入屏忽略，无音量 UI（issue_list 1.2）。
 - [ ] **麦克风键功能**：正常层麦克风键未接入录音功能（issue_list 1.3）。
+      （2026-09-13 部分更新：AI Chat 已绑定 MIC 键为按住说话；其余屏未接。）
+- [ ] **PenPal gate-pin 去 hardcode**：`X-Gate-Pin`（现 `49ef146ed5`，硬编码于
+      `penpal_api.cpp:168`）迁入配置链——NVS → `/env.cfg`（`GATE_PIN=`）→
+      现值作编译期兜底；与 Apache `Require expr` 侧同步轮换（部署文档
+      DEPLOY_APACHE.md；gate-pin 是防扫描纵深层，非安全边界，2026-09-13 决策）。
 - [ ] **Shutdown 观察项**（issue_list §6）：① 下次 shutdown 后插 USB 是否直接进系统
       （卡开机画面是否复现）；② 长按电源键 2-3s 能否唤醒；③ 复现卡死时抓串口日志；
       ④ 是否改为深度休眠（BOOT 键唤醒）——用户暂定"先观察再决定"。
