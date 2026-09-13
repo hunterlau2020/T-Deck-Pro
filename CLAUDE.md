@@ -30,6 +30,7 @@ These come from prior session memory and review rounds; treat them as hard rules
 | PenPal app design (v3.2), async model, §7 device-regression checklist | `docs/penpal-design.md` |
 | Working notes (EPD/touch/manual regression/latest review integration) | `docs/allinone-design.md` §11 |
 | Code review history (each round = paired request + result file under commit id) | `docs/reviews/wifi-config-keyboard-review-*` |
+| Review methodology (grading table / evidence rules / load-bearing invariants / request+result templates) | `docs/review_guide.md` |
 | Pin definitions and shared utilities | `examples/pda2/utilities.h`, `examples/factory/utilities.h` |
 | Menu / button grid / screen ID enum | `examples/pda2/ui_deckpro.{h,cpp}` |
 | NVS/SPIFFS storage layout | NVS `ai` (dual-slot `base.0/1`, `model.0/1`, `key.0/1` + `active` flip) and `ai_stats` (single usage blob) in `examples/pda2/openai_api.cpp`; NVS `wifi` (ssid/pass); SPIFFS `/chat.log` (+`.tmp`) and `/chat.draft` in `examples/pda2/ui_ai_chat.cpp` |

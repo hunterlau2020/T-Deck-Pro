@@ -24,7 +24,8 @@
 >    "证据类型 + 验证状态 + ⏸待用户实测"三件套替代（§3）。
 > 2. **缺陷域是嵌入式**——变砖/重启/堆损坏/busy 卡死/LVGL 池耗尽/8KB UI 栈溢出/
 >    凭据截断/EPD 阻塞实时路径/硬件变体差异，而非 IDOR/SQL 注入（§5、§6）。
-> 3. **多 reviewer 是 AI 模型**（Codex/Kimi/GPT/Copilot/Gemini/Claude/opencode），
+> 3. **多 reviewer 是 AI 模型**（按模型名：Codex/Kimi/GPT/Gemini/Claude/Grok/Qwen…；
+>    历史文件含 CLI 名 `opencode`/`copilot`，保留不改名），
 >    属主是用户本人——"证据 > 票数"在此尤其重要，模型分歧常见且需登记（§0.2、§9）。
 
 ---
@@ -111,7 +112,7 @@ CHANGELOG.md                                              每批工作的时点�
 TODO.md                                                   当前阻塞项 / 待真机回归清单 / 待结果申请
 docs/issue_list.md                                        canonical 修复台账（每条：状态 + 修复 committish）
 docs/reviews/<主题>-review-request-<range>.md                评审申请（含 commit id，不可变归档，防覆盖）
-docs/reviews/wifi-config-keyboard-review-result-<range>[-<reviewer>].md   单次评审结论
+docs/reviews/<主题>-review-result-<commit范围>[-<reviewer>].md   单次评审结论（commit 锚防跨轮覆盖；reviewer=模型名）
 ```
 
 ---
@@ -537,10 +538,16 @@ id，如 `acc3893`）。**绝不覆盖旧申请**；被吸收的旧申请 `git r
 
 ### 7.2 结果文件结构（承自本项目实际 + 参考 §5）
 
-文件名：`docs/reviews/wifi-config-keyboard-review-result-<commit范围>[-<reviewer>].md`
-（`<reviewer>` ∈ codex/kimi/gpt/copilot/gemini/claude/opencode；单评审可省后缀）。
+文件名：`docs/reviews/<主题>-review-result-<commit范围>[-<reviewer>].md`
+（**主题化前缀**与 §7.1 申请一致——正例 `penpal-pool-freeze-review-result-721e04a-qwen.md`、
+`ota-update-design-review-result-36e88df-codex.md`；`wifi-config-keyboard-*` 系列是历史
+文件保留原名，新结果**不再**沿用该前缀。`<commit范围>` = 被评审对象的首末 commit
+**含两端**，单 commit/单设计稿直接写 id——**强制不可省**：它是**跨轮防覆盖的锚**，
+同一主题的不同评审轮（如设计 v1 `36e88df` 与 v2 `be6a52c`）各得独立文件，绝不互相
+覆盖。`<reviewer>` = **评审模型名**（codex/kimi/gpt/gemini/claude/grok/qwen…，**不用
+CLI 名**；既存 `-opencode.md` 是历史 CLI 名文件，保留不改名），单评审可省后缀。
 **评审结果由评审方直接放入，绝不覆盖**（superseded 申请可合并进 range 申请，但结果
-永存）。
+永存；同一 reviewer 复审新版本 = 带新 commit 锚的**新文件**，不改旧文件）。
 
 ```markdown
 # 评审结果：<对象>（<reviewer>）
@@ -682,5 +689,6 @@ id，如 `acc3893`）。**绝不覆盖旧申请**；被吸收的旧申请 `git r
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.2 | 2026-09-13 | 结果文件名格式补全（触发问题：本轮 qwen 对 OTA 设计的评审结果落成 `ota-update-design-review-result-qwen.md`——**无 commit 锚**，而该设计已有 v1 `36e88df` / v2 `be6a52c` 两轮、codex 同轮文件为 `-36e88df-codex.md`，无锚文件名将与未来 v2-qwen 复审碰撞/覆盖，违反"绝不覆盖"）。修订：① §1.2 + §7.2 结果文件名由遗留 `wifi-config-keyboard-review-result-` 前缀改为与 §7.1 申请一致的**主题化前缀** `<主题>-review-result-<commit范围>[-<reviewer>].md`——**反例**：v1.1 只把 §7.1 申请改主题化、§7.2 结果仍留旧前缀，请求/结果命名不同步；**正例**：`penpal-pool-freeze-review-result-721e04a-qwen.md`、`ota-update-design-review-result-36e88df-codex.md`。② 明确 `<commit范围>` 为**强制 commit 锚**（跨轮防覆盖：v1/v2 各独立文件）。③ `<reviewer>` 改为**评审模型名**（codex/kimi/gpt/gemini/claude/grok/qwen…），**不用 CLI 名**——反例：旧列 `opencode`（CLI 名）；既存 `-opencode.md` 标为历史文件保留不改名。④ 同 reviewer 复审新版本 = 带新 commit 锚的新文件，不改旧文件。配套：把本轮无锚的 `ota-update-design-review-result-qwen.md` 经 `git mv` 改名 `…-36e88df-qwen.md` 并在 评审对象 行注明"针对 v1，v2 另起新文件"。 |
 | v1.1 | 2026-09-13 | 九条修订（触发问题均为"声明/纪律与仓库现实或参考源不符"，每条含正反例；独立复核 = 提出九条意见的三文档对比评审本身，2026-09-13）：① §0 差异 1 + §3.1："无 CI"改为"无自动化测试（构建矩阵 CI 仅编译冒烟）"——反例：旧文声明与 issue_list §7.1 的 `.github/workflows/platformio.yml` 矛盾；② §7.1 文件名改主题化前缀惯例——反例："所有主题沿用 wifi-config-keyboard-"与 `penpal-pool-freeze-review-request-721e04a.md` 矛盾；③ §4.2 补 MACAO §8.2"降级须注明回升触发条件"（正例：仅机#2 可达缺陷在机#1 刷音频变体后须回升）；④ 新增 §2.4 L4/G-发布 OPS 必测矩阵 8 行（承 MACAO §7.2——旧版 L4 仅一句"OPS 为 VERIFIED"，无逐行证据要求）；⑤ §9 补【文档对齐】三条（字段/键名一致性、代码块可执行、✅≠证据，承 MACAO §9 模式 A/D/B——正例：minimax 域名 401 即模式 A 实例）；⑥ §9 各块标注适用档（C/D/ALL）+ §1.1 设计稿行同步（旧版要求设计稿走全部 20 条，busy/队列等条目对 DOC 对象不可执行）；⑦ §0.3 小节去编号并修正引用（原编号序列 0.1/0.2 断档）；⑧ §4.2 静默表描述修正："A–D 整体上移一级、封顶 P1"对 A 行不成立（两表 A 行相同，最高 P0）；⑨ §6 反例库补 OTA 块 4 行（先行登记，实施后绑 §2.4 行 5/6/7 的 OPS 证据）。 |
 | v1.0 | 2026-09-13 | 首版。改编自 `docs/review_guide_reference/` 下后端评审指南 v2（裁决 v3.1）+ MACAO 评审方法论 v1.1：保留方法论内核（证据先行、证据>票数、后果×可达性定级、两轴标注、声明矩阵、反例库、门禁、自审、修订治理），领域内容整体重建为本项目现实——无 CI/无自动化测试（证据类型改 BUILD/SIM/PROBE/HW/OPS + ⏸待用户实测纪律）、嵌入式后果类（变砖/堆损坏/busy 卡死/池耗尽/8KB UI 栈/凭据截断/EPD 阻塞实时路径）、承重不变量清单（异步 IPC 契约 + UI 内存纪律 + LVGL/EPD + 秘密链 + 键盘/外设 + 硬件变体 + 实时路径）、反例库（异步/内存/掉电/网络/外设/实时/边界值）、申请/结果模板对齐 `docs/reviews/README.md` 实际惯例（commit 范围含两端、A/B/C 审批、≥10 分段、连续两轮全 ⏸ 标 High）。 |
