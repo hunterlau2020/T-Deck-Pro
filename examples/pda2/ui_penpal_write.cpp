@@ -490,6 +490,20 @@ static void ppw_top_back_cb(lv_event_t *e)
 }
 
 /* ---- keyboard (COMPOSE + TOPICS) ------------------------------------------ */
+/* Touch focus keeps the keypad editing the box the user tapped (same
+ * pattern as ai_cfg/penpal-cfg FOCUSED handlers). Default stays Body. */
+static void ppw_title_focus_cb(lv_event_t *e)
+{
+    (void)e;
+    s_focus_title = true;
+}
+
+static void ppw_body_focus_cb(lv_event_t *e)
+{
+    (void)e;
+    s_focus_title = false;
+}
+
 static void ppw_compose_key(char c)
 {
     lv_obj_t *ta = s_focus_title ? s_title_ta : s_body_ta;
@@ -611,6 +625,7 @@ static void ppw_compose_build(lv_obj_t *parent)
     lv_textarea_set_max_length(s_title_ta, 63);
     lv_textarea_set_one_line(s_title_ta, true);
     lv_obj_set_style_text_font(s_title_ta, &lv_font_montserrat_14, 0);
+    lv_obj_add_event_cb(s_title_ta, ppw_title_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     s_body_ta = lv_textarea_create(s_comp_page);
     lv_obj_set_size(s_body_ta, 180, 156);
@@ -618,6 +633,7 @@ static void ppw_compose_build(lv_obj_t *parent)
     lv_textarea_set_max_length(s_body_ta, 1000);
     lv_textarea_set_placeholder_text(s_body_ta, "Dear ...");
     lv_obj_set_style_text_font(s_body_ta, &lv_font_montserrat_14, 0);
+    lv_obj_add_event_cb(s_body_ta, ppw_body_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     s_send_btn = lv_btn_create(s_comp_page);
     lv_obj_set_size(s_send_btn, 50, 76);
