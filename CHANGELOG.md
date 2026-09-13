@@ -37,6 +37,18 @@
   `A7682E_init` 数值修正 8.4s；校准度量改最长喂狗间隔。自评③ 显式提请
   裁定"屏坏固件回滚"取舍。
 
+## 2026-09-13
+
+- **OTA 设计稿 v6 送复审**：v5 四方（Claude A 首个 L1 / Codex C / Grok C /
+  Qwen C）残余全收——结果队列改**指针传递**（worker new / 每拍排空 /
+  delete 恰一次，禁含 string 结构按值入队——Codex P1）；inflight/锁唯
+  一出口递减 + `xQueueOverwrite` 永不阻塞（Codex/Grok/Qwen P2/Nit）；
+  `factory.ino` loop 无条件排空（Grok P2）；TWDT add 失败守卫一致
+  （Codex P3）；规范化字节串编码钉死（Grok P3-1）；EPD 库内
+  `_busy_timeout` 纳入 T 下界 + SD 段补喂狗（Qwen P3-1/Grok P3-2）；
+  覆盖层全屏吸收触摸、§8.3 用例重写（Grok P3-3）；按 Qwen P2 撤销
+  "屏坏固件回滚"假声明、自证语义改为"软件刷新序列完成"。
+
 ## 2026-09-11（第二批：AI Chat 语音全链路）
 
 - **OTA 固件远程升级——设计稿待评审**（[`docs/ota-update-design.md`](
