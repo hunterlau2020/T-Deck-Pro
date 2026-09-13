@@ -1,6 +1,6 @@
 # T-Deck-Pro 评审指南（pda2 固件 Review Guide）
 
-> **版本**：v1.1（2026-09-13）
+> **版本**：v1.2（2026-09-13）
 > **状态**：生效规范。适用于 `examples/pda2`（及其依赖的 `examples/factory`、
 > `lib/`、`config/lv_conf.h`、`platformio.ini`、构建/探针脚本）的代码评审，以及
 > `docs/` 下设计稿（OTA、PenPal、WiFi 记忆槽等）的设计评审。
