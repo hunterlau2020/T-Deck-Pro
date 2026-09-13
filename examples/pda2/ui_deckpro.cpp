@@ -252,17 +252,17 @@ static int page_curr = 0;
 
 static struct menu_btn menu_btn_list[] =
 {
-    /* Page one (user-requested order, 2026-08-17): AI-first layout;
-     * PenPal takes the old Sleep slot (user-requested swap, 2026-08-26) */
-    {SCREEN_AI_CFG_ID,     &img_setting,    "AI Cfg",  23,   13},
+    /* Page one (user-requested order, 2026-09-13): PenPal first;
+     * AI Cfg to row-2-first; Dict to row-3-last (old PenPal slot) */
+    {SCREEN_PENPAL_ID,     &img_penpal,     "PenPal",  23,   13},
     {SCREEN_AI_CHAT_ID,    &img_voice_ai,   "AI Text", 95,   13},
     {SCREEN_VOICE_AI_ID,   &img_voice_ai,   "AI Chat", 167,  13},
-    {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    23,   101},
+    {SCREEN_AI_CFG_ID,     &img_setting,    "AI Cfg",  23,   101},
     {SCREEN_WEATHER_ID,    &img_weather,    "Weather", 95,   101},
     {SCREEN_CALENDAR_ID,   &img_calendar,   "Calendar",167,  101},
     {SCREEN_CALCULATOR_ID, &img_calculator, "Calc",    23,   189},
     {SCREEN4_ID,           &img_wifi,       "Wifi",    95,   189},
-    {SCREEN_PENPAL_ID,     &img_penpal,     "PenPal",  167,  189},
+    {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    167,  189},
     /* Page two: hardware / system entries; Sleep takes the old Shutdown slot */
     {SCREEN1_ID,           &img_lora,       "Lora",    23,   13},
     {SCREEN2_ID,           &img_setting,    "Setting", 95,   13},
@@ -271,7 +271,7 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN6_ID,           &img_batt,       "Battery", 95,   101},
     {SCREEN7_ID,           &img_touch,      "Input",   167,  101},
     {SCREEN8_ID,           &img_A7682E,     "A7682E",  23,   189},
-    {SCREEN11_ID,          &img_PCM5102,    "Sleep",   95,   189},
+    {SCREEN11_ID,          &img_sleep,      "Sleep",   95,   189},
     {SCREEN12_ID,          &img_motor,      "Motor",   167,  189},
     /* Page three: shutdown (alone, 9/9/1 - user-requested swap, 2026-08-26) */
     {SCREEN9_ID,           &img_lora,       "Shutdown",23,   13},
