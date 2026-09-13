@@ -3,6 +3,17 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-13
+
+- **OTA 设计稿 v3 送复审**（[`docs/ota-update-design.md`](ota-update-design.md)
+  `be6a52c..`）：按 v2 轮三方复审（Grok A / Codex C / Claude C）逐条处置
+  5 P1 + 9 P2——全局硬件锁+取消令牌（gen 不再当写互斥）、task WDT 8s
+  自证窗口（自证前任何死循环可恢复，修正 v2"冻结不回滚"漏洞）、验签公
+  钥入 tracked `ota_trust_anchor.h`（公钥是信任根不是秘密）、`notes`+`seq`
+  入签名（单调递增防降级）、低电关机/Sleep/按键与 OTA 全程互斥、恢复发
+  布流程+USB 回退完整命令、清单 URL 配置源恢复、签名编码钉死 IEEE
+  P1363。悬空引用两处修复。实现顺序改为回滚真测先行 + 分组提交。
+
 ## 2026-09-11（第二批：AI Chat 语音全链路）
 
 - **OTA 固件远程升级——设计稿待评审**（[`docs/ota-update-design.md`](

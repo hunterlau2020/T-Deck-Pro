@@ -1,221 +1,345 @@
-# 设计评审申请书：OTA 固件远程升级（v2 修订稿）
+# 设计评审申请书：OTA 固件远程升级（v3 修订稿）
 
 - **申请人**：Claude（pda2）
 - **申请日期**：2026-09-13
 - **关联分支**：`HD-V2-250915`
-- **状态**：**v2 修订稿，待复审**——v1（`36e88df`）经四方评审：
-  Codex **C** / Grok **C** / Qwen **C** / Claude **A**；本稿逐条处置全部
-  P1/P2 后改写。评审结果文件：
-  [`ota-update-design-review-result-{codex,grok,qwen,claude}.md`](reviews/)
-- **v1→v2 修订总览**：见文末 §11；每条标注处置的评审方与 finding。
+- **状态**：**v3 修订稿，送三方复审**——v2（`be6a52c`）复审结论：
+  Grok **A**（6 P2）/ Codex **C**（3 P1 + 1 P2）/ Claude **C**（2 P1 +
+  1 P2）。本稿逐条处置全部 5 P1 + 9 P2（含 v2 轮新发现），处置对照见
+  文末 §12。评审结果文件：
+  [`*-be6a52c-codex.md`](reviews/ota-update-design-review-result-be6a52c-codex.md)、
+  [`*-v2-grok.md`](reviews/ota-update-design-review-result-v2-grok.md)、
+  [`*-v2-review-result-claude.md`](reviews/ota-update-design-v2-review-result-claude.md)
+- **未变结论**（v2 轮已闭合，v3 仅保留）：TLS 隔离、ECDSA P-256 签名
+  清单（Grok A + Claude 裁定接受，**不捆绑 Ed25519**）、自管流式下载、
+  `verifyRollbackLater` 覆盖 + `drv.begin()` 拆雷、契约登记、手动触发。
 
 ---
 
-## 0. 结论先行（v2 变化点）
+## 0. v3 变化点（相对 v2）
 
-v1 的"手动触发 + HTTPS + 三层失败模型"方向获四方一致认可；v2 按评审
-**收紧五个安全/生命周期缺口**：
+1. **全局硬件锁 + 取消令牌**（Codex P1-A）：gen 不再是写 flash 的互斥——
+   新增跨页面/跨代次的 `s_ota_hw_lock`（原子）与 `ota_cancel_token`；写
+   槽期间第二个 OTA 任务拒绝启动；取消令牌在写入前/每块/提交前三处检查，
+   取消 → `Update.abort()` 不切启动槽；UI 代次只管结果展示。
+2. **自证窗口的看门狗保证**（Codex P1-B）：自证前把 loopTask 订阅进
+   `esp_task_wdt`（8s 超时）——自证前任何死循环（含 `while(1) delay`）
+   都会触发 WDT 复位 → 下次 boot 回滚；自证后退出订阅。v2"无复位保证
+   时冻结不回滚"的漏洞由 WDT 关闭（详见 §5）。
+3. **信任根进 tracked 源码**（Codex P1-C / Grok P2-2）：验签公钥 + key id
+   + 编码格式入 `examples/pda2/ota_trust_anchor.h`（tracked），发布脚本
+   校验指纹；**只有签名私钥 gitignored**。v2"公钥进 config_keys.h"作废
+   （公钥不是秘密，是信任根，必须可审计、构建可复现）。
+4. **低电关机 / Sleep 互斥**（Claude P1-A / Grok P2-4）：OTA 全程
+   `low_voltage_timer_cb` 跳过 `ui_shutdown_on()`、waitbox 吞全部按键、
+   禁止进入 Sleep、`WiFi.setSleep(false)`——结束（成功/失败/超时）一律
+   恢复。
+5. **签名对象扩展**（Codex P2）：`notes` 与单调递增 `seq` 纳入签名；
+   默认拒绝回放/降级（NVS 记 last-seen seq；开发降级走编译期宏）。
+6. **配置源恢复**（Grok P2-1）：`OTA_URL` 从 `/env.cfg` 读取（v2 重写时
+   丢失）。
+7. **文档完整性**（Claude P1-B）：恢复 v1 的发布流程 + USB 回退命令正文
+   （§7），修复 v2 两处悬空引用（§12 行 4）。
 
-1. **TLS 隔离**：OTA 用专用强制 CA 校验通道，绝不继承 AI Config 的
-   `tls_insecure` 开关；生产构建拒绝 `http://`（Codex P1 / Grok P1-2 / Qwen P1）
-2. **签名清单**：发布端 ECDSA P-256 签名，设备固化公钥验签；不依赖
-   "HTTPS = 发布方可信"（Codex P1 / Qwen P1）
-3. **回滚真实生效**：覆盖 Arduino 框架的 `verifyRollbackLater()`——v1 的
-   "setup() 末尾自证"在默认框架行为下是**空操作**（框架在 `setup()` 之前
-   就把 pending 固件标为 VALID，Grok P1-1，已对照
-   `esp32-hal-misc.c:207-235` 实锤）；自证点后移至 UI 主循环起来之后
-   （Qwen P2）；自证前禁止任何 `while(1)` 等待（`drv.begin()` 的
-   `while(1) delay(10)` 是现有雷，同批拆除）
-4. **流式下载自管**：弃用 `HTTPUpdate`（无法注入签名/SHA 校验、无取消
-   语义、2.1MB 体不受控），改为 HTTPClient 流式 → `Update.write` +
-   边下边算 SHA-256（Grok P1-2/P1-3）
-5. **契约登记**：OTA 任务按 `async_ipc_contract.md` 登记（gen/busy/队列/
-   取消语义），消除 NO_CONTRACT（Qwen P2）
+---
 
-## 1. 现状盘点（v2 补两条受控事实）
+## 1. 现状盘点（承 v2，无变化项不再复述）
 
-| 项 | 状态 |
-|---|---|
-| 分区表 | app0 6.2MB@0x010000 / app1 6.2MB@0x650000 / otadata 8KB@0xE000（机 #2 整片备份实测；**board 定义引用框架包 `default_16MB.csv`，未版本化——见 §7 受控化**，Codex P1） |
-| 回滚开关 | `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`（`tools/sdk/esp32s3/sdkconfig:60`，已核实；**bootloader 产物同样未版本化——§7**） |
-| **Arduino 自动自证行为** | `initArduino()`（`esp32-hal-misc.c:225`）在 `setup()` 之前对 `ESP_OTA_IMG_PENDING_VERIFY` 调用 `esp_ota_mark_app_valid_cancel_rollback()`，除非 weak 函数 `verifyRollbackLater()` 被覆盖为 true（`esp32-hal-misc.c:207-208`）——**v1 设计因此失效，v2 修复见 §5**（Grok P1-1） |
-| 签名算法底座 | 预编译 mbedtls：`CONFIG_MBEDTLS_ECDSA_C=y` + `CONFIG_MBEDTLS_ECP_DP_SECP256R1_ENABLED=y`（sdkconfig:1688/1692）；**无 Ed25519**（mbedtls 2.28 系不含）——签名选型见 §2.1 |
-| 固件体积 | 2.1MB（槽 6.2MB）；`ui_battery_27220_get_percent()`（port.cpp:549）电量前置 |
-| 可复用件 | `http_apply_tls` 不可用于 OTA（见 §3.1）；cJSON、`chat_waitbox` UI 模式、任务+队列模式可复用 |
+分区表/回滚开关/固件体积/电量接口同 v2 §1；补充两条 v2 复审新实锤：
 
-## 2. 更新源与清单协议（v2：签名强制）
+- **Arduino 自动自证**：`initArduino()`（`esp32-hal-misc.c:207-235`）在
+  `setup()` 之前对 `PENDING_VERIFY` 自动 `mark_app_valid`，除非覆盖
+  weak `verifyRollbackLater()`——v2 已纳入（Grok 实锤 + Codex 复核）。
+- **ESP-IDF OTA 状态机**：未确认镜像在**下一次 boot** 才
+  `PENDING_VERIFY → ABORTED` 回滚（Codex 复审引官方文档）——**不重启就
+  不回滚**，故自证窗口必须由 WDT 提供复位保证（§5，Codex P1-B）。
 
-### 2.1 清单格式与签名
+## 2. 清单协议（v3：五字段 + seq，全部入签名）
+
+### 2.1 清单格式
 
 ```json
 {
   "version": "v2.5-260912",
   "url":    "https://host/path/firmware.bin",
   "size":   2100240,
-  "sha256": "<hex, 64 chars, of firmware.bin>",
+  "sha256": "<64 hex chars>",
+  "seq":    42,
   "notes":  "PenPal TTS; voice fixes",
-  "sig":    "<base64 ECDSA-P256/SHA-256 signature>"
+  "sig":    "<base64, 64 bytes IEEE P1363 r||s>"
 }
 ```
 
-- **签名对象** = 恰好四行的规范化字节串（UTF-8，`\n` 结尾）：
-  `version + "\n" + url + "\n" + size(十进制) + "\n" + sha256 + "\n"`；
-  `sig` 为对该字节串的 ECDSA P-256/SHA-256 签名（64 字节 r||s，base64）。
-  四字段**全部必填**，缺一或验签失败 → 拒绝更新（Codex P1"SHA 可选"已废）。
-- **算法选型**：ECDSA P-256（设备预编译 mbedtls 原生支持，零新增依赖）；
-  Ed25519 在 mbedtls 2.28 不可用，如评审坚持 Ed25519 需捆绑第三方实现
-  （约 30KB flash）——**请复审裁定接受 P-256 或要求捆绑 Ed25519**。
-- **设备侧公钥**：`config_keys.h.example` 登记占位，真实公钥进 gitignored
-  `config_keys.h`（与现有秘密链同构：NVS 无关、不入 tracked 源码）；
-  发布私钥永不落设备/仓库。
-- 版本比对：`version != UI_T_DECK_PRO_VERSION` 即"可更新"（用户手动决策，
-  不做自动强更——四方认可保留）。
+- **签名对象** = 规范化字节串（UTF-8，每字段一行以 `\n` 结尾，按上表顺序）：
+  `version \n url \n size(十进制) \n sha256 \n seq(十进制) \n notes \n`。
+  七字段**全部必填**；验签失败/缺字段 → 拒绝（Codex P2：`notes` 纳入
+  签名——防"签名固件 + 篡改说明"诱导；Grok 原认为可接受，Codex 更严，
+  从严采纳）。
+- **签名编码钉死**（Grok P2-2）：IEEE P1363 大端 `r||s` 各 32 字节共
+  64 字节，base64 无 PEM 头。设备端用 `mbedtls_mpi` 拆 r/s 调
+  `mbedtls_ecdsa_verify`，**禁止** `mbedtls_ecdsa_read_signature`（它吃
+  ASN.1 DER——对不上则所有升级验签失败）；发布脚本产出同格式。
+- **算法**：ECDSA P-256/SHA-256（Grok A + Claude 复审双双裁定接受，
+  不捆绑 Ed25519——mbedtls 2.28 无原生支持，sdkconfig 已核）。
+- **seq 单调性**（Codex P2）：NVS `ota` 命名空间存 `last_seq`；验签通过
+  后若 `seq <= last_seq` → 拒绝（防回放/降级）；开发降级须编译期宏
+  `OTA_ALLOW_DOWNGRADE`（默认 0，env.cfg 打不开，同明文宏策略）。
+  每次实际开始下载前把 `seq` 写入 NVS。
 
-### 2.2 发布端流程（受控）
+### 2.2 信任根（v3 改 tracked：Codex P1-C / Grok P2-2）
 
-签名由发布脚本完成（本地 `scripts/` 新增，私钥文件 gitignored）：算
-sha256 → 组规范字节串 → 签名 → 产出清单 JSON。**bin、清单、签名三者
-同源同批**；替换 bin 必须重新签。
+- **公钥不是秘密，是信任根**：`examples/pda2/ota_trust_anchor.h`
+  （**tracked**）内含：公钥（raw 65B 压缩点或 64B Q_x||Q_y，十六进制
+  数组）、`key_id`（8 hex）、编码格式注释。发布脚本校验该文件指纹。
+  v2 的"公钥进 config_keys.h"作废——gitignored 公钥使发布不可复现、
+  无法审计设备实际固化的信任根。
+- 签名**私钥**：gitignored 本地文件（发布机），永不落仓库/设备。
+- **换公钥 = USB 刷机**（写进 §7 发布前提；无远程换根通道——信任根的
+  远程更换本身就是一个必须单独设计的攻击面，v3 明确不做）。
 
-## 3. 新模块 `examples/pda2/ota_update.h/.cpp`
+### 2.3 配置源（Grok P2-1，恢复 v1）
+
+- `OTA_URL=<清单 URL>`：`/env.cfg`（`env_get`，val ≤160 够用）；
+  `env.cfg.example` 同步模板并**删除过时的"Max 8 entries / 95 chars"
+  注释**（现行为 12 条/159 字符）。
+- 宏关闭时非 `https://` 的 OTA_URL → Check 阶段即拒绝；宏打开时允许
+  `http://`（局域网联调，见 §3.1 scheme 分支）。
+- 可选 `config_keys.h` 编译期默认 URL，优先级低于 env（与既有键序一致）。
+
+## 3. 模块 `examples/pda2/ota_update.h/.cpp`
 
 ```c
 const char *ota_current_version(void);
-bool ota_fetch_manifest(ota_manifest_t *out, char *err, int err_len);  // 含验签
-bool ota_precheck(char *err, int err_len);          // 电量 <30% 拒绝 + URL 检查
+bool ota_fetch_manifest(ota_manifest_t *out, char *err, int err_len);  // 下载+验签
+bool ota_precheck(char *err, int err_len);   // 电量/URL/槽容量检查
 typedef void (*ota_progress_cb)(int percent, ota_phase_t phase);
-bool ota_run(const char *manifest_url, ota_progress_cb cb,
-             char *err, int err_len);               // 下载+验签+写槽（可被 gen 取消）
+bool ota_run(const ota_manifest_t *snap, ota_progress_cb cb,
+             char *err, int err_len);        // 下载+写槽（受全局锁+令牌约束）
 ```
 
-### 3.1 专用 TLS 通道（Codex P1 / Grok P1-2 / Qwen P1）
+### 3.1 专用 TLS 与 scheme 分支（v2 闭合项 + Claude P2 补正）
 
-- OTA 一律新建 `WiFiClientSecure` 并**直接** `client.setCACertBundle(
-  CA_BUNDLE_MOZILLA)`——**不经过** `http_apply_tls()`（该函数读全局
-  `tls_insecure`，AI Config 的 Trust 开关一旦打开就变 `setInsecure()`，
-  OTA 绝不继承）。
-- **URL scheme 策略**：生产构建（`OTA_ALLOW_PLAINTEXT` 编译期宏默认 0）
-  拒绝 `http://` 清单与 bin；该宏**只能改代码打开，env.cfg 无法打开**
-  （Codex"实验室明文须编译期开关"已采纳；局域网联调时手动开宏重编）。
-- `http_ensure_time(5000)` 前置（TLS 证书时间有效性）。
+- HTTPS：新建 `WiFiClientSecure` 直接 `setCACertBundle(CA_BUNDLE_MOZILLA)`
+  ——不经 `http_apply_tls()`，不继承 `tls_insecure`。
+- **明文宏打开时**（`OTA_ALLOW_PLAINTEXT`，默认 0，env.cfg 打不开）：
+  `http://` 走**纯 `WiFiClient`**、`https://` 走 `WiFiClientSecure`——
+  分支写法照 `penpal_api.cpp:pp_request()` 的 `is_https` 模式（:130-143）；
+  用 Secure client 对纯 HTTP 服务器根本握手不上（Claude P2，实验室
+  联调路径必须真能跑通）。
+- `http_ensure_time(5000)` 前置。
 
-### 3.2 流式下载与写入（Grok P1-2/P1-3）
+### 3.2 流式下载与写入（v2 闭合项 + Grok P2-3/P2-6 收口）
 
-- **不用 `HTTPUpdate`**（无法注入 sha256/签名校验、无取消点、写 flash 期间
-  内部循环不受本应用控制）：改用 `HTTPClient` + `getStreamPtr()` 流式读，
-  边写 `Update.write()` 边增量算 SHA-256（`mbedtls_sha256` 增量 API）。
-- 写完依次校验：实际 size == 清单 size、SHA-256 == 清单 sha256、
-  `Update.end(true)`（镜像完整性）→ 全过才算成功。
-- **任务形态**（遵守 `async_ipc_contract.md`，Qwen P2-契约）：
-  - `xTaskCreatePinnedToCore`（1024×16，优先级 1，core 0——同现有惯例）；
-  - 请求快照任务自有（manifest URL + gen），任务禁读 UI 缓冲；
-  - 结果结构 `ota_result_t { uint32_t gen; bool ok; string err; }` 走
-    队列 → UI `xQueueReceive` → `delete`（所有权转移惯例）；
-  - **busy/gen**：Settings 屏新增 `s_ota_busy` + `s_ota_busy_gen`，仅 UI
-    线程读写，仅 gen 匹配的结果释放（§6 契约行同批补入
-    `async_ipc_contract.md`，消除 NO_CONTRACT——Qwen P2）；
-  - **取消语义**：**不提供下载中途强制中止**（与 PenPal 发信同款取舍：
-    HTTP 传输不可安全中止）；UI 的"取消"= gen+1 + busy=false，迟到结果
-    被 gen 门控丢弃；写槽**不可取消**（半途 `Update.abort()` 留半截 app1
-    无害但不允许用户触发）——UI 上"取消"按钮只在前两阶段（检查/确认）
-    有效，进入下载后 waitbox 显示"updating... do not power off"且无取消
-    按钮（Qwen P2-cancel 的回答：不做中断，做免打扰继续 + gen 丢弃）。
-- 进度回调：每 10% 经队列发 UI 刷新（EPD 友好）；主循环持续泵
-  `lv_timer_handler`（写 flash 分块 ≤4KB/次天然让出）。
+- `HTTPClient` 流式（`getStreamPtr()`）→ `Update.write()` + 增量
+  `mbedtls_sha256`；**不用 HTTPUpdate**。
+- **超时模型**（Grok P2-3）：HTTP 读**空闲**超时 45s（流式持续有数据则
+  总时长可超）；**绝对 deadline 10 分钟**（约 2.1MB @ 3.5KB/s 下限）；
+  二者任一触发 = 任务失败：gen+1、`Update.abort()`（若已 begin）、
+  释放锁、报错——**不留在"do not power off"死等**。
+- **校验顺序**：清单验签 → `Update.begin(size)`（**先拒** size > 空闲槽
+  容量；`Content-Length` 与清单 size 不符则不开写——静态服务必须给
+  `Content-Length`，不用 chunked）→ 流式写+算哈希 → size/SHA-256 比对
+  → 通过才 `Update.end(true)`；**任何失败一律 `Update.abort()`，不得
+  `end()`**（Grok P2-6）。
+- **快照**（Grok P2-6）：Check 验签后把整个 `ota_manifest_t` 复制进任务
+  私有结构，Update 阶段不再触碰清单/网络上的元数据（防"确认后被换包"）。
 
-## 4. UI（不变 + 一处文案）
+### 3.3 全局硬件锁与取消令牌（Codex P1-A，v3 新增核心）
 
-SCREEN2_2 "Firmware Update"：当前版本 + Check → 清单展示（版本/notes/
-电量）→ Update 二次确认 → 覆盖层（无取消按钮，"do not power off"）→
-完成弹窗"Reboot to apply?" → 用户确认 `ESP.restart()`。失败弹窗显示
-err + "still on old version, safe"。电量 <30% 拒绝；未充电提示插 USB。
+```c
+static atomic_bool s_ota_hw_lock;    /* 任一时刻至多一个任务碰 Update/flash */
+static atomic_bool s_ota_cancel;     /* 取消令牌，UI 线程置位 */
+```
 
-## 5. 回滚与自证（v2 重写：Grok P1-1 + Qwen P2）
+- 任务在 `Update.begin()` **之前**取 `s_ota_hw_lock`（CAS）；锁被占 →
+  直接失败返回（**跨页面/跨代次生效**——页面 gen 与 busy 不能约束硬件
+  操作，离开 Settings 页再进也不会启动第二个写槽任务）。
+- **取消令牌检查点**（三处，Codex 要求）：`Update.begin` 前、每个写入
+  块边界、`Update.end`（boot 切换提交）前。任一处令牌为真 →
+  `Update.abort()` + 释放锁 + 返回"已取消"，**不切换启动槽**。
+- UI 的"取消"= 令牌置位 + gen+1 + busy=false（令牌让在飞任务在下个块
+  边界自杀；gen 只防迟到结果污染 UI）。
+- **UI 呈现与机制解耦**：进入下载阶段后 waitbox 无取消按钮、吞全部按键
+  （防误触），但**离开 Settings 屏（Back 键路由）或用户等待期按下的
+  按键不会置令牌**——只有显式 Cancel 入口（检查/确认两阶段）与未来
+  的超时路径置令牌。任务结束后锁必释放（成功 end / 失败 abort / 取消
+  abort 三条路径同一出口）。
 
-**层 2 机制真相**（Grok P1-1）：框架 `initArduino()` 在 `setup()` 之前
-自动把 pending 固件标 VALID——v1 的"setup() 末尾 mark"到那时镜像早已
-VALID，崩溃不会回滚。v2：
+### 3.4 任务形态（契约行见 §6）
 
-1. **覆盖 weak 函数**（`factory.ino` 顶部，C++ 链接单元）：
-   ```cpp
-   extern "C" bool verifyRollbackLater() { return true; }
-   ```
-   （定义在 `.c`，无 `extern "C"` 盖不住——Grok 特别标注。）
-   此后 `initArduino()` 不再自动自证，pending 态得以保持到自证点。
-2. **自证点后移**：`setup()` 完成且**首帧 UI 已渲染**（`ui_deckpro_entry`
-   之后、WiFi 成败之前）调用 `esp_ota_mark_app_valid_cancel_rollback()`——
-   覆盖"setup OK 但 UI/主循环挂了"的失效类（Qwen P2）。实现为
-   `lv_async_call` 一次性触发，从 loop 首个 `lv_timer_handler` 内执行。
-3. **自证前禁止无限等待**（同批拆现有雷）：`factory.ino` 中
-   `drv.begin()` 失败的 `while (1) delay(10);` 改为记日志继续（马达缺失
-   不阻断启动）；全 setup 无任何 `while(1)`——否则 loop WDT 尚未挂载、
-   不重启也不回滚，恰好绕过层 2（Grok 同簇悬挂）。
-4. **层 2 文案修正**（Grok）：回滚目标是"**上一张已验证槽**"，不保证是
-   app0；"强制回 app0"的唯一手段是 USB 清 otadata（§6）。
-5. **保留警示**：`factory.ino` 注释声明——任何未来固件必须同时保留
-   `verifyRollbackLater` 覆盖**和**自证调用两行，缺一即升级即回滚或
-   回滚失效。
+16KB 栈、优先级 1、core 0；请求快照任务自有；结果
+`ota_result_t{gen, ok, err}` 走队列（深度 1）→ UI delete；进度每 10%
+经队列刷 UI（EPD 友好）；主循环持续泵 `lv_timer_handler`。
 
-## 6. 契约登记（Qwen P2）
+## 4. UI（SCREEN2_2）与全局互斥（Claude P1-A / Grok P2-4）
 
-`async_ipc_contract.md` 新增 OTA 行（与代码同批入库，§11 规则）：
-消费者 Settings(SCREEN2_2)、任务 ota_run、gen 语义（页面代次）、busy
-（s_ota_busy/busy_gen，UI 线程）、队列深度 1（并发上限 1，重复请求拒绝）、
-取消=gen+1+busy=false（不强制中止传输）、超时=HTTPClient 45s + 总体
-deadline 由用户重启兜底。
+- 流程：版本 + Check → 清单展示（版本/notes/seq/电量）→ Update 二次
+  确认 → 覆盖层 "Updating... N% / do not power off"（**吞全部按键**，
+  `chat_waitbox` 同款键盘守卫 + 触摸忽略）→ 完成确认重启 / 失败显示
+  err + "still on old version, safe"。
+- **OTA busy 期间**（任一阶段，直至任务结束）：
+  1. **低电自动关机互斥**：全局 `low_voltage_timer_cb` 检查
+     `s_ota_hw_lock`——置位时跳过 `ui_shutdown_on()`（仅保留屏上低电
+     提示；关机决策延后到任务结束后下一轮巡检重新评估）。该定时器是
+     全局生命周期巡检（`ui_deckpro_entry` 创建后从不暂停），必须显式
+     互斥而非依赖"用户停在 OTA 屏"（Claude P1-A：30% 电量检查挡不住
+     下载途中继续放电到关机阈值）。
+  2. **禁止进入 Sleep**：Sleep 屏入口（菜单）在 OTA busy 时拒绝并提示
+     （Sleep 屏自己的 `esp_deep_sleep_start` 是屏幕级定时器，风险本不
+     成立，入口拒绝为纵深防御——Claude 已澄清排除屏幕级路径）。
+  3. `WiFi.setSleep(false)`；任务结束（成功/失败/超时/取消）**一律
+     恢复**（modem sleep 与低电策略）。
+- 电量前置：`<30%` 拒绝；gauge 无效时**不用 SOC=0 误拦**，改要求
+  `ui_battery_27220_get_input()` 判外部供电（Grok P2-4）；未充电提示
+  插 USB。
+- `SCREEN2_2_ID` **追加在枚举末尾**（不插在 SCREEN2_1 与 SCREEN3 之间
+  ——Grok P2-6）；新屏 create 与进度覆盖层各打一行池水位
+  `pp_dbg_pool`（721e04a 教训）。
 
-## 7. 分区表 / bootloader 受控化（Codex P1）
+## 5. 回滚与自证（v3：WDT 提供复位保证——Codex P1-B）
 
-- 两台机读回实际分区表 + bootloader（0x0000..0x8000）各存
-  `backups/`，记录 SHA-256；确认与 `default_16MB.csv` 一致。
-- build 文档新增节：OTA 发布前提 = 分区表/bootloader 版本 + SHA-256 与
-  `backups/` 基线一致；框架包升级（esp32s3 sdkconfig/分区变更）视为
-  OTA 兼容性破坏事件，须重新核验 §8 用例。
+**机制事实**：OTA 状态机在**下一次重启**才把 `PENDING_VERIFY` 判
+`ABORTED` 回滚；不重启就冻结在坏固件上。v2 的"无 WDT 挂载前 while(1)
+不回滚"是漏洞而非边界。v3：
 
-## 8. 验证计划（v2 强化）
+1. `verifyRollbackLater()` 覆盖保留（v2 已定，`extern "C"`，缺它一切
+   形同虚设）。
+2. **自证窗口 = setup() 起点至自证点**，期间把 **loopTask 显式订阅
+   `esp_task_wdt`（8s）**（setup 首行附近；delay 不喂 task WDT，只有
+   `esp_task_wdt_reset()` 喂——自证前正常路径在几个关键初始化步骤间
+   显式喂狗）。效果：自证前**任何形态**的死循环（忙等 `while(1){}`、
+   让出型 `while(1) delay(10)`、卡在外设初始化）8 秒内 WDT 复位 →
+   下次 boot 回滚（Codex"必须保证复位"闭环，且覆盖让出型——比
+   Grok P2-5 只认忙等的方案恢复面更宽）。
+3. **自证点**：首帧 UI 渲染后（`lv_async_call`，loop 首个
+   `lv_timer_handler` 内）调用 `esp_ota_mark_app_valid_cancel_rollback()`
+   并**退出 WDT 订阅**（恢复本应用现状：长阻塞 EPD/音频操作不受 8s
+   约束——订阅常态化属独立改进，不在本设计范围）。自证点之后死循环
+   = 冻结需人工复位，登记为已知边界（层 3）。
+4. **三层模型精简版**（Claude P1-B：不能只存在于 v1 git 历史）：
 
-1. **回滚真测（防假阴性，Grok P1-1）**：刷一个**带 `verifyRollbackLater
-   覆盖`但 setup() 死循环（无 WDT 挂载前）**的测试固件 → 必须观察到
-   bootloader 自动回滚 + 回滚后旧版本正常运行；再刷一个 `setup()` 正常、
-   **主循环死循环**的固件 → 因自证点在主循环首帧之后，同样必须回滚
-   （覆盖 Qwen"UI/主循环回归"类）。
-2. 正向：局域网起服务放"版本+1"固件 → 全流程（Check→Update→重启→
-   About 版本变化）。
-3. 签名用例：正确签名通过；篡改 version/url/size/sha256 之一 → 拒绝；
-   无 sig 字段 → 拒绝；错公钥 → 拒绝。
-4. TLS 用例：设备开着 `tls_insecure` 时 OTA 仍强制 CA 校验（对自签
-   HTTP 服务器证书的 HTTP 明文在宏关闭时被拒）。
-5. 断电/中断：下载 50% 拔电 → 重启旧版本完好（§2.4 行 6）。
-6. 低电量：模拟 <30% 拒绝。
-7. 双机各过一遍（机 #1 先行）。
+   | 层 | 场景 | 结果 |
+   |---|---|---|
+   | 1 | 下载中断/坏包/验签失败/取消 | otadata 不翻转，重启回上一张已验证槽，零损伤 |
+   | 2 | 新固件已切换但自证前挂死 | task WDT 8s 复位 → 下次 boot 自动回滚 |
+   | 3 | 自证后挂死 / 全挂 | 人工复位或 USB：**分块烧录**（坑 6）；**强制回 app0 = 擦 otadata（`write_flash 0xE000` 8KB `0xFF`）+ 重刷对应槽**——OTA 后运行槽可能是 app1，须先读 otadata/boot 分区确认再写（Grok P2-6，v1 命令不完整） |
 
-## 9. 工作量与顺序
+## 6. 契约登记（Qwen P2 发起，v3 按 Grok P2-3 修订超时）
 
-签名脚本 + ota_update 模块 + SCREEN2_2 + factory.ino 三处（verifyRollback
-覆盖 / 自证点 / drv.begin 拆雷）+ 契约行 + build 文档发布节，一次提交；
-真机验证按 §8（回滚真测必须先于首次真实 OTA）。
+`async_ipc_contract.md` 与代码**同批**新增行（设计稿草案不替代契约表
+本身——Claude 提醒）：
 
-## 10. v1 评审问题对照（§8 六问的最终答案）
+- 消费者 Settings(SCREEN2_2)；任务 ota_run；结果 `ota_result_t{gen,...}`
+  队列深度 1；busy `s_ota_busy`+`s_ota_busy_gen`（UI 线程）；
+- **取消** = 令牌置位 + gen+1 + busy=false；写槽不强制中止，令牌在块
+  边界生效（§3.3）；
+- **超时** = HTTP 读空闲 45s + **绝对 deadline 10 分钟**（覆盖 NTP≤5s +
+  连接 + 读取全程，契约规则 10）；超时处理与其它任务一致（gen+1 +
+  abort-if-begun + 报错），**例外声明**：栈 16KB（惯例 8KB）、队列深度
+  1、任务可存活跨页面（硬件锁所致）。
 
-| v1 §8 问题 | v2 裁定 |
-|---|---|
-| 1 自动更新 | 不做（四方认可手动） |
-| 2 自证点 | 移至主循环首帧后（Qwen P2），且前置 `verifyRollbackLater` 覆盖（Grok P1-1） |
-| 3 明文 HTTP | 编译期宏默认关、env.cfg 打不开（Codex 要求采纳） |
-| 4 签名 | **v1 必做**：ECDSA P-256（Ed25519 需捆绑实现——请复审裁定） |
-| 5 组件选型 | HTTPUpdate 弃用，改自管流式（Grok P1-2/3：校验注入+取消+超时受控） |
-| 6 回滚实测 | 验证计划第 1 项，先于首次真实 OTA |
+## 7. 发布流程与受控基线（恢复 v1 正文 + Codex P2）
 
-## 11. v1→v2 修订记录
+### 7.1 发布步骤（每次发版）
 
-| # | 处置 | 评审来源 |
+```
+pio run -e pda2                          # 产出 firmware.bin（版本烘焙自 utilities.h）
+python scripts/ota_sign.py               # 读 bin → sha256/size；读 utilities.h 版本；
+                                         # 读递增 seq；私钥（gitignored）签名；
+                                         # 产出 manifest JSON（version/url/size/
+                                         # sha256/seq/notes/sig，规范字节串见 §2.1）
+上传 firmware.bin + manifest 到 OTA_URL 同目录
+设备: Settings → Firmware Update → Check → Update → Reboot
+```
+
+发布脚本同时校验 `ota_trust_anchor.h` 指纹、清单 version == bin 内烘焙
+版本（结构性防错位，Qwen P3 处置）。
+
+### 7.2 USB 回退（全挂兜底——命令完整版，Grok P2-6 修正）
+
+```
+# 1) 确认运行槽（OTA 后可能是 app1）：esptool read_flash 0xE000 8KB 看 otadata
+# 2) 擦 otadata（回退到"另一张已验证槽"由 bootloader 决定）
+python esptool.py write_flash 0xE000 <8KB 0xFF>
+# 3) 若目标槽镜像也已损坏：分块烧录重写该槽（坑 6 流程，app0@0x10000 / app1@0x650000）
+```
+
+### 7.3 受控基线（Codex P2）
+
+- 新增 **tracked** 文件 `docs/ota-baseline.md`：记录分区表来源
+  （`default_16MB.csv`）、bootloader 产物 SHA-256、两台实机读回的分区
+  表/bootloader 摘要、`ota_trust_anchor.h` 指纹——**实现期首件任务**
+  （Codex"备份不能是唯一兼容性依据"）；整片 `backups/` 继续作为恢复
+  物料（gitignored）。
+- 框架包升级（esp32s3 sdkconfig/分区变更）= OTA 兼容性破坏事件，须重
+  跑 §8 全部用例并更新基线。
+- **换签名公钥 = USB 刷机**（无远程换根通道，§2.2）。
+
+## 8. 验证计划（v3 重写——Grok P2-5 + Codex P1-B 修正用例物理）
+
+全部在真机（机 #1 先行），每例记录 reset 来源与 pending→aborted→
+previous-valid 状态链：
+
+1. **回滚矩阵**（修正 v2 与物理矛盾的用例）：
+   a. setup **忙等** `while(1){}`（无 yield）→ task WDT 8s 复位 → 回滚；
+   b. setup **让出型** `while(1) delay(10)` → task WDT 复位 → 回滚
+      （WDT 订阅使其可恢复——v2 误列为"不回滚"）；
+   c. **主循环自证点前**死循环 → 回滚；
+   d. **主循环自证点后**死循环 → **不**回滚（已知边界，登记）；
+   e. `drv.begin` 失败路径（拆雷后）→ 记日志继续启动，不回滚不冻结。
+2. 正向：局域网服务 + "版本+1"固件全流程（Check→Update→重启→About
+   版本变化；seq 递增入 NVS）。
+3. 签名/完整性用例：正确签名通过；篡改 version/url/size/sha256/seq/
+   notes 任一 → 拒绝；**DER 编码签名 → 拒绝**（钉死 P1363）；错公钥 →
+   拒绝；缺字段 → 拒绝；`seq` 回放/降级 → 拒绝。
+4. TLS/传输：自签证书（`tls_insecure` 开着）→ OTA 仍强制 CA 校验失败；
+   `Content-Length` 缺失/与 size 不符 → 不开写；404/断网 → 拒绝无副作用；
+   下载中断网 → 45s 空闲超时 → abort + 报错。
+5. **低电互斥**（Claude P1-A）：OTA 下载中人为触发低电锁存阈值 →
+   确认不执行 `ui_shutdown_on()`、任务完成后再评估。
+6. 按键吞没：更新中按 MIC/Back/Sym/触摸 → 无 UI 副作用、不中断任务。
+7. 双机各过一遍。
+
+## 9. 实施顺序与提交拆分（Grok P2-6.7：不再"一次提交"）
+
+1. 回滚真测先行（§8.1 a–e，需要临时自毁测试固件）——**先于首次真实
+   OTA**；
+2. commit 组 1：签名/发布脚本 + `ota_trust_anchor.h` + env 模板；
+3. commit 组 2：`ota_update` 模块 + 契约行；
+4. commit 组 3：SCREEN2_2 UI + 全局互斥（低电/Sleep/吞键）；
+5. commit 组 4：`verifyRollbackLater` 覆盖 + WDT 窗口 + `drv.begin`
+   拆雷 + 文档同步；
+6. 每组独立走 §8 对应用例。
+
+## 10. 实现合同清单（Grok P2-6，编码时逐条核对）
+
+快照进任务不复拉清单；size > 空闲槽拒绝；`Content-Length` 强制且匹配；
+失败 `abort()` 不 `end()`；枚举追加式；池水位观测点；明文宏走 plain
+client；URL 配置源 = env.cfg `OTA_URL`；绝对 deadline 10min；低电定时
+器互斥；`WiFi.setSleep` 恢复；公钥 tracked/私钥 gitignored；P1363 签名
+编码 + `mbedtls_ecdsa_verify`；换根仅 USB。
+
+## 11. 已裁决事项（不再开放）
+
+- 签名算法 = ECDSA P-256（Grok A 裁定 + Claude 裁定接受；Codex v1 的
+  "Ed25519"字样由 Grok 逐字放宽为"算法可替换"，性质要求已满足）。
+- 手动触发 / 字符串版本不等即更新 / 自证不绑 WiFi / 写槽不可用户中止
+  （令牌在块边界生效）/ `notes` 从展示升级为签名对象——均定案。
+
+## 12. v2→v3 修订记录（逐条对照）
+
+| # | 处置（§节） | 来源 |
 |---|---|---|
-| 1 | §3.1 专用 TLS 通道 + §4.3 式编译期明文开关 | Codex P1 / Grok P1-2 / Qwen P1 |
-| 2 | §2 清单签名（ECDSA P-256，四字段必填，公钥走秘密链） | Codex P1 / Qwen P1 |
-| 3 | §5 回滚三重修复（weak 覆盖 / 自证点后移 / 拆 while(1) 雷）+ 层 2 文案"上一张已验证槽" | Grok P1-1 / Qwen P2 |
-| 4 | §3.2 弃用 HTTPUpdate，自管流式 + SHA-256 + size 校验 | Grok P1-2/P1-3 |
-| 5 | §6 契约登记行（gen/busy/队列/取消语义） | Qwen P2 |
-| 6 | §7 分区表/bootloader 受控化 + 双机读回 | Codex P1 |
-| 7 | §8 回滚真测防假阴性用例前置 | Grok §8.6 / Qwen / Claude 补充用例 |
-| 8 | Qwen P3：清单 version 与 bin 烘焙版本一致性 → 发布脚本内置校验（构建后从 utilities.h 读版本写入清单） | Qwen P3 |
-| 9 | Qwen P3（x-MD5 头）不采纳：sha256 已入签名清单，传输完整性由 TLS+签名双覆盖 | Qwen P3 |
+| 1 | §3.3 全局硬件锁 + 取消令牌（三检查点，abort 不切槽；跨页面/代次） | Codex P1-A |
+| 2 | §5.2 task WDT 8s 自证窗口（自证前任何死循环可恢复）；§5.4 层 2 文案 | Codex P1-B / Grok P2-5 |
+| 3 | §2.2 公钥入 tracked `ota_trust_anchor.h`（key_id+编码+指纹校验），私钥才 gitignored | Codex P1-C / Grok P2-2 |
+| 4 | §4.1 低电关机互斥 + §4.2 Sleep 禁入 + `WiFi.setSleep(false)` + waitbox 吞键 | Claude P1-A / Grok P2-4 |
+| 5 | §7.1/§7.2/§5.4 恢复发布步骤 + USB 回退完整命令（修正 v1 命令的 app1 缺口）+ 三层表精简版；修复 v2 两处悬空引用（原 §5.4"（§6）"、§8.5"（§2.4 行 6）"） | Claude P1-B / Grok P2-6 |
+| 6 | §2.1 `notes`、`seq` 入签名；§2.1 seq 单调 + NVS last_seq + 降级宏 | Codex P2 |
+| 7 | §7.3 tracked 基线文件 `docs/ota-baseline.md` | Codex P2 |
+| 8 | §2.3 `OTA_URL` 配置源恢复 + env.cfg.example 过时注释修正 | Grok P2-1 |
+| 9 | §2.1 签名编码钉死 IEEE P1363 + `mbedtls_ecdsa_verify`（禁 read_signature）+ §8.3 DER 拒绝用例 | Grok P2-2 |
+| 10 | §3.2 超时模型（读空闲 45s + 绝对 deadline 10min）+ §6 契约超时例外 | Grok P2-3 |
+| 11 | §3.1 明文宏的 scheme 分支（plain `WiFiClient`） | Claude P2 / Grok P2-6 |
+| 12 | §10 实现合同清单（快照/槽容量/Content-Length/abort/枚举追加/池水位/拆提交） | Grok P2-6 |
+| 13 | Qwen P3 两项维持 v2 处置（版本一致性入发布脚本；x-MD5 不采纳——sha256 已入签名） | Qwen P3 |
