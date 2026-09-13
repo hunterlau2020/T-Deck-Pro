@@ -160,6 +160,12 @@ static pp_http_t pp_request(const char *method, const string &url,
     http.collectHeaders(wanted_headers, 1);
 
     http.addHeader("X-API-Key", api_key);
+    /* Apache gate pin (deploy doc DEPLOY_APACHE.md §gate): the reverse proxy
+     * 403s any request without this shared header before it reaches the
+     * backend - defense-in-depth against indiscriminate scans, NOT a
+     * security boundary (extractable from firmware; real credential stays
+     * the per-user API key). Hardcoded by owner decision 2026-09-13. */
+    http.addHeader("X-Gate-Pin", "49ef146ed5");
     if (idem_key && idem_key[0]) {
         http.addHeader("Idempotency-Key", idem_key);
     }
