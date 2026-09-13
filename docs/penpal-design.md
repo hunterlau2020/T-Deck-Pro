@@ -443,6 +443,8 @@ FB 页 `entry()` 按 §3.2 结果 `type`（FIX / POLISH）选择渲染布局—�
 - AI Provider 下拉选项来自 `openai_api` 的集中式注册表，最后一项为 `custom`；
 - 状态行显示所选 provider 的 `label/model/key 是否存在`，以及当前值是否来自 `env.cfg`；
 - 键盘：`\t` 在 Server URL / Server Key / AI Provider 之间循环焦点；焦点在 provider 上时按 `+/-` 切换选项；`\b` 删除当前输入框字符，为空时返回 HOME。
+- **触摸焦点同步**（2026-09-13）：两个输入框挂 `LV_EVENT_FOCUSED` 回调——触摸哪个框，键盘路由（`s_cfg_focus`）即切到哪个框（与 wifi_cfg/ai_cfg 同款）。修复“光标在 Key 框但 ⌫ 删 URL 字符”的触摸/键盘焦点脱节缺陷；
+- **Test 按钮**（2026-09-13，Save 旁）：带 key 的 `GET /pen-pals` 一键探测（可达性/HTTP/认证），结果弹窗手动关闭。每请求另带 `X-Gate-Pin` 头（Apache 反代门禁，部署文档 DEPLOY_APACHE.md）。
 
 ## 5. 数据模型与内存预算
 
