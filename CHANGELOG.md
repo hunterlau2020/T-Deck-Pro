@@ -14,6 +14,17 @@
   布流程+USB 回退完整命令、清单 URL 配置源恢复、签名编码钉死 IEEE
   P1363。悬空引用两处修复。实现顺序改为回滚真测先行 + 分组提交。
 
+## 2026-09-13
+
+- **OTA 设计稿 v4 送复审**：v3 四方复审（Grok C / Codex C / Qwen C /
+  Claude A）三方收敛于同一 P1——8s WDT 自证窗口 < 现有 `setup()` 阻塞
+  profile（`A7682E_init` 6.1s / `GPS_Recovery` 6.4s / EPD 全刷）。v4 重
+  设计：先校准后定值（两机打点 → T=实测×2 下限 30s）+ `esp_task_wdt_
+  init(T,panic)` 显式 re-init + 四处具名喂狗点 + 自证点改 EPD 首帧完成
+  序列号（弃 `lv_async_call` 语义）；另收 seq 提交时机（end 后写）、公
+  钥格式钉死 65B 未压缩 SEC1、Check 移入 worker、进度原子轮询、低电安
+  全阀等 7 P2 + 5 P3/Nit。申请头按 Codex 意见补"最没把握"自评段。
+
 ## 2026-09-11（第二批：AI Chat 语音全链路）
 
 - **OTA 固件远程升级——设计稿待评审**（[`docs/ota-update-design.md`](
