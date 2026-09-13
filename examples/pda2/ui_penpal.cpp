@@ -699,10 +699,12 @@ static void pp_consume(pp_result_t *res)
     case PP_RES_TEST:
         pp_waitbox_hide();
         pp_release_busy(res->gen);
+        /* user request 2026-09-13: the result must stay until manually
+         * closed - msgbox (with Close), not the transient status line */
         if (res->ok) {
-            pp_status_set("%s", res->text.c_str());
+            pp_msgbox_show("Server Test", res->text.c_str());
         } else {
-            pp_status_set("Test failed: %s", res->err.c_str());
+            pp_msgbox_show("Server Test failed", res->err.c_str());
         }
         break;
 
