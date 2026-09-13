@@ -416,6 +416,29 @@ bool penpal_get_pals(const char *base, const char *key,
     return true;
 }
 
+bool penpal_test_base(const char *base, const char *key, string *detail)
+{
+    if (!pp_cfg_ok(base, key, detail)) return false;
+
+    /* GET /pen-pals = cheapest authenticated round-trip: one call proves
+     * IP/TCP reachability, HTTP framing, auth and server liveness. */
+    pp_http_t r = pp_request("GET", pp_url(base, "/pen-pals"), NULL, NULL,
+                             key, PP_TIMEOUT_CRUD_MS);
+    if (r.ok) {
+        cJSON *root = cJSON_Parse(r.body.c_str());
+        int n = (root && cJSON_IsArray(root)) ? cJSON_GetArraySize(root) : -1;
+        cJSON_Delete(root);
+        if (detail)
+            *detail = (n >= 0) ? "Test OK: HTTP 200, " + std::to_string(n) +
+                                 " pen-pals"
+                               : "Test OK: HTTP 200";
+        return true;
+    }
+    if (detail) *detail = pp_fail(r);
+    Serial.printf("%s test failed: %s\n", PP_TAG, pp_fail(r).c_str());
+    return false;
+}
+
 bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count)
 {
     if (count) *count = 0;

@@ -186,6 +186,13 @@ void penpal_new_idem_key(char out[33]);
 bool penpal_get_pals(const char *base, const char *key,
                      pp_pal_t *out, int max, int *count, string *err);
 
+/** @brief CFG "Test" probe (user request 2026-09-13): GET /pen-pals with
+ *         the key - validates reachability, HTTP and auth in one call.
+ * @param detail always filled: "HTTP 200 OK, N pen-pals" on success,
+ *         transport/HTTP/auth error text otherwise.
+ * @return true on HTTP 200. */
+bool penpal_test_base(const char *base, const char *key, string *detail);
+
 bool penpal_get_topics(const char *base, const char *key,
                        pp_topic_t *out, int max, int *count, string *err);
 

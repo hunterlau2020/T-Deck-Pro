@@ -46,6 +46,7 @@ typedef enum {
     PP_RES_FIX,
     PP_RES_POLISH,
     PP_RES_TIPS,
+    PP_RES_TEST,            /* CFG Test probe (2026-09-13); detail in text */
 } pp_res_type_t;
 
 /* Result: gen FIRST, type SECOND (§3.2). New'ed by the task, ownership moves

@@ -28,6 +28,7 @@
  *            residual rows are SHOWN and open read-only - no filtering.
  */
 #include "Arduino.h"
+#include <WiFi.h>
 #include "ui_deckpro.h"
 #include "ui_deckpro_port.h"
 #include "ui_penpal.h"
@@ -435,6 +436,10 @@ static void pp_task_func(void *param)
                               &res->tips, &err);
         if (res->ok) pp_tips_text(res->text, &res->tips);
         break;
+    case PP_RES_TEST:
+        res->ok = penpal_test_base(base, key, &err);
+        res->text = err;    /* detail line both ways (text is free-form) */
+        break;
     default:
         err = "bad request type";
         res->ok = false;
@@ -462,6 +467,7 @@ static void pp_wait_for_type(int type, pp_wait_kind_t *kind, const char **title)
     case PP_RES_FIX:     *kind = PP_WAIT_READ; *title = "Correcting...\n(LLM, up to 3 min)"; break;
     case PP_RES_POLISH:  *kind = PP_WAIT_READ; *title = "Polishing...\n(LLM, up to 3 min)";  break;
     case PP_RES_TIPS:    *kind = PP_WAIT_READ; *title = "Reply tips...\n(LLM, up to 3 min)"; break;
+    case PP_RES_TEST:    *kind = PP_WAIT_READ; *title = "Testing server...\n(GET /pen-pals)"; break;
     default:             *kind = PP_WAIT_READ; *title = "Working...";         break;
     }
 }
@@ -687,6 +693,16 @@ static void pp_consume(pp_result_t *res)
                            res->text.c_str());
         } else {
             pp_msgbox_show("Tips failed", res->err.c_str());
+        }
+        break;
+
+    case PP_RES_TEST:
+        pp_waitbox_hide();
+        pp_release_busy(res->gen);
+        if (res->ok) {
+            pp_status_set("%s", res->text.c_str());
+        } else {
+            pp_status_set("Test failed: %s", res->err.c_str());
         }
         break;
 
@@ -1176,6 +1192,36 @@ static void pp_cfg_save_cb(lv_event_t *e)
     }
 }
 
+/* CFG Test (user request 2026-09-13): probe the server URL from the
+ * textareas with the configured key - result lands in the CFG status
+ * line via PP_RES_TEST. Mask-aware key read, same as Save. */
+static void pp_cfg_test_cb(lv_event_t *e)
+{
+    (void)e;
+    const char *base = lv_textarea_get_text(s_cfg_base_ta);
+    const char *key = lv_textarea_get_text(s_cfg_key_ta);
+    if (!base || !base[0]) {
+        pp_status_set("Test: enter server URL first");
+        return;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        pp_status_set("Test: WiFi not connected");
+        return;
+    }
+    const char *test_key = key;
+    char key_masked[PP_KEY_MAX];
+    secret_mask_middle(s_cfg_key_real, key_masked, sizeof(key_masked), 1);
+    if (s_cfg_key_masked && strcmp(key, key_masked) == 0)
+        test_key = s_cfg_key_real;    /* untouched mask: stored key */
+
+    pp_task_req_t rq = {};
+    rq.gen = s_pp_gen;
+    rq.type = PP_RES_TEST;
+    rq.base = base;
+    rq.key = test_key;
+    pp_start(&rq, false);
+}
+
 static void pp_cfg_build(lv_obj_t *parent)
 {
     lv_obj_t *page = lv_obj_create(parent);
@@ -1246,6 +1292,14 @@ static void pp_cfg_build(lv_obj_t *parent)
     lv_label_set_text(save_lab, "Save");
     lv_obj_center(save_lab);
     lv_obj_add_event_cb(save_btn, pp_cfg_save_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *test_btn = lv_btn_create(page);
+    lv_obj_set_size(test_btn, 64, 30);
+    lv_obj_align(test_btn, LV_ALIGN_TOP_LEFT, 78, 220);
+    lv_obj_t *test_lab = lv_label_create(test_btn);
+    lv_label_set_text(test_lab, "Test");
+    lv_obj_center(test_lab);
+    lv_obj_add_event_cb(test_btn, pp_cfg_test_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *status = lv_label_create(page);
     lv_obj_align(status, LV_ALIGN_TOP_LEFT, 6, 256);
