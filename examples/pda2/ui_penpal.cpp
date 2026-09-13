@@ -1229,6 +1229,22 @@ static void pp_cfg_test_cb(lv_event_t *e)
     pp_start(&rq, false);
 }
 
+/* Touch focus keeps the keypad editing the box the user sees (same as
+ * wifi_cfg/ai_cfg: LV_EVENT_FOCUSED on each textarea). Without these,
+ * tapping the key box moved the LVGL cursor but Backspace kept editing
+ * the URL box (device report 2026-09-13). */
+static void pp_cfg_base_focus_cb(lv_event_t *e)
+{
+    (void)e;
+    s_cfg_focus = PP_CFG_FOCUS_BASE;
+}
+
+static void pp_cfg_key_focus_cb(lv_event_t *e)
+{
+    (void)e;
+    s_cfg_focus = PP_CFG_FOCUS_KEY;
+}
+
 static void pp_cfg_build(lv_obj_t *parent)
 {
     lv_obj_t *page = lv_obj_create(parent);
@@ -1254,6 +1270,8 @@ static void pp_cfg_build(lv_obj_t *parent)
     lv_obj_align(s_cfg_base_ta, LV_ALIGN_TOP_MID, 0, 60);
     lv_textarea_set_max_length(s_cfg_base_ta, 95);   /* env.cfg value cap §3.4 */
     lv_textarea_set_one_line(s_cfg_base_ta, true);
+    lv_obj_add_event_cb(s_cfg_base_ta, pp_cfg_base_focus_cb,
+                        LV_EVENT_FOCUSED, NULL);
     lv_obj_set_style_text_font(s_cfg_base_ta, &lv_font_montserrat_14, 0);
 
     lv_obj_t *kl = lv_label_create(page);
@@ -1266,6 +1284,8 @@ static void pp_cfg_build(lv_obj_t *parent)
     lv_obj_align(s_cfg_key_ta, LV_ALIGN_TOP_MID, 0, 120);
     lv_textarea_set_max_length(s_cfg_key_ta, 16);
     lv_textarea_set_one_line(s_cfg_key_ta, true);
+    lv_obj_add_event_cb(s_cfg_key_ta, pp_cfg_key_focus_cb,
+                        LV_EVENT_FOCUSED, NULL);
     lv_obj_set_style_text_font(s_cfg_key_ta, &lv_font_montserrat_14, 0);
 
     lv_obj_t *pl = lv_label_create(page);
