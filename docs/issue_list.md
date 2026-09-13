@@ -551,6 +551,43 @@ pick）死机或重启；1269bf7 时代已有偶发 topic 选择死机（当时�
   4. 所有实证可听的播放均为 44.1k 立体声；16k 单声道 WAV 播放路径
      可疑（从未被清楚听到过），录音回放先上采样到 44.1k 立体声。
 
+## 17. 键盘/触摸焦点路由缺陷（PenPal CFG 与 COMPOSE，2026-09-13 修复，`7ee150b`/`cfe993d`/`54cfc79`）
+
+**现象**（用户报告两轮）：① CFG 页内部焦点在 Server Key 时，⌫ 删的是
+Server URL 的字符；② COMPOSE 页触摸 Title 框后打字，文字落进 Body。
+两处共同点：**用户看到的输入位置（LVGL 光标/触摸点）与键盘路由变量
+（`s_cfg_focus`/`s_focus_title`）不一致**。
+
+**根因**（两类，对应两个修法）：
+
+1. **焦点状态跨页面残留**：`s_cfg_focus` 是 file-static，离开 CFG 页时
+   不重置，而 `pp_cfg_prefill()`（每次进页必跑）只重填输入框内容。
+   上次访问焦点停在 KEY → 本次重进，内部焦点仍是 KEY，⌫ 即作用于
+   URL 框。**修复**：prefill 首行 `pp_cfg_focus_set(PP_CFG_FOCUS_BASE)`
+   （`7ee150b`）。
+2. **触摸不动键盘路由**：textarea 挂 `LV_EVENT_FOCUSED` 回调后，触摸
+   只移动 LVGL 光标（视觉），键盘路由变量不跟随——用户"看到光标在
+   Key 框"，⌫ 实际删 URL。**修复**：加 FOCUSED 回调同步内部变量
+   （CFG：`pp_cfg_base_focus_cb`/`pp_cfg_key_focus_cb`；COMPOSE：
+   `ppw_title_focus_cb`/`ppw_body_focus_cb`，`cfe993d`）。
+
+**审查同类页面**：wifi_cfg（`wifi_ssid/pass_focus_cb`）与 ai_cfg
+（`ai_ta_focus_cb`）**均已有触摸同步**——PenPal 是唯一缺口（CFG 两框 +
+COMPOSE 两框共四处）。已补齐。
+
+**经验沉淀**（适用一切"标签 + 输入框 + 物理键盘"的屏）：
+1. **任何"选中态"必须有三个同步点**：页面进入时重置、Tab 循环时更新、
+   **触摸点选时更新**——第三点最容易漏（LVGL 光标自动跟触摸，制造
+   "已切换"的假象）。
+2. **无可见焦点指示 = 用户必然误判**。wifi_cfg 用 ">" 标记前缀；
+   PenPal CFG 当时无任何标记（后按需补）——纯键盘驱动的屏必须给
+   焦点做视觉锚。
+3. **路由变量的生命周期审查**：file-static 的"当前 X"变量，每次进入
+   相关页面时应显式重置或与持久化状态对齐（对照 `pp_cfg_prefill`/
+   `wifi_cfg_set_field(0)` 两处先例）。
+4. Tab 循环经过下拉/按钮类字段时，⌫ 在该字段上应有明确语义（PenPal
+   CFG：PROVIDER 上 ⌫ = 返回 HOME，与空框退出一致）。
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：
