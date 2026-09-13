@@ -27,3 +27,6 @@ backups/
 
 # ZCode session-local files (plans etc.)
 .zcode/
+
+# External reference methodology docs (local-only, not part of repo canon)
+docs/review_guide_reference/
