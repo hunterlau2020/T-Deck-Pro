@@ -1,7 +1,7 @@
-# 评审结果：OTA 固件远程升级设计稿（opencode）
+# 评审结果：OTA 固件远程升级设计稿（qwen）
 
 - **评审日期**：2026-09-13
-- **评审对象**：[`docs/ota-update-design.md`](../ota-update-design.md)（设计稿，状态"待评审"，无实现代码）
+- **评审对象**：[`docs/ota-update-design.md`](../ota-update-design.md) **v1 设计稿 @ `36e88df`**（状态"待评审"，无实现代码）。本结果针对 **v1**；该稿后已修订为 **v2 @ `be6a52c`**（"four-review P1s folded in"）并由 codex/grok/claude 复审——本文件是 v1 轮的 qwen 评审，按 §7.2 commit 锚规则保留为历史记录，**不与 v2 轮文件互相覆盖**（v2 如需 qwen 复审另起 `ota-update-design-review-result-be6a52c-qwen.md`）。
 - **评审类型**：设计稿对齐评审（review_guide §1.1 / §2.1 **L1 DOC-ALIGNED** track）
 - **评审依据**：`docs/review_guide.md` v1.0；上位准则 `CLAUDE.md`、`docs/async_ipc_contract.md`、`docs/issue_list.md`
 - **评审范围**：§1 现状盘点（逐条核验"已核实的事实"）、§2 清单协议、§3 模块设计、§4 UI、§5 三层失败/回滚模型、§6 发布流程、§8 六项请评审重点。

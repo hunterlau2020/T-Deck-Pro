@@ -1,5 +1,7 @@
 # 评审工作流（docs/reviews/）
 
+> **评审方法论 / 定级表 / 证据规则 / 承重不变量清单见 [`docs/review_guide.md`](../review_guide.md)**（本文件只讲目录与申请合并流程；指南是稳定标准的权威）。
+
 ## 目录约定
 
 - 申请文件：`wifi-config-keyboard-review-request-<commit范围>.md`
