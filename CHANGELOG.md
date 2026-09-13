@@ -25,6 +25,18 @@
   钥格式钉死 65B 未压缩 SEC1、Check 移入 worker、进度原子轮询、低电安
   全阀等 7 P2 + 5 P3/Nit。申请头按 Codex 意见补"最没把握"自评段。
 
+## 2026-09-13
+
+- **OTA 设计稿 v5 送复审**：v4 四方共同 P1——签名对象把 `sig` 自身编入
+  （自指不可构造，实为 v4 措辞从 v3 显式六字段枚举退化）——恢复显式
+  六字段枚举修复；TWDT 可实施合同（`add(NULL)` 禁写函数名、喂狗点
+  `s_boot_wdt_subscribed` 守卫防自证后 ESP_ERR_NOT_FOUND 刷屏）；取号
+  副作用隔离（`ui_disp_full_refr_seq()` 单次存变量）；单飞守卫
+  `s_ota_inflight`（cap 1 覆盖 Check+Update，跨 gen/页面）；快照所有权
+  链（结果携带 manifest→UI 持有→launch-time copy，TOCTOU 关闭）；
+  `A7682E_init` 数值修正 8.4s；校准度量改最长喂狗间隔。自评③ 显式提请
+  裁定"屏坏固件回滚"取舍。
+
 ## 2026-09-11（第二批：AI Chat 语音全链路）
 
 - **OTA 固件远程升级——设计稿待评审**（[`docs/ota-update-design.md`](
