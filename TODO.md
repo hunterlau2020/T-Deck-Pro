@@ -6,32 +6,40 @@
 > 本文件只保**未完成**事项；已完成工作看 `CHANGELOG.md`（按日期）与
 > `docs/issue_list.md`（修复台账）。
 
-## 待办（2026-09-13 盘点，按优先级）
+## 待办（2026-09-15 盘点，按优先级）
 
-- [ ] **OTA 远程升级实现**——设计 v6 已过 G-开工（四方 A/L1，设计冻结），
-      实现顺序：① 校准打点（两机 setup 各段耗时 + `_busy_timeout` 实测）→
-      定 WDT 窗口 T、填 `docs/ota-baseline.md`；② 回滚真测矩阵（自毁固件，
-      先于首次真实 OTA）；③ 四组提交：签名脚本+`ota_trust_anchor.h` /
-      `ota_update` 模块+契约行 / SCREEN2_2 UI+互斥 / factory.ino 三处+文档。
-      设计：`docs/ota-update-design.md` v6 + 实现合同清单（§10）。
+- [ ] **OTA 真机验证矩阵**（实现已落地 `71c09e7`，设计 §8 剩余项）：①
+      校准打点（两机 setup 各段耗时 + `_busy_timeout` 实测）→ 复核 WDT
+      窗口 T=60s 假设、填 `docs/ota-baseline.md`；② 回滚矩阵（自毁固件，
+      先于首次真实 OTA）；③ 覆盖层吸收 / 断网 45s 重试 / 低电安全阀 /
+      签名否定用例（大写 hex、前导零、错锚验签）；④ 局域网端到端
+      （HTTP 服务 + 签一份 manifest，走 Check→Install→重启→自证全流程，
+      需临时编 `OTA_ALLOW_PLAIN_HTTP` 台架版）。真机已过：自证窗口
+      `mark valid ok` 一次（机 #3）。
+- [ ] **`PENPAL_BASE` 数据源不一致 + 机 #3 首次配置**：两台 V1.1 的 NVS 指向
+      `https://www.studyreview.net`，但 `data/env.cfg` 与机 #3（2026-09-15
+      整片擦除后 SPIFFS 克隆自 V1.1，NVS 为空）均为旧局域网地址
+      `192.168.3.186:8000`——重刷 env 分区前先改 `data/env.cfg`；机 #3 需在
+      Whoami Cfg 保存一次 HTTPS 域名。
 - [ ] **读信 TTS**：PenPal THREAD 页加"朗读"——MiniMax t2a 合成（链路已验：
       `minimax_audio.cpp` 的 `minimax_tts()`）→ SPIFFS `/tts.mp3` →
       `connecttoFS` 播放（EPD 抑制 + WDT 窗口语义照搬 AI Chat 语音路径）。
-      注意与 OTA 写 flash 的互斥（`s_ota_hw_lock` 同款思路）。
+      注意与 OTA 写 flash 的互斥（`ota_busy()` 已导出）。
 - [ ] **PenPal gate-pin 去 hardcode**：`X-Gate-Pin`（现 `49ef146ed5`，硬编码于
-      `penpal_api.cpp:168`）迁入配置链——NVS → `/env.cfg`（`GATE_PIN=`）→
+      `penpal_api.cpp`）迁入配置链——NVS → `/env.cfg`（`GATE_PIN=`）→
       现值作编译期兜底；与 Apache `Require expr` 侧同步轮换（部署文档
       DEPLOY_APACHE.md；gate-pin 是防扫描纵深层，非安全边界）。
-- [ ] **`PENPAL_BASE` 已切换 HTTPS 域名，数据源待改**：两台设备现指向
-      `https://www.studyreview.net`（设备 NVS 已 Save；但 `data/env.cfg` 的
-      `PENPAL_BASE` 仍为旧局域网地址 `192.168.3.186:8000`）——重刷 env 分区前
-      务必先更新 `data/env.cfg`，否则设备 URL 回退。
 - [ ] **openrouter Test 证书修复验证**：全量包已补 GlobalSign R1 交叉签锚
       （v6 轮 AI Config Test 的 X509 失败应已解决）——设备上点一次
       AI Config → Test 确认（顺手项）。
+- [ ] **OTA 信任锚管理流程**：`ota_signing_key.pem` 仅存本机（gitignored）；
+      建立离线备份位与轮换预案（换根仅 USB，设计 §2.2）。
 
 ## 已知边界 / 观察（不挡使用）
 
+- [ ] **机 #3（V1.0）睡眠观察**：面板假死（issue_list §18）判定为复位时序
+      事故而非睡眠路径缺陷，自动休眠保留；观察该机后续睡眠/唤醒是否再现
+      假死（再现则按 §18 教训 1 拔电池恢复，并重评 V1.0 禁用自动休眠）。
 - [ ] **麦克风键**：AI Chat 已绑定（按住说话）；其余屏未接（issue_list 1.3）。
 - [ ] **SPIFFS 写放大**：`/chat.log` 整文件重写（原子安全）；改 append+compact
       或后台保存线程。

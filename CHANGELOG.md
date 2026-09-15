@@ -3,6 +3,34 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-15（会话批次：八组功能/修复 + V1.0 面板假死事件）
+
+- **八组变更单 commit 批次**（`71c09e7`，评审申请
+  `docs/reviews/session-batch-review-request-71c09e7.md`）：① CA 根修复
+  （+DigiCert Global Root CA / AAA Certificate Services 两个指纹固定额外根，
+  minimax.io/.com X509 fatal 修复，122→124 根 + PC 全链验证脚本）；② 语音
+  AI 多轮上下文（`openai_chat_multi`，4KB 整轮预算）；③ 5 分钟无操作自动
+  深度休眠（复用 Sleep 屏）；④ PenPal 三修复（校验/发送失败 msgbox 化、
+  msgbox 中文 SimSun 字体、reply title 线程锚定锁定）；⑤ Whoami App
+  （`/users/me/profile` + PenPal Cfg 迁入双 tab；含 Z 序与队列生命周期两处
+  崩溃/失效修复）；⑥ 菜单重排（Whoami/Wifi/Lora 三槽对调）；⑦ Voice AI
+  TTS 开关（NVS 持久化）+ Trust/TTS 开关 EPD 状态配色（CHECKED 选择器）；
+  ⑧ **OTA 完整实现**（设计稿 v6 落地：`ota_update` 模块指针通道/单飞/
+  ECDSA P1363/流式 SHA-256/45s+10min 超时；SCREEN2_2 UI 全屏吸收覆盖层；
+  启动 WDT 自证窗口 + 五喂狗点——真机自证一次通过；签名/发布脚本
+  `scripts/ota_sign.py` + 密钥生成 + 信任锚；Sleep/Shutdown/低电互斥 +
+  10 分钟安全阀）。
+- **V1.0 面板假死事件**（issue_list §18）：机 #3（`28:37:2f`）在诊断复位
+  撞上面板上电窗口后面板控制器假死，所有固件表现"慢启动"（每页 Busy
+  Timeout）；**拔电池 10s 真断电修复**。出厂固件矩阵实测（§19）与 USB
+  枚举问题集（§20）一并归档。
+- **硬件诊断脚本入库**（`a8eb83a`）：串口抓取/复位、ESP 镜像分区表解析、
+  SPIFFS dump 密钥扫描。
+- **机 #3 恢复流程**（存档）：整片擦除 → 本仓固件 → V1.1 SPIFFS 分区克隆
+  （env.cfg 全六键，镜像留存 `backups/`，gitignored）→ 启动零 Busy
+  Timeout；注意其 NVS 已清空，PenPal base 首次取 env.cfg 的局域网地址，
+  需在 Whoami Cfg 保存一次 HTTPS 域名（TODO §PENPAL_BASE 条目）。
+
 ## 2026-09-13
 
 - **OTA 设计稿 v3 送复审**（[`docs/ota-update-design.md`](ota-update-design.md)
