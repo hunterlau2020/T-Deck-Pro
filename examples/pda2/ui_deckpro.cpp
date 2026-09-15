@@ -5,6 +5,7 @@
 #include "ui_deckpro_port.h"
 #include "Arduino.h"
 #include "openai_api.h"     /* openai_stats_flush() at the deep-sleep checkpoint */
+#include "Audio.h"          /* idle auto-sleep guard: audio.isRunning() */
 
 #define SETTING_PAGE_MAX_ITEM 7
 #define GET_BUFF_LEN(a) sizeof(a)/sizeof(a[0])
@@ -168,6 +169,17 @@ static void low_voltage_timer_cb(lv_timer_t *t)
     }
 
     if (remaining_ms <= 0 && !low_voltage_shutdown_requested) {
+        /* OTA low-voltage safety valve (design §4): suppress the forced
+         * shutdown while flash writes run, but only for ONE 10-minute
+         * deadline window - then let it through regardless. */
+        extern bool ota_shutdown_blocked(void);
+        if (ota_shutdown_blocked()) {
+            low_voltage_shutdown_deadline_ms =
+                lv_tick_get() + 30000;    /* re-check in 30 s */
+            low_voltage_last_countdown_sec = -1;
+            Serial.println("[LowV] shutdown postponed: OTA in flight");
+            return;
+        }
         low_voltage_shutdown_requested = true;
         ui_shutdown_on();
     }
@@ -261,10 +273,10 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN_WEATHER_ID,    &img_weather,    "Weather", 95,   101},
     {SCREEN_CALENDAR_ID,   &img_calendar,   "Calendar",167,  101},
     {SCREEN_CALCULATOR_ID, &img_calculator, "Calc",    23,   189},
-    {SCREEN4_ID,           &img_wifi,       "Wifi",    95,   189},
+    {SCREEN_WHOAMI_ID,     &img_touch,      "Whoami",  95,   189},
     {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    167,  189},
     /* Page two: hardware / system entries; Sleep takes the old Shutdown slot */
-    {SCREEN1_ID,           &img_lora,       "Lora",    23,   13},
+    {SCREEN4_ID,           &img_wifi,       "Wifi",    23,   13},
     {SCREEN2_ID,           &img_setting,    "Setting", 95,   13},
     {SCREEN_GPS_ENHANCED_ID,&img_GPS,       "GPS",     167,  13},
     {SCREEN5_ID,           &img_test,       "Test",    23,   101},
@@ -273,8 +285,10 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN8_ID,           &img_A7682E,     "A7682E",  23,   189},
     {SCREEN11_ID,          &img_sleep,      "Sleep",   95,   189},
     {SCREEN12_ID,          &img_motor,      "Motor",   167,  189},
-    /* Page three: shutdown (alone, 9/9/1 - user-requested swap, 2026-08-26) */
+    /* Page three: shutdown + Lora (user rearrange 2026-09-14: Whoami took
+     * Wifi's page-1 slot, Wifi took Lora's page-2 slot) */
     {SCREEN9_ID,           &img_lora,       "Shutdown",23,   13},
+    {SCREEN1_ID,           &img_lora,       "Lora",    95,   13},
 };
 
 static void menu_btn_event_cb(lv_event_t *e)
@@ -1037,6 +1051,367 @@ static scr_lifecycle_t screen2_1 = {
     .destroy = destroy2_1,
 };
 #endif
+
+// --------------------- screen 2.2 --------------------- OTA Update
+/* docs/ota-update-design.md §4: Check (worker-wait layer w/ Cancel) ->
+ * manifest display -> confirm -> FULL-SCREEN absorbing download overlay
+ * (no buttons, "do not power off") -> done/fail. The overlay container
+ * swallows keyboard AND touch while a request runs (Grok v5 P3-3). */
+#if 1
+#include "ota_update.h"
+
+enum {
+    OTA_UI_IDLE = 0,
+    OTA_UI_CHECKING,
+    OTA_UI_CONFIRM,                    /* verified manifest shown */
+    OTA_UI_DOWNLOADING,
+    OTA_UI_DONE_OK,                    /* flashed, reboot pending */
+    OTA_UI_DONE_FAIL,
+};
+static int s_ota2_2_state = OTA_UI_IDLE;
+static uint32_t s_ota2_2_gen = 0;
+static bool s_ota2_2_kbd = false;
+static lv_obj_t *s_ota2_2_info = NULL;     /* manifest / status text */
+static lv_obj_t *s_ota2_2_status = NULL;
+static lv_obj_t *s_ota2_2_check_btn = NULL;
+static lv_obj_t *s_ota2_2_ok_btn = NULL;   /* Confirm flash */
+static lv_obj_t *s_ota2_2_no_btn = NULL;   /* Cancel */
+static ota_manifest_t *s_ota2_2_manifest = NULL;  /* UI-held between CONFIRM and start */
+static lv_obj_t *s_ota_ovl = NULL;         /* full-screen absorber */
+static lv_obj_t *s_ota_ovl_box = NULL;     /* centered info box */
+static lv_obj_t *s_ota_ovl_body = NULL;
+static lv_timer_t *s_ota2_2_timer = NULL;
+
+static void ota2_2_ovl_hide(void)
+{
+    if (s_ota_ovl) {
+        lv_obj_del(s_ota_ovl);
+        s_ota_ovl = NULL;
+        s_ota_ovl_box = NULL;
+        s_ota_ovl_body = NULL;
+    }
+}
+
+/* full-screen transparent absorber + centered box (design §4 v6): every
+ * touch lands on the container (clickable, no children outside the box)
+ * and the keyboard is swallowed by the state machine below. */
+static void ota2_2_ovl_show(const char *line1, bool cancel_btn)
+{
+    ota2_2_ovl_hide();
+    s_ota_ovl = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_ota_ovl, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(s_ota_ovl, 0, 0);
+    lv_obj_set_style_bg_opa(s_ota_ovl, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_ota_ovl, 0, 0);
+    lv_obj_set_style_pad_all(s_ota_ovl, 0, 0);
+    lv_obj_clear_flag(s_ota_ovl, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_ota_ovl, LV_OBJ_FLAG_CLICKABLE);   /* absorb taps */
+
+    s_ota_ovl_box = lv_obj_create(s_ota_ovl);
+    lv_obj_set_size(s_ota_ovl_box, 220, 130);
+    lv_obj_align(s_ota_ovl_box, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(s_ota_ovl_box, lv_color_white(), 0);
+    lv_obj_set_style_border_width(s_ota_ovl_box, 1, 0);
+    lv_obj_set_style_border_color(s_ota_ovl_box, lv_color_black(), 0);
+    lv_obj_set_style_radius(s_ota_ovl_box, 6, 0);
+    lv_obj_set_style_pad_all(s_ota_ovl_box, 8, 0);
+    lv_obj_clear_flag(s_ota_ovl_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_ota_ovl_body = lv_label_create(s_ota_ovl_box);
+    lv_obj_set_width(s_ota_ovl_body, lv_pct(100));
+    lv_label_set_long_mode(s_ota_ovl_body, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(s_ota_ovl_body, line1);
+    lv_obj_set_style_text_font(s_ota_ovl_body, &lv_font_montserrat_14, 0);
+    lv_obj_align(s_ota_ovl_body, LV_ALIGN_TOP_MID, 0, 0);
+
+    if (cancel_btn) {
+        lv_obj_t *btn = lv_btn_create(s_ota_ovl_box);
+        lv_obj_set_size(btn, 70, 26);
+        lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_label_set_text(l, "Cancel");
+        lv_obj_center(l);
+        lv_obj_add_event_cb(btn, [](lv_event_t *e) {
+            (void)e;
+            ota_request_cancel();          /* token, chunk boundary */
+            s_ota2_2_gen++;                /* invalidate late results */
+            s_ota2_2_state = OTA_UI_IDLE;
+            ota2_2_ovl_hide();
+            if (s_ota2_2_status)
+                lv_label_set_text(s_ota2_2_status, "check cancelled");
+            ui_disp_full_refr();
+        }, LV_EVENT_CLICKED, NULL);
+    }
+}
+
+static void ota2_2_show_idle(void)
+{
+    if (s_ota2_2_info)
+        lv_label_set_text_fmt(
+            s_ota2_2_info,
+            "Current: %s\n\nCheck downloads the signed\nmanifest and verifies it\nbefore anything is flashed.",
+            ota_current_version());
+    if (s_ota2_2_check_btn) lv_obj_clear_flag(s_ota2_2_check_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_ota2_2_ok_btn) lv_obj_add_flag(s_ota2_2_ok_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_ota2_2_no_btn) lv_obj_add_flag(s_ota2_2_no_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void ota2_2_start_check(void)
+{
+    char err[128];
+    if (!ota_precheck_ui(err, sizeof(err))) {
+        if (s_ota2_2_status) lv_label_set_text(s_ota2_2_status, err);
+        return;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        if (s_ota2_2_status) lv_label_set_text(s_ota2_2_status, "WiFi not connected");
+        return;
+    }
+    if (!ota_check_async(s_ota2_2_gen)) {
+        if (s_ota2_2_status)
+            lv_label_set_text(s_ota2_2_status, "previous OTA op closing");
+        return;
+    }
+    s_ota2_2_state = OTA_UI_CHECKING;
+    if (s_ota2_2_check_btn) lv_obj_add_flag(s_ota2_2_check_btn, LV_OBJ_FLAG_HIDDEN);
+    ota2_2_ovl_show("Checking for update...", true);
+}
+
+static void ota2_2_start_flash(void)
+{
+    if (!s_ota2_2_manifest) return;
+    ota_manifest_t *m = s_ota2_2_manifest;
+    s_ota2_2_manifest = NULL;             /* ownership moves to the task */
+    if (!ota_start_async(s_ota2_2_gen, m)) {
+        if (s_ota2_2_status)
+            lv_label_set_text(s_ota2_2_status, "start failed (busy)");
+        s_ota2_2_state = OTA_UI_IDLE;
+        ota2_2_show_idle();
+        return;
+    }
+    s_ota2_2_state = OTA_UI_DOWNLOADING;
+    if (s_ota2_2_ok_btn) lv_obj_add_flag(s_ota2_2_ok_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_ota2_2_no_btn) lv_obj_add_flag(s_ota2_2_no_btn, LV_OBJ_FLAG_HIDDEN);
+    /* no Cancel button in the download stage (design §4: write path is
+     * not user-interruptible; "do not power off") */
+    ota2_2_ovl_show("Downloading...\n0%\nDO NOT POWER OFF", false);
+}
+
+/* consumer: registered with ota_set_consumer; owns the result pointer */
+static void ota2_2_consume(ota_result_t *r)
+{
+    if (r->gen != s_ota2_2_gen) {
+        delete r;                          /* stale (cancel/relaunch) */
+        return;
+    }
+    if (r->kind == OTA_RESULT_CHECK) {
+        ota2_2_ovl_hide();
+        if (r->ok && r->has_update) {
+            if (s_ota2_2_manifest) delete s_ota2_2_manifest;
+            s_ota2_2_manifest = new ota_manifest_t(r->manifest);
+            char head[96], line[160];
+            snprintf(head, sizeof(head), "%s  (seq %lu)",
+                     r->manifest.version.c_str(),
+                     (unsigned long)r->manifest.seq);
+            snprintf(line, sizeof(line),
+                     "Update available:\n\n%s\n%s KB, seq %lu\n%s\n\nInstall?",
+                     head,
+                     to_string(r->manifest.size / 1024).c_str(),
+                     (unsigned long)r->manifest.seq,
+                     r->manifest.notes.c_str());
+            if (s_ota2_2_info) lv_label_set_text(s_ota2_2_info, line);
+            if (s_ota2_2_check_btn) lv_obj_add_flag(s_ota2_2_check_btn, LV_OBJ_FLAG_HIDDEN);
+            if (s_ota2_2_ok_btn) lv_obj_clear_flag(s_ota2_2_ok_btn, LV_OBJ_FLAG_HIDDEN);
+            if (s_ota2_2_no_btn) lv_obj_clear_flag(s_ota2_2_no_btn, LV_OBJ_FLAG_HIDDEN);
+            if (s_ota2_2_status) lv_label_set_text(s_ota2_2_status, "verified - Confirm to flash");
+            s_ota2_2_state = OTA_UI_CONFIRM;
+        } else if (r->ok) {
+            s_ota2_2_state = OTA_UI_IDLE;
+            ota2_2_show_idle();
+            if (s_ota2_2_status)
+                lv_label_set_text(s_ota2_2_status, r->err.c_str());
+        } else {
+            s_ota2_2_state = OTA_UI_DONE_FAIL;
+            ota2_2_show_idle();
+            char line[192];
+            snprintf(line, sizeof(line), "check failed: %.140s",
+                     r->err.c_str());
+            if (s_ota2_2_status) lv_label_set_text(s_ota2_2_status, line);
+        }
+        ui_disp_full_refr();
+    } else {                               /* OTA_RESULT_UPDATE */
+        ota2_2_ovl_hide();
+        if (r->ok) {
+            s_ota2_2_state = OTA_UI_DONE_OK;
+            if (s_ota2_2_info)
+                lv_label_set_text(s_ota2_2_info,
+                                  "Update flashed.\n\nPress Enter to REBOOT\ninto the new firmware.\n(Back = stay on this one)");
+            if (s_ota2_2_status) lv_label_set_text(s_ota2_2_status, "reboot pending");
+        } else {
+            s_ota2_2_state = OTA_UI_DONE_FAIL;
+            ota2_2_show_idle();
+            char line[192];
+            snprintf(line, sizeof(line), "update failed: %.140s",
+                     r->err.c_str());
+            if (s_ota2_2_status) lv_label_set_text(s_ota2_2_status, line);
+        }
+        ui_disp_full_refr();
+    }
+    delete r;                              /* exactly once */
+}
+
+static void ota2_2_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_ota2_2_state == OTA_UI_CHECKING) {
+        if (s_ota_ovl_body && ota_busy())
+            lv_label_set_text(s_ota_ovl_body, "Checking for update...");
+    } else if (s_ota2_2_state == OTA_UI_DOWNLOADING) {
+        if (s_ota_ovl_body)
+            lv_label_set_text_fmt(s_ota_ovl_body,
+                                  "Downloading...\n%d%%\nDO NOT POWER OFF",
+                                  ota_progress_percent());
+    }
+}
+
+void ota2_2_keyboard_poll(void)
+{
+    if (!s_ota2_2_kbd) return;
+    char c;
+    if (!keypad_get_val(&c)) return;
+    keypad_set_flag();
+    switch (s_ota2_2_state) {
+    case OTA_UI_IDLE:
+    case OTA_UI_DONE_FAIL:
+        if (c == '\n') ota2_2_start_check();
+        else if (c == '\b') {
+            s_ota2_2_kbd = false;
+            scr_mgr_pop(false);
+        }
+        break;
+    case OTA_UI_CONFIRM:
+        if (c == '\n') ota2_2_start_flash();
+        else if (c == '\b') {
+            if (s_ota2_2_manifest) { delete s_ota2_2_manifest; s_ota2_2_manifest = NULL; }
+            s_ota2_2_state = OTA_UI_IDLE;
+            ota2_2_show_idle();
+        }
+        break;
+    case OTA_UI_DONE_OK:
+        if (c == '\n') ESP.restart();
+        else if (c == '\b') {
+            s_ota2_2_state = OTA_UI_IDLE;
+            ota2_2_show_idle();
+        }
+        break;
+    case OTA_UI_CHECKING:
+    case OTA_UI_DOWNLOADING:
+        /* overlay absorbs the keyboard (design §4) */
+        break;
+    }
+}
+
+static void ota2_2_back_cb(lv_event_t *e)
+{
+    (void)e;
+    s_ota2_2_kbd = false;
+    scr_mgr_pop(false);
+}
+
+static void create2_2(lv_obj_t *parent)
+{
+    scr_back_btn_create(parent, "OTA Update", ota2_2_back_cb);
+
+    s_ota2_2_info = lv_label_create(parent);
+    lv_obj_align(s_ota2_2_info, LV_ALIGN_TOP_LEFT, 8, 40);
+    lv_obj_set_width(s_ota2_2_info, 224);
+    lv_label_set_long_mode(s_ota2_2_info, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(s_ota2_2_info, &lv_font_montserrat_14, 0);
+    lv_label_set_text(s_ota2_2_info, "");
+
+    s_ota2_2_check_btn = lv_btn_create(parent);
+    lv_obj_set_size(s_ota2_2_check_btn, 64, 30);
+    lv_obj_align(s_ota2_2_check_btn, LV_ALIGN_TOP_LEFT, 8, 240);
+    lv_obj_t *cl = lv_label_create(s_ota2_2_check_btn);
+    lv_label_set_text(cl, "Check");
+    lv_obj_center(cl);
+    lv_obj_add_event_cb(s_ota2_2_check_btn, [](lv_event_t *e) {
+        (void)e; ota2_2_start_check();
+    }, LV_EVENT_CLICKED, NULL);
+
+    s_ota2_2_ok_btn = lv_btn_create(parent);
+    lv_obj_set_size(s_ota2_2_ok_btn, 70, 30);
+    lv_obj_align(s_ota2_2_ok_btn, LV_ALIGN_TOP_LEFT, 8, 240);
+    lv_obj_t *ol = lv_label_create(s_ota2_2_ok_btn);
+    lv_label_set_text(ol, "Install");
+    lv_obj_center(ol);
+    lv_obj_add_event_cb(s_ota2_2_ok_btn, [](lv_event_t *e) {
+        (void)e; ota2_2_start_flash();
+    }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_ota2_2_ok_btn, LV_OBJ_FLAG_HIDDEN);
+
+    s_ota2_2_no_btn = lv_btn_create(parent);
+    lv_obj_set_size(s_ota2_2_no_btn, 70, 30);
+    lv_obj_align(s_ota2_2_no_btn, LV_ALIGN_TOP_LEFT, 86, 240);
+    lv_obj_t *nl = lv_label_create(s_ota2_2_no_btn);
+    lv_label_set_text(nl, "Cancel");
+    lv_obj_center(nl);
+    lv_obj_add_event_cb(s_ota2_2_no_btn, [](lv_event_t *e) {
+        (void)e;
+        if (s_ota2_2_manifest) { delete s_ota2_2_manifest; s_ota2_2_manifest = NULL; }
+        s_ota2_2_state = OTA_UI_IDLE;
+        ota2_2_show_idle();
+    }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_ota2_2_no_btn, LV_OBJ_FLAG_HIDDEN);
+
+    s_ota2_2_status = lv_label_create(parent);
+    lv_obj_align(s_ota2_2_status, LV_ALIGN_TOP_LEFT, 8, 278);
+    lv_obj_set_width(s_ota2_2_status, 224);
+    lv_label_set_long_mode(s_ota2_2_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(s_ota2_2_status, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_ota2_2_status,
+                                lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_label_set_text(s_ota2_2_status, "");
+
+    s_ota2_2_timer = lv_timer_create(ota2_2_timer_cb, 500, NULL);
+
+    s_ota2_2_state = OTA_UI_IDLE;
+    ota2_2_show_idle();
+    s_ota2_2_kbd = true;
+}
+
+static void entry2_2(void)
+{
+    ui_disp_full_refr();
+    s_ota2_2_gen++;                        /* invalidate prior-visit results */
+    ota_set_consumer(ota2_2_consume);
+}
+
+static void exit2_2(void)
+{
+    ui_disp_full_refr();
+    ota2_2_ovl_hide();
+}
+
+static void destroy2_2(void)
+{
+    s_ota2_2_kbd = false;
+    if (s_ota2_2_manifest) { delete s_ota2_2_manifest; s_ota2_2_manifest = NULL; }
+    ota_set_consumer(NULL);                /* late results: poll deletes */
+    if (s_ota2_2_timer) { lv_timer_del(s_ota2_2_timer); s_ota2_2_timer = NULL; }
+    ota2_2_ovl_hide();
+    s_ota2_2_info = s_ota2_2_status = NULL;
+    s_ota2_2_check_btn = s_ota2_2_ok_btn = s_ota2_2_no_btn = NULL;
+    s_ota2_2_state = OTA_UI_IDLE;
+}
+
+static scr_lifecycle_t screen2_2 = {
+    .create = create2_2,
+    .entry = entry2_2,
+    .exit  = exit2_2,
+    .destroy = destroy2_2,
+};
+#endif
 // --------------------- screen 2 --------------------- Setting
 #if 1
 static lv_obj_t *setting_list;
@@ -1051,6 +1426,7 @@ static ui_setting_handle setting_handle_list[] = {
     {.name = "Power Lora",       .type=UI_SETTING_TYPE_SW,  .set_cb = ui_setting_set_lora_status,  .get_cb = ui_setting_get_lora_status},
     {.name = "Power Gyro",       .type=UI_SETTING_TYPE_SW,  .set_cb = ui_setting_set_gyro_status,  .get_cb = ui_setting_get_gyro_status},
     {.name = "Power A7682",      .type=UI_SETTING_TYPE_SW,  .set_cb = ui_setting_set_a7682_status, .get_cb = ui_setting_get_a7682_status},
+    {.name = "- OTA Update",     .type=UI_SETTING_TYPE_SUB, .sub_id = SCREEN2_2_ID},
     {.name = "- About System",   .type=UI_SETTING_TYPE_SUB, .sub_id = SCREEN2_1_ID},
 };
 
@@ -4069,6 +4445,21 @@ static lv_obj_t *shutdown_confirm = NULL;
 
 static void shutdown_confirm_accept(void)
 {
+    /* OTA mutex + safety valve (design §4): refuse while a flash write
+     * runs, but only inside the 10-min valve window - past it the
+     * shutdown goes through even if the worker misbehaves (better a
+     * recoverable interrupted write than a deeply discharged cell) */
+    extern bool ota_shutdown_blocked(void);
+    if (ota_shutdown_blocked()) {
+        Serial.println("[Shutdown] OTA in flight - refused (valve window)");
+        if (shutdown_confirm) {
+            lv_obj_del(shutdown_confirm);
+            shutdown_confirm = NULL;
+        }
+        shutdown_kbd_active = false;
+        scr_mgr_pop(false);
+        return;
+    }
     if (shutdown_confirm) {
         lv_obj_del(shutdown_confirm);
         shutdown_confirm = NULL;
@@ -4423,6 +4814,14 @@ static void scr11_btn_event_cb(lv_event_t * e)
  * modifier state can stick; setup() releases the gpio holds. */
 static void sleep_do_enter(void)
 {
+    /* OTA global mutex (design §4): never deep-sleep mid-flash - the
+     * worker writes the inactive slot, sleeping would kill power rail */
+    extern bool ota_busy(void);
+    if (ota_busy()) {
+        Serial.println("[Sleep] OTA in flight - sleep refused");
+        return;
+    }
+
     // extern TouchDrvCSTXXX touch;
     // touch.sleep();
 
@@ -4559,6 +4958,39 @@ static scr_lifecycle_t screen11 = {
     .exit  = exit11,
     .destroy = destroy11,
 };
+
+/* ---- auto deep sleep (user request 2026-09-14): 5 min without any
+ * keypad press/release (marked in peri_keypad.cpp keypad_loop) or touch
+ * (marked in factory.ino touchpad_read) re-enters the SAME Sleep screen
+ * the zzZ menu icon shows (screen11: "Entering sleep... Wake: press
+ * BOOT key" + a ~3 s countdown, back cancels). sleep_do_enter() itself
+ * shows no UI - the prompt belongs to screen11, which calls it after
+ * the countdown. */
+#define UI_IDLE_SLEEP_MS (5UL * 60UL * 1000UL)
+static volatile uint32_t s_last_activity_ms = 0;
+
+void ui_activity_mark(void)
+{
+    s_last_activity_ms = millis();
+}
+
+static void idle_sleep_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_last_activity_ms == 0) {          /* first tick anchors the window */
+        s_last_activity_ms = millis();
+        return;
+    }
+    if (millis() - s_last_activity_ms < UI_IDLE_SLEEP_MS) return;
+    extern Audio audio;
+    if (audio.isRunning()) {                /* never cut playback off */
+        s_last_activity_ms = millis();      /* re-arm: check again later */
+        return;
+    }
+    s_last_activity_ms = millis();          /* one push per idle window */
+    Serial.println("[Sleep] idle timeout - auto sleep");
+    scr_mgr_push(SCREEN11_ID, false);
+}
 #endif
 //************************************[ screen 12 ]****************************************** Motor
 #if 1
@@ -4792,6 +5224,8 @@ void ui_deckpro_entry(void)
     low_voltage_popup_create();
     low_voltage_timer = lv_timer_create(low_voltage_timer_cb, LOW_VOLTAGE_POLL_MS, NULL);
 
+    lv_timer_create(idle_sleep_timer_cb, 5000, NULL);   /* auto deep sleep */
+
     // auto test
     // lv_timer_create(ui_auto_timer_cb, 3000, NULL);
 
@@ -4803,6 +5237,7 @@ void ui_deckpro_entry(void)
     scr_mgr_register(SCREEN1_2_ID,  &screen1_2);    // - Lora Setting
     scr_mgr_register(SCREEN2_ID,    &screen2);      // Setting
     scr_mgr_register(SCREEN2_1_ID,  &screen2_1);    //  - About System
+    scr_mgr_register(SCREEN2_2_ID,  &screen2_2);    //  - OTA Update (design §4)
     scr_mgr_register(SCREEN3_ID,    &screen3);      // 
     scr_mgr_register(SCREEN4_ID,    &screen4);      // WIFI
     scr_mgr_register(SCREEN4_1_ID,  &screen4_1);    //  - WIFI Config
@@ -4847,6 +5282,9 @@ void ui_deckpro_entry(void)
 
     extern scr_lifecycle_t screen_penpal;
     scr_mgr_register(SCREEN_PENPAL_ID, &screen_penpal);
+
+    extern scr_lifecycle_t screen_whoami;
+    scr_mgr_register(SCREEN_WHOAMI_ID, &screen_whoami);
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);

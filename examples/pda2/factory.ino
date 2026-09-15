@@ -25,6 +25,25 @@
 #include "penpal_api.h"   /* PenPal API client + (via ui_penpal*.cpp, polled in
                            * loop()) the screen UI - registered on the menu in
                            * the menu-page commit */
+#include <esp_task_wdt.h>
+#include <esp_ota_ops.h>  /* OTA self-attestation: mark valid + rollback */
+
+/* ---- OTA boot WDT window (docs/ota-update-design.md §5.2) --------------
+ * s_boot_wdt_subscribed gates every feed point: set ONLY after a successful
+ * esp_task_wdt_add (Codex P3) - on add failure no reset() is ever issued
+ * against an unsubscribed task. Cleared at the self-attestation point in
+ * loop() together with the WDT release. */
+static bool s_boot_wdt_subscribed = false;
+static void boot_wdt_feed(void)
+{
+    if (s_boot_wdt_subscribed) esp_task_wdt_reset();
+}
+/* public alias for other translation units (peri_gps.cpp getAck loop) */
+void ota_boot_wdt_feed(void) { boot_wdt_feed(); }
+
+/* first-frame sequence captured once at the end of setup() (§5.2); the
+ * window closes in loop() when the panel flush reports it done */
+static uint32_t s_boot_attest_seq = 0;
 
 Adafruit_DRV2605 drv;
 
@@ -232,6 +251,10 @@ static void flush_epd_bitmap(const lv_area_t *area)
             display->fillScreen(GxEPD_WHITE);
         }
         display->drawInvertedBitmap(area->x1, area->y1, decodebuffer, width, height, GxEPD_BLACK);
+        boot_wdt_feed();                  /* between pages (§5.2: the
+                                           * in-library _waitWhileBusy inside
+                                           * nextPage is the un-feedable bound
+                                           * that sizes T, §5.3) */
     }
     while (display->nextPage());
 
@@ -325,6 +348,8 @@ static void touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
     // uint8_t touched = touch.getPoint(&last_x, &last_y, 1);
     uint8_t touched = hyn_touch_get_point(&last_x, &last_y, 1);
     if(touched) {
+        extern void ui_activity_mark(void); /* auto deep sleep (ui_deckpro.cpp) */
+        ui_activity_mark();
         data->state = LV_INDEV_STATE_PR;
 
         Serial.printf("x = %d, y = %d\n", last_x, last_y);
@@ -460,6 +485,8 @@ static void bq25896_runtime_maintain(void)
 
 static bool sd_care_init(void)
 {
+    boot_wdt_feed();                      /* SD mount can be slow (§5.2 feed
+                                           * point, Grok P3-2) */
     shared_spi_lock();
     shared_spi_prepare_device(BOARD_SD_CS);
 
@@ -468,6 +495,7 @@ static bool sd_care_init(void)
         Serial.println("[SD CARD] Card Mount Failed");
         return false;
     }
+    boot_wdt_feed();                      /* card-size probing (§5.2) */
 
     uint64_t cardSize = SD.cardSize() / (1024 * 1024);
     Serial.printf("SD Card Size: %lluMB\n", cardSize);
@@ -518,6 +546,7 @@ static bool A7682E_init(void)
     int retry_cnt = 5;
     int retry = 0;
     while (!modem.testAT(1000)) {
+        boot_wdt_feed();                  /* OTA WDT feed point (§5.2) */
         Serial.println(".");
         if (retry++ > retry_cnt) {
             digitalWrite(BOARD_A7682E_PWRKEY, LOW);
@@ -576,6 +605,7 @@ bool pcm5102a_init(void)
                 uint8_t b[4] = {(uint8_t)v, (uint8_t)(v >> 8),
                                 (uint8_t)v, (uint8_t)(v >> 8)};
                 f.write(b, 4);
+                if ((i & 0x3FFF) == 0) boot_wdt_feed();  /* §5.2 feed point */
             }
             f.close();
             Serial.println("[PCM] test tone written to /pcmtone.wav");
@@ -628,6 +658,31 @@ void setup()
     gpio_deep_sleep_hold_dis();
 
     Serial.begin(115200);
+
+    /* ---- OTA boot self-attestation window (design v6 §5.2) -----------
+     * Open a task-WDT on loopTask for the whole setup()/first-frame span:
+     * a fresh OTA image that hangs before proving itself gets reset by
+     * the TWDT -> next boot rolls back automatically (layer 2). Window
+     * closes (WDT released + image marked valid) once the FIRST full
+     * EPD refresh completes its software sequence - see loop().
+     * T = 2x the longest un-feedable interval (GxEPD2 _busy_timeout,
+     * constructor-bound ~30 s), floor 30 s per §5.3. TODO(§7.3): calibrate
+     * on both machines and record in docs/ota-baseline.md. */
+    #define OTA_BOOT_WDT_T_S 60
+    {
+        esp_err_t e = esp_task_wdt_init(OTA_BOOT_WDT_T_S, true);
+        if (e != ESP_OK) {
+            /* implementation-period block (§5.2): no layer-2 fallback
+             * exists inside the window - never continue with a dead WDT */
+            Serial.printf("[OTA] wdt init failed: %s - HALT\n",
+                          esp_err_to_name(e));
+            while (1) delay(1000);
+        }
+        e = esp_task_wdt_add(NULL);            /* NULL = loopTask */
+        s_boot_wdt_subscribed = (e == ESP_OK); /* only on success (Codex P3) */
+        Serial.printf("[OTA] boot WDT window open (T=%ds, sub=%d)\n",
+                      OTA_BOOT_WDT_T_S, s_boot_wdt_subscribed ? 1 : 0);
+    }
 
     /* China Standard Time (UTC+8, no DST). All localtime() users - the
      * usage-stats monthly reset, Calendar, Sleep/status timestamps - run
@@ -763,6 +818,12 @@ void setup()
 
     disp_full_refr();
 
+    /* OTA self-attestation anchor (design §5.2): bind THIS frame's full
+     * refresh sequence number - loop() closes the boot WDT window once
+     * the panel flush catches up. Called exactly ONCE (the call both
+     * requests a full refresh and returns its sequence). */
+    s_boot_attest_seq = disp_full_refr_seq();
+
     digitalWrite(BOARD_KEYBOARD_LED, LOW);
     digitalWrite(BOARD_MOTOR_PIN, isT_Deck_Pro_v1_1);
     digitalWrite(BOARD_6609_EN, HIGH);
@@ -805,6 +866,32 @@ void loop()
 {
     lv_task_handler();
     keypad_loop();
+
+    /* OTA self-attestation point (design §5.2): the first FULL refresh's
+     * software sequence completed (done_seq caught up) -> this image has
+     * proven itself: mark valid (cancels the pending rollback), release
+     * the boot WDT and restore the framework default (5 s). Semantics:
+     * this proves LVGL->EPD sequence completion, NOT pixels on glass - a
+     * broken panel still attests and does NOT roll back (accepted, layer
+     * 3 USB fallback; Qwen v5 P2 correction). */
+    if (s_boot_wdt_subscribed &&
+        disp_flush_seq_done() >= s_boot_attest_seq) {
+        esp_err_t e = esp_ota_mark_app_valid_cancel_rollback();
+        Serial.printf("[OTA] self-attest: mark valid %s (%s)\n",
+                      e == ESP_OK ? "ok" : "no-pending",
+                      esp_err_to_name(e));
+        esp_task_wdt_delete(NULL);
+        esp_task_wdt_init(5, true);           /* framework default */
+        s_boot_wdt_subscribed = false;
+    }
+
+    /* OTA results: UNCONDITIONAL drain every tick (design §3.3 - drain
+     * happens before any screen-active gate, PenPal pattern) */
+    extern void ota_result_poll(void);
+    ota_result_poll();
+    extern void ota2_2_keyboard_poll(void);
+    ota2_2_keyboard_poll();
+
     extern void openai_stats_poll();
     openai_stats_poll();
     extern void calc_keyboard_poll();
@@ -827,6 +914,8 @@ void loop()
     ai_cfg_keyboard_poll();
     extern void penpal_keyboard_poll();
     penpal_keyboard_poll();
+    extern void whoami_keyboard_poll();
+    whoami_keyboard_poll();
     extern void shutdown_keyboard_poll();
     shutdown_keyboard_poll();
     bq25896_runtime_maintain();

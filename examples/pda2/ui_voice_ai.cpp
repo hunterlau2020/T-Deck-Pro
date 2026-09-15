@@ -18,9 +18,12 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <freertos/queue.h>
+#include <Preferences.h>
 #include "Audio.h"
 #include "utilities.h"
 #include <driver/i2s.h>
+#include <vector>
+#include <utility>
 
 static lv_obj_t *response_label = NULL;
 static lv_obj_t *input_ta = NULL;
@@ -30,8 +33,69 @@ static bool ai_kbd_active = false;
 static bool tts_playing = false;
 static volatile bool tts_auto_read = false;
 
+/* TTS enable switch (user request 2026-09-15): OFF = skip the t2a_v2
+ * synthesis + playback entirely (no earphone plugged - the jack has no
+ * detect pin, so the USER tells the device). ASR is unaffected: the MIC
+ * path works without earphones. Persisted in NVS "ai"/tts_enabled
+ * (default on), same style as AI Config's Trust switch. */
+static lv_obj_t *tts_sw = NULL;
+static bool tts_enabled = true;
+
+static bool tts_enabled_load(void)
+{
+    Preferences pr;
+    if (pr.begin("ai", true)) {           /* read-only; absent -> default on */
+        bool v = pr.getUChar("tts_enabled", 1) != 0;
+        pr.end();
+        return v;
+    }
+    return true;
+}
+
+static bool tts_enabled_save(bool on)
+{
+    Preferences pr;
+    if (!pr.begin("ai", false)) return false;
+    bool ok = pr.putUChar("tts_enabled", on ? 1 : 0) == 1;
+    pr.end();
+    return ok;
+}
+
+static void tts_sw_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    if (tts_enabled_save(on)) {
+        tts_enabled = on;
+        if (status_label) {
+            lv_label_set_text(status_label,
+                              on ? "TTS on" : "TTS off (no earphone)");
+        }
+        Serial.printf("[VoiceAI] tts enabled=%d\n", on ? 1 : 0);
+    } else {
+        /* NVS failure: revert the control to the persisted state */
+        if (tts_enabled) lv_obj_add_state(sw, LV_STATE_CHECKED);
+        else lv_obj_clear_state(sw, LV_STATE_CHECKED);
+        if (status_label) lv_label_set_text(status_label, "TTS save failed");
+    }
+}
+
 static char *chat_history = NULL;
 static char *last_response = NULL;
+
+/* Multi-turn context (feature request 2026-09-14, mirrors AI Text round
+ * 21): whole (user, assistant) turn pairs, newest kept within a byte
+ * budget, sent via openai_chat_multi. Only clean ASR/chat text lands
+ * here, and only after a confirmed reply - the display-only chat_history
+ * buffer and its "> [Voice recording]" markers never enter the API. A
+ * failed turn records nothing (the error the user saw is not context).
+ * Worker-task-owned: start_voice_record/do_send admit one ai_task at a
+ * time and the UI thread never touches this. */
+#define VAI_CTX_MSG_MAX     1024    /* per-message cap at append time */
+#define VAI_CTX_TRUNC_MARK  "(truncated)"
+#define VAI_CTX_BUDGET      4096    /* history bytes sent per request */
+#define VAI_CTX_MAX_MSGS    16
+static vector<pair<string, string> > vai_ctx;
 
 extern Audio audio;
 
@@ -245,6 +309,55 @@ static bool resolve_chat_cfg(char *base, int base_len, char *model,
     return true;
 }
 
+/* Append one confirmed turn; per-message cut at a UTF-8 code point
+ * boundary (AI Text chat_text_trunc pattern), eviction removes whole
+ * turn pairs from the FRONT so the window never starts mid-turn. */
+static void vai_ctx_add_pair(const char *user, const char *assistant)
+{
+    string u(user ? user : ""), a(assistant ? assistant : "");
+    string *parts[2] = { &u, &a };
+    size_t limit = VAI_CTX_MSG_MAX - strlen(VAI_CTX_TRUNC_MARK);
+    for (int i = 0; i < 2; i++) {
+        if (parts[i]->length() > limit) {
+            parts[i]->resize(limit);
+            while (!parts[i]->empty() &&
+                   ((uint8_t)parts[i]->back() & 0xC0) == 0x80)
+                parts[i]->pop_back();
+            *parts[i] += VAI_CTX_TRUNC_MARK;
+        }
+    }
+    vai_ctx.push_back(make_pair(u, a));
+    while (vai_ctx.size() > 2) {
+        size_t bytes = 0;
+        for (size_t i = 0; i < vai_ctx.size(); i++)
+            bytes += vai_ctx[i].second.length();
+        if (bytes <= VAI_CTX_BUDGET && vai_ctx.size() <= VAI_CTX_MAX_MSGS)
+            break;
+        vai_ctx.erase(vai_ctx.begin(), vai_ctx.begin() + 2);
+    }
+}
+
+/* Newest-first walk within VAI_CTX_BUDGET, chronological order for the
+ * API. The ai_message_t entries point INTO vai_ctx strings, which stay
+ * valid for the whole call (single worker task, no mutation mid-call). */
+static int vai_ctx_build(ai_message_t *msgs, int max_msgs)
+{
+    size_t bytes = 0;
+    size_t first = vai_ctx.size();
+    while (first > 0 &&
+           bytes + vai_ctx[first - 1].second.length() <= VAI_CTX_BUDGET) {
+        bytes += vai_ctx[first - 1].second.length();
+        first--;
+    }
+    int n = 0;
+    for (size_t i = first; i < vai_ctx.size() && n < max_msgs; i++) {
+        msgs[n].role = vai_ctx[i].first.c_str();
+        msgs[n].content = vai_ctx[i].second.c_str();
+        n++;
+    }
+    return n;
+}
+
 static void ai_text_task(void *param)
 {
     char *prompt = (char *)param;
@@ -261,10 +374,14 @@ static void ai_text_task(void *param)
     Serial.printf("[VoiceAI] prompt: %s -> %s\n", prompt, model);
     ui_post(UI_MSG_STATUS, "Asking AI...");
 
+    ai_message_t ctx[VAI_CTX_MAX_MSGS];
+    int ctx_n = vai_ctx_build(ctx, VAI_CTX_MAX_MSGS);
     string reply;
-    if (openai_chat(prompt, base, model, key, reply, 30000)) {
+    if (openai_chat_multi(ctx, ctx_n, prompt, base, model, key, reply,
+                          30000)) {
         if (last_response) free(last_response);
         last_response = strdup(reply.c_str());
+        vai_ctx_add_pair(prompt, reply.c_str());
         ui_post(UI_MSG_APPEND, reply.c_str());
         ui_post(UI_MSG_STATUS, "V:voice R:read Enter:text");
     } else {
@@ -349,10 +466,14 @@ static void ai_voice_task(void *param)
         return;
     }
     ui_post(UI_MSG_STATUS, "Asking AI...");
+    ai_message_t ctx[VAI_CTX_MAX_MSGS];
+    int ctx_n = vai_ctx_build(ctx, VAI_CTX_MAX_MSGS);
     string reply;
-    if (openai_chat(text, base, model, ckey, reply, 30000)) {
+    if (openai_chat_multi(ctx, ctx_n, text, base, model, ckey, reply,
+                          30000)) {
         if (last_response) free(last_response);
         last_response = strdup(reply.c_str());
+        vai_ctx_add_pair(text, reply.c_str());
         ui_post(UI_MSG_APPEND, reply.c_str());
         tts_auto_read = true;
     } else {
@@ -423,6 +544,13 @@ static void start_tts()
 {
     Serial.println("[VoiceAI] TTS: start_tts called");
 
+    if (!tts_enabled) {
+        /* switch OFF: no earphone plugged - skip synthesis AND playback
+         * (ASR/voice input is unaffected: the mic works standalone) */
+        Serial.println("[VoiceAI] TTS: disabled by switch");
+        if (status_label) lv_label_set_text(status_label, "TTS off (no earphone)");
+        return;
+    }
     if (!last_response || last_response[0] == '\0') {
         Serial.println("[VoiceAI] TTS: no response to read");
         if (status_label) lv_label_set_text(status_label, "No response to read");
@@ -547,6 +675,36 @@ static void ai_create(lv_obj_t *parent)
 {
     scr_back_btn_create(parent, "Voice AI", ai_back_cb);
 
+    /* TTS switch, AI Config "Trust" switch pattern: label + lv_switch in
+     * the top row, persists immediately (independent NVS key) */
+    lv_obj_t *tts_lab = lv_label_create(parent);
+    lv_label_set_text(tts_lab, "TTS");
+    lv_obj_set_style_text_font(tts_lab, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(tts_lab, LV_ALIGN_TOP_RIGHT, -50, 9);
+    tts_sw = lv_switch_create(parent);
+    lv_obj_set_size(tts_sw, 44, 24);
+    lv_obj_align(tts_sw, LV_ALIGN_TOP_RIGHT, -2, 4);
+    /* EPD state visibility (user request 2026-09-15, take 2): the style
+     * must target the CHECKED selector - a default-state style is overridden
+     * by the theme's checked style (that is why take 1 changed nothing).
+     * ON  -> track (LV_PART_INDICATOR | CHECKED) black: the area the knob
+     *        left behind reads DARK, white knob with border slides right.
+     * OFF -> plain white track with a black border, black-bordered knob. */
+    lv_obj_set_style_bg_color(tts_sw, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_border_color(tts_sw, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(tts_sw, 1, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(tts_sw, lv_color_white(), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(tts_sw, lv_color_black(),
+                              LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(tts_sw, lv_color_white(), LV_PART_KNOB);
+    lv_obj_set_style_border_color(tts_sw, lv_color_black(), LV_PART_KNOB);
+    lv_obj_set_style_border_width(tts_sw, 1, LV_PART_KNOB);
+    tts_enabled = tts_enabled_load();
+    if (tts_enabled) {
+        lv_obj_add_state(tts_sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(tts_sw, tts_sw_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
     ui_queue = xQueueCreate(8, sizeof(ui_msg_t));
     ui_timer = lv_timer_create(ui_timer_cb, 200, NULL);
 
@@ -619,9 +777,11 @@ static void ai_destroy(void)
     }
     if (chat_history) { free(chat_history); chat_history = NULL; }
     if (last_response) { free(last_response); last_response = NULL; }
+    vai_ctx.clear();
     tts_playing = false;
     tts_auto_read = false;
     response_label = input_ta = status_label = NULL;
+    tts_sw = NULL;
 }
 
 scr_lifecycle_t screen_voice_ai = {

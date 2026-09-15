@@ -52,6 +52,14 @@ REQUIRED_SUBJECT = [
     # Mozilla has retired the old GlobalSign R1 - so cacert.pem alone can
     # never satisfy those chains (device X509 fatal on openrouter.ai).
     "CN=GlobalSign Root CA,OU=Root CA,O=GlobalSign nv-sa,C=BE",  # extra root
+    # 2026-09-14 finding (PC chain probe, scripts/verify_chains_vs_bundle.py):
+    # api.minimax.io now serves the DigiCert-cross-signed G2 as chain top -
+    # anchor is the 2006 "DigiCert Global Root CA", no longer in cacert.pem.
+    # api.minimaxi.com (voice) serves the self-signed 2004 Comodo root
+    # "AAA Certificate Services" as chain top - its issuer (= itself) must be
+    # a bundle entry. Both pinned below.
+    "CN=DigiCert Global Root CA,OU=www.digicert.com,O=DigiCert Inc,C=US",
+    "CN=AAA Certificate Services,O=Comodo CA Limited,L=Salford,ST=Greater Manchester,C=GB",
 ]
 
 # Roots beyond the Mozilla set, PEM files in scripts/extra_roots/*.pem.
@@ -64,6 +72,14 @@ EXTRA_ROOT_SHA256 = {
     # CN=GlobalSign Root CA (1998 R1), secure.globalsign.com/cacert/root-r1.crt
     "globalsign-root-r1.pem":
         "EBD41040E4BB3EC742C9E381D31EF2A41A48B6685C96E7CEF3C1DF6CD4331C99",
+    # CN=DigiCert Global Root CA (2006), cacerts.digicert.com - issuer of the
+    # cross-signed DigiCert Global Root G2 served by api.minimax.io
+    "digicert-global-root-ca.pem":
+        "4348A0E9444C78CB265E058D5E8944B4D84F9662BD26DB257F8934A443C70161",
+    # CN=AAA Certificate Services (2004, Comodo/SECOM) - self-signed root
+    # served at the top of api.minimaxi.com's chain (voice endpoint)
+    "aaa-certificate-services.pem":
+        "D7A7A0FB5D7E2731D771E9484EBCDEF71D5F0C3E0A2948782BC83EE0EA699EF4",
 }
 
 

@@ -30,3 +30,6 @@ backups/
 
 # External reference methodology docs (local-only, not part of repo canon)
 docs/review_guide_reference/
+
+# OTA manifest signing key (private) - never commit
+ota_signing_key.pem

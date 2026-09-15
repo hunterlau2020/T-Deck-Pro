@@ -66,10 +66,8 @@ static bool s_pp_autosynced = false;
 
 /* ---- file-internal forward decls (define-order dependencies) ------------ */
 static void pp_home_pal_cb(lv_event_t *e);
-static void pp_home_cfg_back_cb(lv_event_t *e);
 void pp_home_render_pals(void);
 void pp_home_render_rows(void);
-void pp_cfg_prefill(void);
 
 /* ---- page registry ------------------------------------------------------ */
 static lv_obj_t *s_pages[PP_PAGE_CNT] = { 0 };
@@ -101,7 +99,6 @@ void pp_set_page(pp_page_t page)
     case PP_PAGE_TOPICS:  ppw_render_topics(); break;
     case PP_PAGE_THREAD:  ppr_show_thread(); break;
     case PP_PAGE_PROFILE: ppr_show_profile(); break;
-    case PP_PAGE_CFG:     pp_cfg_prefill(); break;
     default: break;
     }
     ui_disp_full_refr();
@@ -168,7 +165,18 @@ void pp_msgbox_show(const char *title, const char *text)
     lv_obj_set_height(s_msgbox_body, 104);
     lv_label_set_long_mode(s_msgbox_body, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_msgbox_body, text);
-    lv_obj_set_style_text_font(s_msgbox_body, &lv_font_montserrat_14, 0);
+    /* montserrat has no CJK glyphs - server error details are often Chinese
+     * (FastAPI local server) and rendered as tofu boxes. Switch the body to
+     * the LV_FONT_SIMSUN_16_CJK built-in (ASCII + 1000 common hanzi) when
+     * the text carries non-ASCII bytes (user report 2026-09-14). */
+    {
+        bool cjk = false;
+        for (const char *p = text; p && *p; p++) {
+            if ((uint8_t)*p & 0x80) { cjk = true; break; }
+        }
+        lv_obj_set_style_text_font(s_msgbox_body,
+            cjk ? &lv_font_simsun_16_cjk : &lv_font_montserrat_14, 0);
+    }
     lv_obj_set_flex_grow(s_msgbox_body, 1);
 
     lv_obj_t *close_btn = lv_btn_create(s_msgbox);
@@ -318,6 +326,14 @@ bool pp_cfg_from_nvs(void)
     bool has = pr.isKey("base") || pr.isKey("key");
     pr.end();
     return has;
+}
+
+/* Whoami's Cfg tab calls this after a successful save: the config may now
+ * point elsewhere, so the next PenPal entry must re-sync (and drop the
+ * auto-synced latch). */
+void pp_notify_cfg_changed(void)
+{
+    s_pp_autosynced = false;
 }
 
 /* ---- worker task -------------------------------------------------------- */
@@ -837,7 +853,8 @@ void pp_home_sync(bool manual)
 
 static void pp_home_sync_cb(lv_event_t *e) { pp_home_sync(true); }
 
-static void pp_home_cfg_cb(lv_event_t *e) { pp_set_page(PP_PAGE_CFG); }
+/* Cfg lives in the Whoami app (menu page 1, 2026-09-14); the home Cfg
+ * button was removed per user request. */
 
 static void pp_home_pal_cb(lv_event_t *e)
 {
@@ -941,14 +958,6 @@ static void pp_home_build(lv_obj_t *parent)
     pp_page_register(PP_PAGE_HOME, page);
 
     scr_back_btn_create(page, "PenPal", pp_back_cb);
-
-    lv_obj_t *cfg_btn = lv_btn_create(page);
-    lv_obj_set_size(cfg_btn, 44, 30);
-    lv_obj_align(cfg_btn, LV_ALIGN_TOP_RIGHT, -50, 3);
-    lv_obj_t *cfg_lab = lv_label_create(cfg_btn);
-    lv_label_set_text(cfg_lab, "Cfg");
-    lv_obj_center(cfg_lab);
-    lv_obj_add_event_cb(cfg_btn, pp_home_cfg_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *sync_btn = lv_btn_create(page);
     lv_obj_set_size(sync_btn, 48, 30);
@@ -1065,330 +1074,6 @@ static void pp_home_key(char c)
 }
 
 
-/* ---- CFG page (§4.7) ----------------------------------------------------- */
-static lv_obj_t *s_cfg_base_ta = NULL;
-static lv_obj_t *s_cfg_key_ta = NULL;
-static lv_obj_t *s_cfg_provider_dd = NULL;
-static char s_cfg_provider_options[256] = "";
-static int s_cfg_provider_idx = 0;
-
-enum {
-    PP_CFG_FOCUS_BASE = 0,
-    PP_CFG_FOCUS_KEY,
-    PP_CFG_FOCUS_PROVIDER,
-    PP_CFG_FOCUS_NUM
-};
-static int s_cfg_focus = PP_CFG_FOCUS_BASE;
-/* Key masking: the box shows the middle third as '*' while the real value
- * lives in s_cfg_key_real. An untouched mask means "unchanged" on Save;
- * the first edit clears the box (retype mode) so stars never reach NVS. */
-static char s_cfg_key_real[PP_KEY_MAX] = {0};
-static bool s_cfg_key_masked = false;    /* key box still shows the mask */
-
-static int pp_cfg_provider_count(void)
-{
-    return ai_provider_count() + 1;   /* built-ins + custom */
-}
-
-/* Preview the CURRENT dropdown selection (Codex/Claude P2: it used to
- * re-read NVS, so the status line showed the SAVED provider until Save).
- * On re-entry the dropdown is synchronised from NVS first, so the saved
- * state is still what gets displayed then. enum()'s return is checked
- * (Gemini M1) - custom/unknown falls to the explicit branch. */
-static void pp_cfg_status_text(char *buf, int buf_len)
-{
-    ai_provider_info_t p;
-    if (ai_provider_enum(s_cfg_provider_idx, &p)) {
-        char base[160] = "", model[80] = "", key[80] = "";
-        ai_provider_get(p.name, base, sizeof(base),
-                        model, sizeof(model), key, sizeof(key));
-        snprintf(buf, buf_len,
-                 "AI: %s\n%s\nkey: %s",
-                 p.label, model, key[0] ? "set" : "missing");
-    } else {
-        snprintf(buf, buf_len, "AI: custom\n(server default model)");
-    }
-}
-
-static void pp_cfg_update_status(void)
-{
-    char buf[128];
-    pp_cfg_status_text(buf, sizeof(buf));
-    pp_status_set(buf);
-}
-
-static void pp_cfg_provider_dd_cb(lv_event_t *e)
-{
-    (void)e;
-    s_cfg_provider_idx = (int)lv_dropdown_get_selected(s_cfg_provider_dd);
-    pp_cfg_update_status();
-}
-
-void pp_cfg_prefill(void)
-{
-    if (!s_cfg_base_ta) return;
-    /* focus state survives across page visits (static); every entry must
-     * re-sync it with the freshly refilled boxes, else Backspace edits the
-     * URL box while the user believes the cursor is in the key box
-     * (device report 2026-09-13) */
-    s_cfg_focus = PP_CFG_FOCUS_BASE;
-    char base[PP_BASE_MAX], key[PP_KEY_MAX];
-    pp_cfg_load(base, sizeof(base), key, sizeof(key));
-    lv_textarea_set_text(s_cfg_base_ta, base);
-    strncpy(s_cfg_key_real, key, sizeof(s_cfg_key_real) - 1);
-    s_cfg_key_real[sizeof(s_cfg_key_real) - 1] = '\0';
-    char key_masked[PP_KEY_MAX];
-    secret_mask_middle(s_cfg_key_real, key_masked, sizeof(key_masked), 1);
-    lv_textarea_set_text(s_cfg_key_ta, key_masked);
-    s_cfg_key_masked = s_cfg_key_real[0] != '\0';
-
-    char provider_name[32] = "";
-    penpal_load_ai_provider(provider_name, sizeof(provider_name));
-    s_cfg_provider_idx = ai_provider_count();   /* custom default */
-    int idx = ai_provider_find(provider_name);
-    if (idx >= 0) s_cfg_provider_idx = idx;
-    lv_dropdown_set_selected(s_cfg_provider_dd, s_cfg_provider_idx);
-
-    char buf[160];
-    pp_cfg_status_text(buf, sizeof(buf));
-    if (base[0] && !pp_cfg_from_nvs()) {
-        /* overlay the env.cfg hint on the first line without losing AI status */
-        char combined[192];
-        snprintf(combined, sizeof(combined), "server from env.cfg | %s", buf);
-        pp_status_set(combined);
-    } else {
-        pp_status_set(buf);
-    }
-}
-
-static void pp_cfg_save_cb(lv_event_t *e)
-{
-    (void)e;
-    const char *base = lv_textarea_get_text(s_cfg_base_ta);
-    const char *key = lv_textarea_get_text(s_cfg_key_ta);
-    if (!base || !key) return;
-    const char *save_key = key;
-    char key_masked[PP_KEY_MAX];
-    secret_mask_middle(s_cfg_key_real, key_masked, sizeof(key_masked), 1);
-    if (s_cfg_key_masked && strcmp(key, key_masked) == 0) {
-        save_key = s_cfg_key_real;    /* untouched mask: keep the stored key */
-    }
-    /* Two independent NVS writes are not atomic (Codex/Claude P2): report
-     * exactly which half stuck instead of one vague "save failed". */
-    bool server_ok = penpal_save_config(base, save_key);
-    bool prov_ok = false;
-    if (server_ok) {
-        /* re-mask what was stored (the box may hold a freshly typed key) */
-        strncpy(s_cfg_key_real, save_key, sizeof(s_cfg_key_real) - 1);
-        s_cfg_key_real[sizeof(s_cfg_key_real) - 1] = '\0';
-        secret_mask_middle(s_cfg_key_real, key_masked, sizeof(key_masked), 1);
-        lv_textarea_set_text(s_cfg_key_ta, key_masked);
-        s_cfg_key_masked = s_cfg_key_real[0] != '\0';
-        ai_provider_info_t p;
-        const char *provider_name = "";
-        if (ai_provider_enum(s_cfg_provider_idx, &p)) provider_name = p.name;
-        prov_ok = penpal_save_ai_provider(provider_name);
-    }
-    if (server_ok && prov_ok) {
-        pp_status_set("saved");
-        s_pp_autosynced = false;   /* next visit syncs with the new config */
-    } else if (server_ok) {
-        pp_status_set("server saved; AI provider save failed");
-    } else {
-        pp_status_set("save failed (NVS)");
-    }
-}
-
-/* CFG Test (user request 2026-09-13): probe the server URL from the
- * textareas with the configured key - result lands in the CFG status
- * line via PP_RES_TEST. Mask-aware key read, same as Save. */
-static void pp_cfg_test_cb(lv_event_t *e)
-{
-    (void)e;
-    const char *base = lv_textarea_get_text(s_cfg_base_ta);
-    const char *key = lv_textarea_get_text(s_cfg_key_ta);
-    if (!base || !base[0]) {
-        pp_status_set("Test: enter server URL first");
-        return;
-    }
-    if (WiFi.status() != WL_CONNECTED) {
-        pp_status_set("Test: WiFi not connected");
-        return;
-    }
-    const char *test_key = key;
-    char key_masked[PP_KEY_MAX];
-    secret_mask_middle(s_cfg_key_real, key_masked, sizeof(key_masked), 1);
-    if (s_cfg_key_masked && strcmp(key, key_masked) == 0)
-        test_key = s_cfg_key_real;    /* untouched mask: stored key */
-
-    pp_task_req_t rq = {};
-    rq.gen = s_pp_gen;
-    rq.type = PP_RES_TEST;
-    rq.base = base;
-    rq.key = test_key;
-    pp_start(&rq, false);
-}
-
-/* Touch focus keeps the keypad editing the box the user sees (same as
- * wifi_cfg/ai_cfg: LV_EVENT_FOCUSED on each textarea). Without these,
- * tapping the key box moved the LVGL cursor but Backspace kept editing
- * the URL box (device report 2026-09-13). */
-static void pp_cfg_base_focus_cb(lv_event_t *e)
-{
-    (void)e;
-    s_cfg_focus = PP_CFG_FOCUS_BASE;
-}
-
-static void pp_cfg_key_focus_cb(lv_event_t *e)
-{
-    (void)e;
-    s_cfg_focus = PP_CFG_FOCUS_KEY;
-}
-
-static void pp_cfg_build(lv_obj_t *parent)
-{
-    lv_obj_t *page = lv_obj_create(parent);
-    lv_obj_set_size(page, 240, 320);
-    lv_obj_set_pos(page, 0, 0);
-    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(page, 0, 0);
-    lv_obj_set_style_pad_all(page, 0, 0);
-    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
-    pp_page_register(PP_PAGE_CFG, page);
-
-    /* internal page back: HOME, not the menu */
-    scr_back_btn_create(page, "Cfg", pp_home_cfg_back_cb);
-
-    lv_obj_t *bl = lv_label_create(page);
-    lv_obj_align(bl, LV_ALIGN_TOP_LEFT, 6, 42);
-    lv_label_set_text(bl, "Server URL:");
-    lv_obj_set_style_text_font(bl, &lv_font_montserrat_14, 0);
-
-    s_cfg_base_ta = lv_textarea_create(page);
-    lv_obj_set_size(s_cfg_base_ta, 228, 34);
-    lv_obj_align(s_cfg_base_ta, LV_ALIGN_TOP_MID, 0, 60);
-    lv_textarea_set_max_length(s_cfg_base_ta, 95);   /* env.cfg value cap §3.4 */
-    lv_textarea_set_one_line(s_cfg_base_ta, true);
-    lv_obj_add_event_cb(s_cfg_base_ta, pp_cfg_base_focus_cb,
-                        LV_EVENT_FOCUSED, NULL);
-    lv_obj_set_style_text_font(s_cfg_base_ta, &lv_font_montserrat_14, 0);
-
-    lv_obj_t *kl = lv_label_create(page);
-    lv_obj_align(kl, LV_ALIGN_TOP_LEFT, 6, 102);
-    lv_label_set_text(kl, "Server Key:");
-    lv_obj_set_style_text_font(kl, &lv_font_montserrat_14, 0);
-
-    s_cfg_key_ta = lv_textarea_create(page);
-    lv_obj_set_size(s_cfg_key_ta, 228, 34);
-    lv_obj_align(s_cfg_key_ta, LV_ALIGN_TOP_MID, 0, 120);
-    lv_textarea_set_max_length(s_cfg_key_ta, 16);
-    lv_textarea_set_one_line(s_cfg_key_ta, true);
-    lv_obj_add_event_cb(s_cfg_key_ta, pp_cfg_key_focus_cb,
-                        LV_EVENT_FOCUSED, NULL);
-    lv_obj_set_style_text_font(s_cfg_key_ta, &lv_font_montserrat_14, 0);
-
-    lv_obj_t *pl = lv_label_create(page);
-    lv_obj_align(pl, LV_ALIGN_TOP_LEFT, 6, 162);
-    lv_label_set_text(pl, "AI Provider:");
-    lv_obj_set_style_text_font(pl, &lv_font_montserrat_14, 0);
-
-    s_cfg_provider_dd = lv_dropdown_create(page);
-    lv_obj_set_size(s_cfg_provider_dd, 228, 30);
-    lv_obj_align(s_cfg_provider_dd, LV_ALIGN_TOP_MID, 0, 180);
-    lv_obj_set_style_text_font(s_cfg_provider_dd, &lv_font_montserrat_14, LV_PART_MAIN);
-    s_cfg_provider_options[0] = '\0';
-    for (int i = 0; i < ai_provider_count(); i++) {
-        ai_provider_info_t p;
-        ai_provider_enum(i, &p);
-        if (i > 0) strncat(s_cfg_provider_options, "\n",
-                           sizeof(s_cfg_provider_options) - strlen(s_cfg_provider_options) - 1);
-        strncat(s_cfg_provider_options, p.label,
-                sizeof(s_cfg_provider_options) - strlen(s_cfg_provider_options) - 1);
-    }
-    strncat(s_cfg_provider_options, "\ncustom",
-            sizeof(s_cfg_provider_options) - strlen(s_cfg_provider_options) - 1);
-    lv_dropdown_set_options(s_cfg_provider_dd, s_cfg_provider_options);
-    lv_obj_add_event_cb(s_cfg_provider_dd, pp_cfg_provider_dd_cb,
-                        LV_EVENT_VALUE_CHANGED, NULL);
-
-    lv_obj_t *save_btn = lv_btn_create(page);
-    lv_obj_set_size(save_btn, 64, 30);
-    lv_obj_align(save_btn, LV_ALIGN_TOP_LEFT, 6, 220);
-    lv_obj_t *save_lab = lv_label_create(save_btn);
-    lv_label_set_text(save_lab, "Save");
-    lv_obj_center(save_lab);
-    lv_obj_add_event_cb(save_btn, pp_cfg_save_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *test_btn = lv_btn_create(page);
-    lv_obj_set_size(test_btn, 64, 30);
-    lv_obj_align(test_btn, LV_ALIGN_TOP_LEFT, 78, 220);
-    lv_obj_t *test_lab = lv_label_create(test_btn);
-    lv_label_set_text(test_lab, "Test");
-    lv_obj_center(test_lab);
-    lv_obj_add_event_cb(test_btn, pp_cfg_test_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *status = lv_label_create(page);
-    lv_obj_align(status, LV_ALIGN_TOP_LEFT, 6, 256);
-    lv_obj_set_width(status, 228);
-    lv_obj_set_height(status, 58);
-    lv_label_set_long_mode(status, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(status, "");
-    lv_obj_set_style_text_font(status, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(status, lv_palette_main(LV_PALETTE_GREY), 0);
-    pp_status_register(PP_PAGE_CFG, status);
-}
-
-static void pp_home_cfg_back_cb(lv_event_t *e) { pp_set_page(PP_PAGE_HOME); }
-
-static void pp_cfg_key(char c)
-{
-    if (c == '\t') {
-        s_cfg_focus = (s_cfg_focus + 1) % PP_CFG_FOCUS_NUM;
-        return;
-    }
-    if (s_cfg_focus == PP_CFG_FOCUS_PROVIDER) {
-        if (c == '\b') {
-            pp_set_page(PP_PAGE_HOME);   /* keyboard exit, same as empty box */
-            return;
-        }
-        if (c == '+' || c == '-') {
-            int total = pp_cfg_provider_count();
-            int sel = (int)lv_dropdown_get_selected(s_cfg_provider_dd);
-            if (c == '+') sel = (sel + 1) % total;
-            else          sel = (sel + total - 1) % total;
-            lv_dropdown_set_selected(s_cfg_provider_dd, sel);
-            s_cfg_provider_idx = sel;
-            pp_cfg_update_status();
-        }
-        return;
-    }
-    lv_obj_t *ta = (s_cfg_focus == PP_CFG_FOCUS_KEY) ? s_cfg_key_ta : s_cfg_base_ta;
-    if (!ta) return;
-    if (c == '\b') {
-        const char *txt = lv_textarea_get_text(ta);
-        if (ta == s_cfg_key_ta && s_cfg_key_masked && txt && txt[0] != '\0') {
-            /* the box shows stars, not the key: clear it (retype mode)
-             * instead of "deleting" a '*' */
-            lv_textarea_set_text(ta, "");
-            s_cfg_key_masked = false;
-        } else if (txt && txt[0] != '\0') {
-            lv_textarea_del_char(ta);
-        } else {
-            pp_set_page(PP_PAGE_HOME);
-        }
-        return;
-    }
-    if (c == '\n') return;                /* one-line fields */
-    if (c >= 0x20) {
-        if (ta == s_cfg_key_ta && s_cfg_key_masked) {
-            lv_textarea_set_text(ta, "");  /* first edit: retype from scratch */
-            s_cfg_key_masked = false;
-        }
-        lv_textarea_add_char(ta, c);
-    }
-}
-
 /* ---- UTF-8 helper -------------------------------------------------------- */
 int pp_utf8_count(const char *s)
 {
@@ -1452,7 +1137,6 @@ void penpal_keyboard_poll(void)
         case PP_PAGE_THREAD:
         case PP_PAGE_FB:
         case PP_PAGE_PROFILE: ppr_key(c); break;
-        case PP_PAGE_CFG: pp_cfg_key(c); break;
         default: break;
         }
     }
@@ -1466,7 +1150,6 @@ static void pp_create(lv_obj_t *parent)
     pp_home_build(parent);
     ppw_build(parent);                    /* COMPOSE + TOPICS */
     ppr_build(parent);                    /* THREAD + FB + PROFILE */
-    pp_cfg_build(parent);
     pp_dbg_pool("create");
     pp_set_page(PP_PAGE_HOME);
     pp_home_render_pals();

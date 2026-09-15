@@ -445,6 +445,42 @@ bool penpal_test_base(const char *base, const char *key, string *detail)
     return false;
 }
 
+bool penpal_get_profile(const char *base, const char *key,
+                        pp_profile_t *out, string *err)
+{
+    *out = pp_profile_t{};
+    if (!pp_cfg_ok(base, key, err)) return false;
+
+    pp_http_t r = pp_request("GET", pp_url(base, "/users/me/profile"),
+                             NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);
+        Serial.printf("%s profile failed: %s\n", PP_TAG, pp_fail(r).c_str());
+        return false;
+    }
+    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!root) {
+        if (err) *err = "bad JSON (profile)";
+        return false;
+    }
+    /* demo contract (remote_api_demo.py step 0): name/age_band/level are
+     * always present; city/interests are nullable and arrive as null */
+    s_copy(out->name, sizeof(out->name),
+           cJSON_GetStringValue(cJSON_GetObjectItem(root, "name")));
+    s_copy(out->age_band, sizeof(out->age_band),
+           cJSON_GetStringValue(cJSON_GetObjectItem(root, "age_band")));
+    s_copy(out->level, sizeof(out->level),
+           cJSON_GetStringValue(cJSON_GetObjectItem(root, "level")));
+    s_copy(out->city, sizeof(out->city),
+           cJSON_GetStringValue(cJSON_GetObjectItem(root, "city")));
+    s_copy(out->interests, sizeof(out->interests),
+           cJSON_GetStringValue(cJSON_GetObjectItem(root, "interests")));
+    cJSON_Delete(root);
+    Serial.printf("%s profile: %s (%s/%s)\n", PP_TAG, out->name,
+                  out->age_band, out->level);
+    return true;
+}
+
 bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count)
 {
     if (count) *count = 0;

@@ -127,6 +127,11 @@ void ppw_lock_edit(bool lock)
         if (lock) lv_obj_add_state(objs[i], LV_STATE_DISABLED);
         else lv_obj_clear_state(objs[i], LV_STATE_DISABLED);
     }
+    /* the reply title stays locked on top of the flight lock (see
+     * ppw_show_compose): unlocking the send must not re-enable it */
+    if (!lock && pp.reply_mode && s_title_ta) {
+        lv_obj_add_state(s_title_ta, LV_STATE_DISABLED);
+    }
 }
 
 /* ---- COMPOSE apply-state (every entry / page return) --------------------- */
@@ -138,15 +143,22 @@ void ppw_show_compose(void)
              pp.comp_pal_name[0] ? pp.comp_pal_name : "-");
     lv_label_set_text(s_to_lab, pp.fmt);
 
-    /* Topic row: new mode only; Tips: reply mode only (§4.2) */
+    /* Topic row: new mode only; Tips: reply mode only (§4.2). The reply
+     * title is the thread anchor ("Re: <subject>") - the server rejects a
+     * reply whose subject no longer matches its thread_root_id (device
+     * report 2026-09-14), so it is shown DISABLED and cannot be edited
+     * (keypad path guarded in ppw_compose_key / ppw_title_focus_cb). */
     if (pp.reply_mode) {
         lv_obj_add_flag(s_topic_lab, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_pick_btn, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_tips_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_state(s_title_ta, LV_STATE_DISABLED);
+        s_focus_title = false;
     } else {
         lv_obj_clear_flag(s_topic_lab, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_pick_btn, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_tips_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_state(s_title_ta, LV_STATE_DISABLED);
         snprintf(pp.fmt, sizeof(pp.fmt), "Topic: %s",
                  pp.comp_has_topic ? pp.comp_topic_title : "(none)");
         lv_label_set_text(s_topic_lab, pp.fmt);
@@ -191,7 +203,16 @@ void ppw_on_send_result(const pp_result_t *res)
         /* failure/timeout: draft kept + unlocked + key kept - a retry of the
          * unchanged payload replays the same key (§3.2) */
         if (pp.send_lock) ppw_lock_edit(false);
-        pp_status_set("send failed: %s", res->err.c_str());
+        snprintf(pp.fmt, sizeof(pp.fmt), "%.400s", res->err.c_str());
+        Serial.printf("[PenPal] send failed: %s\n", pp.fmt);  /* full detail:
+            msgbox CJK font covers only the 1000 common hanzi - the serial log
+            always carries the verbatim server message */
+        pp_status_set("send failed: %s", pp.fmt);
+        /* the compose status strip is a ~106 px clip cell overlapping the
+         * counter label - a send failure MUST surface as a notice msgbox
+         * or it is effectively invisible on the EPD (user report 2026-09-14:
+         * waitbox vanished, no error shown) */
+        pp_msgbox_show("Send failed", pp.fmt);
         return;
     }
     /* confirmed success: void the key and clear COMPOSE only when the UI
@@ -235,11 +256,23 @@ static void ppw_send_click(void)
     const char *body = lv_textarea_get_text(s_body_ta);
     if (!title || !title[0]) {
         pp_status_set("title is empty");
+        /* the compose status strip is a ~106 px clip cell overlapping the
+         * counter label - validation prompts go to the notice msgbox or
+         * they are unreadable on the EPD (user report 2026-09-14) */
+        pp_msgbox_show("Cannot send",
+                       "The title is empty.\n\nEnter a subject first.");
         return;
     }
     int chars = pp_utf8_count(body ? body : "");
     if (chars < 50) {
-        pp_status_set("Need 50+ chars (now %d)", chars);
+        snprintf(pp.fmt, sizeof(pp.fmt),
+                 "Need 50+ chars (now %d)", chars);
+        pp_status_set("%s", pp.fmt);
+        snprintf(pp.fmt, sizeof(pp.fmt),
+                 "The body is too short: %d of 50 characters.\n\n"
+                 "Keep writing - the letter needs at least 50 characters.",
+                 chars);
+        pp_msgbox_show("Cannot send", pp.fmt);
         return;
     }
 
@@ -491,11 +524,12 @@ static void ppw_top_back_cb(lv_event_t *e)
 
 /* ---- keyboard (COMPOSE + TOPICS) ------------------------------------------ */
 /* Touch focus keeps the keypad editing the box the user tapped (same
- * pattern as ai_cfg/penpal-cfg FOCUSED handlers). Default stays Body. */
+ * pattern as ai_cfg/penpal-cfg FOCUSED handlers). Default stays Body.
+ * Reply mode: the title is fixed - a tap on it redirects to the Body. */
 static void ppw_title_focus_cb(lv_event_t *e)
 {
     (void)e;
-    s_focus_title = true;
+    s_focus_title = !pp.reply_mode;
 }
 
 static void ppw_body_focus_cb(lv_event_t *e)
@@ -506,6 +540,9 @@ static void ppw_body_focus_cb(lv_event_t *e)
 
 static void ppw_compose_key(char c)
 {
+    /* reply title is thread-anchored and server-validated - the keypad
+     * never targets it in reply mode (device report 2026-09-14) */
+    if (pp.reply_mode) s_focus_title = false;
     lv_obj_t *ta = s_focus_title ? s_title_ta : s_body_ta;
     if (pp.send_lock) {
         /* locked while SEND is in flight: only the empty-back escape and

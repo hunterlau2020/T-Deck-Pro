@@ -625,6 +625,19 @@ static void ai_cfg_create(lv_obj_t *parent)
     ai_tls_sw = lv_switch_create(parent);
     lv_obj_set_size(ai_tls_sw, 44, 24);
     lv_obj_align(ai_tls_sw, LV_ALIGN_TOP_RIGHT, -2, 4);
+    /* EPD state visibility (user request 2026-09-15, take 2 - same as the
+     * Voice AI TTS switch): the style must bind to the CHECKED selector or
+     * the theme's checked style overrides it. ON = dark track, OFF = light
+     * track with border. */
+    lv_obj_set_style_bg_color(ai_tls_sw, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_border_color(ai_tls_sw, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(ai_tls_sw, 1, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(ai_tls_sw, lv_color_white(), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(ai_tls_sw, lv_color_black(),
+                              LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(ai_tls_sw, lv_color_white(), LV_PART_KNOB);
+    lv_obj_set_style_border_color(ai_tls_sw, lv_color_black(), LV_PART_KNOB);
+    lv_obj_set_style_border_width(ai_tls_sw, 1, LV_PART_KNOB);
     if (openai_tls_insecure()) {
         lv_obj_add_state(ai_tls_sw, LV_STATE_CHECKED);
     }

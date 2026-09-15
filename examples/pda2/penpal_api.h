@@ -193,6 +193,22 @@ bool penpal_get_pals(const char *base, const char *key,
  * @return true on HTTP 200. */
 bool penpal_test_base(const char *base, const char *key, string *detail);
 
+/* ---- "Who am I" profile (Whoami app, 2026-09-14) ---------------------------
+ * GET /api/v1/users/me/profile - the API-key holder's own record
+ * (remote_api_demo.py step 0). */
+typedef struct {
+    char name[48];
+    char age_band[24];
+    char level[12];
+    char city[48];
+    char interests[96];
+} pp_profile_t;
+
+/** @brief Fetch the API-key holder's profile. Empty fields arrive as "".
+ *  @return true on HTTP 2xx + parse; *err holds the failure line otherwise. */
+bool penpal_get_profile(const char *base, const char *key,
+                        pp_profile_t *out, string *err);
+
 bool penpal_get_topics(const char *base, const char *key,
                        pp_topic_t *out, int max, int *count, string *err);
 

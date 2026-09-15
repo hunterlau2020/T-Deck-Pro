@@ -292,6 +292,8 @@ bool setupGPS()
         startTimeout = millis() + 500;
         String ver = "";
         while (!SerialGPS.available()) {
+            extern void ota_boot_wdt_feed(void);   /* OTA WDT (§5.2) */
+            ota_boot_wdt_feed();
             if (millis() > startTimeout) {
                 Serial.println("Get L76K timeout!");
                 return false;
@@ -325,6 +327,8 @@ static int getAck(uint8_t *buffer, uint16_t size, uint8_t requestedClass, uint8_
     uint16_t    needRead;
 
     while (millis() - startTime < 800) {
+        extern void ota_boot_wdt_feed(void);   /* OTA WDT feed point (§5.2) */
+        ota_boot_wdt_feed();
         while (SerialGPS.available()) {
             int c = SerialGPS.read();
             switch (ubxFrameCounter) {

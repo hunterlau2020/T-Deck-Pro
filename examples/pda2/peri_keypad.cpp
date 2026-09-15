@@ -63,6 +63,8 @@ const char keymap_shift[KEYPAD_ROWS][KEYPAD_COLS] = {
 Adafruit_TCA8418 keypad;
 keypad_cb keypad_listener = NULL;
 
+extern void ui_activity_mark(void);     /* auto deep sleep (ui_deckpro.cpp) */
+
 /* Software character FIFO (review finding 2.1): keypad_loop drains the whole
  * hardware FIFO into this queue; keypad_get_val pops one char per call, so
  * several presses arriving within one loop pass are delivered in order
@@ -186,6 +188,8 @@ void keypad_loop(void)
         }
 
         if (state < 0) continue;
+
+        ui_activity_mark();     /* any press/release counts as activity */
 
         int row = k / KEYPAD_COLS;
         int col = (KEYPAD_COLS - 1) - k % KEYPAD_COLS;

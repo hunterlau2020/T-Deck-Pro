@@ -78,6 +78,9 @@ enum {
     SCREEN_AI_CHAT_ID,
     SCREEN_AI_CFG_ID,
     SCREEN_PENPAL_ID,
+    SCREEN_WHOAMI_ID,
+    /* appended at the END (OTA design §4/§10): Settings' OTA Update page */
+    SCREEN2_2_ID,
 };
 
 typedef void (*ui_indev_read_cb)(int);

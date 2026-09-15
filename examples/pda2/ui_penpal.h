@@ -24,6 +24,8 @@
 #include <freertos/queue.h>
 
 /* ---- internal pages (§3.1) ----------------------------------------------- */
+/* CFG moved to the Whoami app (2026-09-14); PenPal home's Cfg button pushes
+ * SCREEN_WHOAMI_ID with its Cfg tab preselected. */
 typedef enum {
     PP_PAGE_HOME = 0,
     PP_PAGE_COMPOSE,
@@ -31,10 +33,9 @@ typedef enum {
     PP_PAGE_THREAD,
     PP_PAGE_FB,
     PP_PAGE_PROFILE,
-    PP_PAGE_CFG,
 } pp_page_t;
 
-#define PP_PAGE_CNT 7           /* keep in sync with pp_page_t */
+#define PP_PAGE_CNT 6           /* keep in sync with pp_page_t */
 
 /* ---- async result types (§3.2; single queue, type-dispatched) ------------- */
 typedef enum {
@@ -193,6 +194,10 @@ bool pp_waitbox_visible(void);
 /* Config helpers (UI thread; Preferences is not re-entrant). */
 void pp_cfg_load(char *base, int base_len, char *key, int key_len);
 bool pp_cfg_from_nvs(void);            /* true when NVS holds base/key */
+
+/* Called by the Whoami Cfg tab after a successful save: PenPal re-syncs
+ * with the (possibly different) server on its next entry. */
+void pp_notify_cfg_changed(void);
 
 /* UTF-8 helpers shared by write/read pages. */
 int pp_utf8_count(const char *s);      /* characters, not bytes */
