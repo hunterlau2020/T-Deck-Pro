@@ -3,6 +3,7 @@
 #include "ui_deckpro_port.h"
 #include "factory.h"
 #include "utilities.h"
+#include "fw_version.h"
 
 #include "FS.h"
 #include "SD.h"
@@ -171,9 +172,28 @@ bool ui_setting_get_a7682_status(void)
 }
 
 // About System
+const char *fw_version_string(void)
+{
+    /* __DATE__ is "Mmm dd yyyy"; reformat into the x.y policy string with
+     * the compile date as the build number (fw_version.h, never by hand) */
+    static const char months[12][4] = {
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    static char v[28];
+    char mon[4] = {0};
+    int dd = 0, yy = 0, mm = 0;
+    if (sscanf(__DATE__, "%3s %d %d", mon, &dd, &yy) == 3) {
+        for (int i = 0; i < 12; i++)
+            if (strcmp(mon, months[i]) == 0) { mm = i + 1; break; }
+    }
+    snprintf(v, sizeof(v), "v%d.%d build %04d-%02d-%02d",
+             FW_VERSION_MAJOR, FW_VERSION_MINOR, yy, mm, dd);
+    return v;
+}
+
 const char *ui_setting_get_sf_ver(void)
 {
-    return UI_T_DECK_PRO_VERSION;
+    return fw_version_string();
 }
 const char *ui_setting_get_hd_ver(void)
 {

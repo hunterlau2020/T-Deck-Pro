@@ -5,6 +5,16 @@
 
 ## 2026-09-16（"OTA 版本致死"假案定案 + 强制校验刷机脚本）
 
+- **固件版本号体系上线**（`fw_version.h`，x.y.build 基线 **v1.0**）：
+  x=大升级批次、y=小改动（手动维护），build=编译日期（`__DATE__`
+  自动生成，不手工维护）；显示于开机 splash、系统信息 "SF Version"
+  （替换 LilyGO 上游的 `v2.4-260320`）与 Whoami Cfg 页 AI Provider
+  下拉框下方的 `FW: vX.Y build yyyy-mm-dd` label。
+- **Whoami Me 页 profile 缓存**（NVS `whoami` 命名空间）：进屏/开机
+  直接渲染缓存（状态行显示 `cached <日期>`），不再每次拉远程；仅
+  无缓存的首次使用或手动 Refresh 触发网络；Cfg 保存（换 key 可能换
+  用户）自动清缓存。Cfg 页布局微调（Save/Test/status 下移 16px 给
+  版本 label 让位）。
 - **两台机"变砖"假案定案**（issue_list §22）：刷入 `095e41a` 后两台机
   零输出复位循环，根因**不是固件**而是分块刷写未逐块校验（USB CDC
   掉口后一块未写入，bootloader 哈希拒绝、应用从未启动——`entry

@@ -10,6 +10,7 @@
 
 #include <Arduino.h>
 #include "utilities.h"
+#include "fw_version.h"
 #include <GxEPD2_BW.h>
 #include <TouchDrvCSTXXX.hpp>
 #include <TinyGPS++.h>
@@ -199,7 +200,7 @@ static bool ink_screen_init()
         }
 
         display->setCursor(x+20, y+20);
-        display->print(UI_T_DECK_PRO_VERSION);
+        display->print(fw_version_string());   /* x.y.build, fw_version.h */
     }
     while (display->nextPage());
     // Some board revisions don't wire the panel reset line, so avoid deep sleep.

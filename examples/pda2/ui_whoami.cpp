@@ -22,9 +22,12 @@
 #include "penpal_api.h"
 #include "openai_api.h"         /* ai_provider_* */
 #include "secret_mask.h"
+#include "fw_version.h"
 
 #include <WiFi.h>
 #include <freertos/queue.h>
+#include <Preferences.h>
+#include <time.h>
 
 /* ---- tabs -------------------------------------------------------------- */
 static lv_obj_t *s_me_tab_btn = NULL;
@@ -40,6 +43,66 @@ static lv_obj_t *s_me_status = NULL;
 static pp_profile_t s_profile;
 static bool s_profile_valid = false;
 static bool s_profile_fetched = false;     /* auto-fetch once per power cycle */
+
+/* ---- Me tab profile cache (user request 2026-09-16) -----------------------
+ * The profile is stable data - persist it in NVS ("whoami" namespace) and
+ * stop pulling it from the server on every entry/boot. Network is hit only
+ * on explicit Refresh (or the very first run with no cache). The cache is
+ * cleared when Cfg is saved: the key may point at another user then. */
+static bool s_cache_read = false;          /* NVS consulted once per boot */
+static uint32_t s_cache_ts = 0;            /* fetch time, 0 = unknown */
+
+static bool wa_cache_load(void)
+{
+    Preferences nvs;
+    if (!nvs.begin("whoami", true)) return false;      /* read-only open */
+    pp_profile_t p;
+    bool ok = nvs.getBytesLength("me_prof") == sizeof(p)
+              && nvs.getBytes("me_prof", &p, sizeof(p)) == sizeof(p);
+    uint32_t ts = ok ? nvs.getULong("me_ts", 0) : 0;
+    nvs.end();
+    if (!ok) return false;
+    s_profile = p;
+    s_profile_valid = true;
+    s_cache_ts = ts;
+    return true;
+}
+
+static void wa_cache_save(void)
+{
+    Preferences nvs;
+    if (!nvs.begin("whoami", false)) return;
+    nvs.putBytes("me_prof", &s_profile, sizeof(s_profile));
+    time_t now = time(NULL);
+    nvs.putULong("me_ts", now >= 1600000000 ? (uint32_t)now : 0);
+    nvs.end();
+    s_cache_ts = now >= 1600000000 ? (uint32_t)now : 0;
+}
+
+static void wa_cache_clear(void)
+{
+    Preferences nvs;
+    if (nvs.begin("whoami", false)) {
+        nvs.clear();
+        nvs.end();
+    }
+    s_cache_ts = 0;
+}
+
+/* status line for a cache-served profile */
+static void wa_me_status(const char *txt);   /* defined below */
+static void wa_me_status_cached(void)
+{
+    struct tm tmv;
+    time_t ts = (time_t)s_cache_ts;
+    if (s_cache_ts > 0 && localtime_r(&ts, &tmv)) {
+        char buf[48];
+        strftime(buf, sizeof(buf), "cached %Y-%m-%d (Refresh)", &tmv);
+        wa_me_status(buf);
+    } else {
+        wa_me_status("cached (press Refresh)");
+    }
+}
 
 /* Cfg tab (moved from ui_penpal.cpp) */
 enum {
@@ -304,6 +367,7 @@ static void wa_consume(void)
                 s_profile = m->prof;
                 s_profile_valid = true;
                 s_profile_fetched = true;
+                wa_cache_save();             /* serve future boots from NVS */
                 wa_me_render();
                 wa_me_status("profile OK");
             } else if (m->ok) {
@@ -430,7 +494,12 @@ static void wa_cfg_save_cb(lv_event_t *e)
     if (server_ok && prov_ok) {
         wa_cfg_status("saved");
         pp_notify_cfg_changed();           /* PenPal re-syncs with new config */
-        s_profile_fetched = false;         /* key may point at another user */
+        /* key may point at another user: drop the cached profile (both the
+         * NVS cache and the RAM copy) so the next entry refetches */
+        wa_cache_clear();
+        s_profile_valid = false;
+        s_profile_fetched = false;
+        wa_me_render();
     } else if (server_ok) {
         wa_cfg_status("server saved; AI provider save failed");
     } else {
@@ -511,9 +580,18 @@ static void wa_cfg_build(lv_obj_t *page)
     lv_obj_add_event_cb(s_cfg_provider_dd, wa_cfg_provider_dd_cb,
                         LV_EVENT_VALUE_CHANGED, NULL);
 
+    /* firmware version right below the provider dropdown (user request
+     * 2026-09-16) - x.y.build, see fw_version.h for the bump policy */
+    lv_obj_t *fw_lab = lv_label_create(page);
+    lv_obj_align(fw_lab, LV_ALIGN_TOP_LEFT, 6, 212);
+    lv_label_set_text_fmt(fw_lab, "FW: %s", fw_version_string());
+    lv_obj_set_style_text_font(fw_lab, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(fw_lab,
+                                lv_palette_main(LV_PALETTE_GREY), 0);
+
     lv_obj_t *save_btn = lv_btn_create(page);
     lv_obj_set_size(save_btn, 64, 30);
-    lv_obj_align(save_btn, LV_ALIGN_TOP_LEFT, 6, 216);
+    lv_obj_align(save_btn, LV_ALIGN_TOP_LEFT, 6, 232);
     lv_obj_t *save_lab = lv_label_create(save_btn);
     lv_label_set_text(save_lab, "Save");
     lv_obj_center(save_lab);
@@ -521,16 +599,16 @@ static void wa_cfg_build(lv_obj_t *page)
 
     lv_obj_t *test_btn = lv_btn_create(page);
     lv_obj_set_size(test_btn, 64, 30);
-    lv_obj_align(test_btn, LV_ALIGN_TOP_LEFT, 78, 216);
+    lv_obj_align(test_btn, LV_ALIGN_TOP_LEFT, 78, 232);
     lv_obj_t *test_lab = lv_label_create(test_btn);
     lv_label_set_text(test_lab, "Test");
     lv_obj_center(test_lab);
     lv_obj_add_event_cb(test_btn, wa_cfg_test_cb, LV_EVENT_CLICKED, NULL);
 
     s_cfg_status = lv_label_create(page);
-    lv_obj_align(s_cfg_status, LV_ALIGN_TOP_LEFT, 6, 254);
+    lv_obj_align(s_cfg_status, LV_ALIGN_TOP_LEFT, 6, 268);
     lv_obj_set_width(s_cfg_status, 228);
-    lv_obj_set_height(s_cfg_status, 60);
+    lv_obj_set_height(s_cfg_status, 50);
     lv_label_set_long_mode(s_cfg_status, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_cfg_status, "");
     lv_obj_set_style_text_font(s_cfg_status, &lv_font_montserrat_14, 0);
@@ -758,8 +836,17 @@ static void wa_entry(void)
 {
     ui_disp_full_refr();
     s_wa_gen++;
-    /* auto-fetch the profile once (first visit with a configured server) */
-    if (!s_profile_fetched && !s_wa_task) {
+    /* NVS cache first (once per boot): render instantly, no network */
+    if (!s_cache_read) {
+        s_cache_read = true;
+        if (wa_cache_load()) {
+            wa_me_render();
+            wa_me_status_cached();
+        }
+    }
+    /* auto-fetch ONLY on a first run with no usable profile (cache empty);
+     * afterwards the server is hit exclusively via Refresh (2026-09-16) */
+    if (!s_profile_valid && !s_profile_fetched && !s_wa_task) {
         char base[PP_BASE_MAX], key[PP_KEY_MAX];
         pp_cfg_load(base, sizeof(base), key, sizeof(key));
         if (base[0] && key[0]) {
