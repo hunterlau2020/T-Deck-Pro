@@ -3,6 +3,23 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-16（"OTA 版本致死"假案定案 + 强制校验刷机脚本）
+
+- **两台机"变砖"假案定案**（issue_list §22）：刷入 `095e41a` 后两台机
+  零输出复位循环，根因**不是固件**而是分块刷写未逐块校验（USB CDC
+  掉口后一块未写入，bootloader 哈希拒绝、应用从未启动——`entry
+  0x403c98d0` 实为 bootloader 入口）。决定性实验：同一台机验证完整刷入
+  `095e41a` 后 30s 零复位正常启动；map 级 diff 证明两版固件唯一实质
+  差异是 +56.7KB×2 flash rodata（CA 包 static 双拷贝）。
+- **`scripts/flash_verified.py` 入库**：分块刷写 + 每块强制
+  "Hash of data verified." + 失败即中止 + 可选 `--readback` 整段回读
+  比对；本事件用它恢复了两台机，此后固化为唯一刷机路径。
+- **顺带核实**：`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` 属实、两台机
+  otadata state=VALID、`verifyRollbackLater()` override 真机无影响；
+  OTA PENDING_VERIFY 真实回滚路径仍待真测矩阵。
+- 设备状态：`28:37:2f:91:2c:20` 刷至最新 `095e41a`（实验+验证）；
+  `10:20:ba:34:18:5c` 按指令留在 `71c09e7`；`10:20:ba:34:19:ec` 未连接。
+
 ## 2026-09-15（会话批次：八组功能/修复 + V1.0 面板假死事件）
 
 - **八组变更单 commit 批次**（`71c09e7`，评审申请

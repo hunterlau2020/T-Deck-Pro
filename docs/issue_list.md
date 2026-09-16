@@ -674,6 +674,49 @@ Whoami App / 菜单重排 / TTS 开关 / OTA 实现）细节见评审申请；�
 
 ---
 
+## 22. "OTA 版本致死"假案：刷写不完整 + bootloader 哈希拒绝（2026-09-16，
+机 `28:37:2f:91:2c:20` 与 `10:20:ba:34:18:5c`，commit `095e41a` 当天两台
+同症状"变砖"）
+
+**现象**：刷入 `095e41a` 后两台机同症状：`rst:0x3 (RTC_SW_SYS_RST)` 每
+~0.4s 循环、屏幕死、点触无响应、**零应用串口输出**。一度怀疑与 §18 面板
+楔死同类（要拔电池）。
+
+**结论：固件无罪，是刷写不完整**。三层证据：
+
+1. **循环日志里的 `entry 0x403c98d0` 是 2nd-stage bootloader 的入口**
+   （0x403C8000 IRAM 窗），不是应用——应用从未启动，所以零输出。
+   bootloader 校验镜像哈希失败即静默复位，形成死循环。
+2. **二进制级 diff（map 汇总）**：`71c09e7`→`095e41a` 唯一实质差异 =
+   `.flash.rodata` +0xDDAC（`ca_bundle_full.h` 的 static 常量被两个编译
+   单元各包含一份，2×56.7KB flash；`.dram0.data`/`.dram0.bss`/
+   `.iram0.text` 全部 ±0）。纯只读数据不触任何启动路径；app0=0x640000
+   也远未溢出。
+3. **决定性实验**：同一台"变砖"机用强制逐块校验流程完整刷入 `095e41a`
+   → 30s 零复位、外设全链路正常启动。当天的"变砖"是分块刷写重试时
+   **没有逐块核对 "Hash of data verified."**（只看了 "Leaving..." 尾行），
+   而 USB CDC 在持续传输约 1/4 块后必然掉口（§20 同族问题，换波特率
+   无效、失败偏移可复现），至少一块从未写入。
+
+**恢复：不需要拔电池**。ROM 下载模式先于应用运行，esptool 永远够得着；
+用 `scripts/flash_verified.py`（本次事件后入库：分块 + 每块强制哈希校验
++ 失败即中止退出 + 可选整段回读比对）重刷即可。
+
+**规则**：
+1. 手工 esptool 分块刷写时，**每块必须 grep "Hash of data verified."**，
+   尾行 "Leaving..." 不构成成功证据；
+2. CDC 掉口后重试前 `sleep 2` 等端口重枚举，重试上限 4–6 次；
+3. 诊断"零输出复位循环"先看 `entry 0x403c…` 归属：bootloader 入口段
+   （0x403C8000+小偏移）= 应用根本没跑，嫌疑在镜像/刷写，不在代码逻辑。
+
+**顺带核实**：Arduino 核心 sdkconfig `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`
+属实；两台机 otadata 均 seq=1/state=VALID（71c09e7 每次开机自动标 valid），
+`verifyRollbackLater()` override 在 VALID 态为空操作、真机验证无影响——
+但 PENDING_VERIFY 真实路径（OTA 更新后首次启动）仍待回滚真测矩阵覆盖。
+另：`ca_bundle_full.h` 双拷贝（114KB flash）非缺陷，去重留作低成本优化。
+
+---
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：
