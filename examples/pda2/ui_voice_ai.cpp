@@ -349,9 +349,20 @@ static int vai_ctx_build(ai_message_t *msgs, int max_msgs)
         bytes += vai_ctx[first - 1].second.length();
         first--;
     }
+    /* Each stored turn is ONE pair (user_text, assistant_text) but the API
+     * needs TWO messages per turn: {role:"user", content:user_text} then
+     * {role:"assistant", content:assistant_text}. v4/v5 assigned
+     * pair.first as the ROLE - an invalid role that broke multi-turn from
+     * the second exchange on (Claude/Grok session-batch P2-1). Budget is
+     * counted in whole turn-pairs (VAI_CTX_BUDGET), so the 2x expansion
+     * cannot exceed max_msgs when callers pass 2 * stored turns. */
     int n = 0;
-    for (size_t i = first; i < vai_ctx.size() && n < max_msgs; i++) {
-        msgs[n].role = vai_ctx[i].first.c_str();
+    for (size_t i = first; i < vai_ctx.size(); i++) {
+        if (n + 2 > max_msgs) break;
+        msgs[n].role = "user";
+        msgs[n].content = vai_ctx[i].first.c_str();
+        n++;
+        msgs[n].role = "assistant";
         msgs[n].content = vai_ctx[i].second.c_str();
         n++;
     }

@@ -6,6 +6,11 @@
 #include "ota_update.h"
 #include "ota_trust_anchor.h"
 #include "http_utils.h"
+#include "ca_bundle_full.h"
+
+#ifndef OTA_ALLOW_PLAINTEXT
+#define OTA_ALLOW_PLAINTEXT 0    /* lab-only: 1 permits http:// URLs (no TLS) */
+#endif
 #include "env_secrets.h"
 #include "ui_deckpro_port.h"            /* battery getters (precheck) */
 
@@ -269,8 +274,14 @@ static void ota_task_exit(void)
 
 static void ota_send_result(ota_result_t *r)
 {
-    if (s_ota_q) xQueueOverwrite(s_ota_q, &r);   /* never blocks (§3.3) */
-    else delete r;
+    if (!s_ota_q) { delete r; return; }
+    /* IC-2 (Claude/Grok v6-round): Overwrite silently drops the previous
+     * pointer - receive it first and delete, or the stale result leaks. */
+    ota_result_t *old = NULL;
+    if (xQueuePeek(s_ota_q, &old, 0) == pdTRUE && old) {
+        if (xQueueReceive(s_ota_q, &old, 0) == pdTRUE) delete old;
+    }
+    xQueueOverwrite(s_ota_q, &r);
 }
 
 /* ---- CHECK worker --------------------------------------------------------- */
@@ -311,9 +322,12 @@ static void ota_check_task(void *param)
     HTTPClient http;
     http.setTimeout(OTA_MANIFEST_TIMEOUT_MS);
     http.setReuse(false);
+    /* design v6 §3.1: forced Mozilla-CA validation, NEVER http_apply_tls
+     * (which inherits the AI "Trust self-signed" toggle). Plain http only
+     * behind the compile-time lab macro (default off). */
     bool begun = (strncmp(url, "https://", 8) == 0)
-        ? (http_apply_tls(secure), http.begin(secure, url))
-        : http.begin(plain, url);
+        ? (secure.setCACertBundle(CA_BUNDLE_MOZILLA), http.begin(secure, url))
+        : (OTA_ALLOW_PLAINTEXT ? http.begin(plain, url) : false);
     if (!begun) {
         r->err = "connect failed (manifest)";
         ota_send_result(r);
@@ -419,9 +433,10 @@ static void ota_update_task(void *param)
     HTTPClient http;
     http.setTimeout(OTA_IDLE_TIMEOUT_MS);
     http.setReuse(false);
+    /* same forced-CA policy as the manifest fetch (design v6 §3.1) */
     bool begun = (strncmp(m.url.c_str(), "https://", 8) == 0)
-        ? (http_apply_tls(secure), http.begin(secure, m.url.c_str()))
-        : http.begin(plain, m.url.c_str());
+        ? (secure.setCACertBundle(CA_BUNDLE_MOZILLA), http.begin(secure, m.url.c_str()))
+        : (OTA_ALLOW_PLAINTEXT ? http.begin(plain, m.url.c_str()) : false);
     if (!begun) {
         r->err = "connect failed (firmware)";
         goto fail;
@@ -544,11 +559,16 @@ bool ota_check_async(uint32_t gen)
     s_ota_cancel = false;
     s_ota_progress = 0;
     s_ota_start_ms = millis();
+    /* IC-1 (Claude/Grok v6-round): claim the slot BEFORE create and roll
+     * back on failure - the worker may exit on the other core before the
+     * caller resumes, so "set after create" races into permanent refusal. */
+    if (s_ota_inflight != 0) return false;
+    s_ota_inflight = 1;
     if (xTaskCreate(ota_check_task, "ota_chk", OTA_TASK_STACK,
                     (void *)(uintptr_t)gen, 1, NULL) != pdPASS) {
-        return false;                    /* not launched: no inflight bump */
+        s_ota_inflight = 0;              /* create failed: release */
+        return false;
     }
-    s_ota_inflight = 1;                  /* AFTER successful create (§3.3) */
     return true;
 }
 
@@ -571,12 +591,15 @@ bool ota_start_async(uint32_t gen, ota_manifest_t *snap)
     s_ota_cancel = false;
     s_ota_progress = 0;
     s_ota_start_ms = millis();
+    /* IC-1: same before-create claim as ota_check_async */
+    if (s_ota_inflight != 0) { delete s; return false; }
+    s_ota_inflight = 1;
     if (xTaskCreate(ota_update_task, "ota_upd", OTA_TASK_STACK,
                     s, 1, NULL) != pdPASS) {
         delete s;
+        s_ota_inflight = 0;              /* create failed: release */
         return false;
     }
-    s_ota_inflight = 1;
     return true;
 }
 

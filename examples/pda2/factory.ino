@@ -22,11 +22,11 @@
 #include <WiFi.h>
 #include <freertos/semphr.h>
 #include "config_keys.h"
-#include "penpal_api.h"   /* PenPal API client + (via ui_penpal*.cpp, polled in
+#include "penpal_api.h"    /* PenPal API client + (via ui_penpal*.cpp, polled in
                            * loop()) the screen UI - registered on the menu in
-                           * the menu-page commit */
+                           * ui_deckpro_entry; results over s_pp_q */
 #include <esp_task_wdt.h>
-#include <esp_ota_ops.h>  /* OTA self-attestation: mark valid + rollback */
+#include <esp_ota_ops.h>   /* OTA self-attestation: mark valid + rollback */
 
 /* ---- OTA boot WDT window (docs/ota-update-design.md §5.2) --------------
  * s_boot_wdt_subscribed gates every feed point: set ONLY after a successful
@@ -647,6 +647,16 @@ static void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
         file = root.openNextFile();
     }
 }
+
+
+/* ---- OTA rollback window (docs/ota-update-design.md §5.2) --------------
+ * Arduino's initArduino() auto-marks a PENDING_VERIFY image valid BEFORE
+ * setup() runs, which would silently defeat OTA rollback. Overriding this
+ * weak hook defers validation; self-attestation happens at the loop-time
+ * attestation point below (first full EPD frame sequence completed).
+ * Both this override AND that attestation call must stay in any future
+ * firmware (removing either: always-rollback or no-rollback). */
+extern "C" bool verifyRollbackLater() { return true; }
 
 void setup()
 {
