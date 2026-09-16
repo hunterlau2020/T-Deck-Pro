@@ -157,6 +157,12 @@ pio run -e factory -t upload -t monitor   # 烧录 + 打开串口监视器（115
 
 ### 坑 6：COM5 烧录中途 USB CDC 失联（2026-08-28，分块烧录恢复）
 
+> **2026-09-16 更新**：分块流程已固化为 **`scripts/flash_verified.py`**
+> （每块强制 "Hash of data verified." + 失败即中止 + `--readback` 终检），
+> 手工切块流程仅作机理参考；事故定案与规则见 `docs/issue_list.md` §22。
+> 另增**串行单机刷写**纪律：一次只刷一台设备，严禁两台并行——坏镜像
+> 不应有同时砖掉全部设备的机会（用户裁定 2026-09-16）。
+
 - 现象：`-t upload` 固定在总进度 ~21-29% 处掉线，pySerial 报
   `PermissionError(13)`（"设备不识别此命令"/"连到系统上的设备没有发挥作用"）；
   降速 115200、`--before usb_reset`、`--no-stub` 均无效。当天首次整刷曾

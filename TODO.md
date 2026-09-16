@@ -7,7 +7,9 @@
 > `docs/issue_list.md`（修复台账）。
 > **刷机纪律（2026-09-16 起）**：固件写入一律
 > `python scripts/flash_verified.py <COMx> .pio/build/pda2/firmware.bin`
-> （issue_list §22：手写分块刷写漏一块 = bootloader 哈希拒绝假"变砖"）。
+> （issue_list §22：手写分块刷写漏一块 = bootloader 哈希拒绝假"变砖"）；
+> **串行单机刷写**——一次只刷一台，严禁两台并行（坏镜像不应有同时砖掉
+> 全部设备的机会）。
 
 ## 待办（2026-09-16 盘点，按优先级）
 
