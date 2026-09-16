@@ -34,6 +34,12 @@
       AI Config → Test 确认（顺手项）。
 - [ ] **OTA 信任锚管理流程**：`ota_signing_key.pem` 仅存本机（gitignored）；
       建立离线备份位与轮换预案（换根仅 USB，设计 §2.2）。
+- [ ] **检查是否需要合并上游 T-Deck-Pro 新 commits**：
+      https://github.com/hunterlau2020/T-Deck-Pro/compare/HD-V2-250915...Xinyuan-LilyGO%3AT-Deck-Pro%3AHD-V2-250915
+- [ ] **AI Chat / TTS 返回数据累积检查**（尤其语音；会话数据是否有上限/清理）
+- [ ] **Apache Gate-Pin 双活过渡**：能否同时接受新旧两个 PIN（平滑轮换）
+- [ ] **轮换 PenPal 测试 key**（`89rg35eua2`/`3s60yrgdua` 已入 git 的
+      penpal-design.md）并把设计文档里的明文换成占位符
 
 ## 已知边界 / 观察（不挡使用）
 
