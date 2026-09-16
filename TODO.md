@@ -5,17 +5,28 @@
 > `docs/review_guide.md` v1.3（设计稿收口机制）。
 > 本文件只保**未完成**事项；已完成工作看 `CHANGELOG.md`（按日期）与
 > `docs/issue_list.md`（修复台账）。
+> **刷机纪律（2026-09-16 起）**：固件写入一律
+> `python scripts/flash_verified.py <COMx> .pio/build/pda2/firmware.bin`
+> （issue_list §22：手写分块刷写漏一块 = bootloader 哈希拒绝假"变砖"）。
 
-## 待办（2026-09-15 盘点，按优先级）
+## 待办（2026-09-16 盘点，按优先级）
 
 - [ ] **OTA 真机验证矩阵**（实现已落地 `71c09e7`，设计 §8 剩余项）：①
       校准打点（两机 setup 各段耗时 + `_busy_timeout` 实测）→ 复核 WDT
       窗口 T=60s 假设、填 `docs/ota-baseline.md`；② 回滚矩阵（自毁固件，
-      先于首次真实 OTA）；③ 覆盖层吸收 / 断网 45s 重试 / 低电安全阀 /
-      签名否定用例（大写 hex、前导零、错锚验签）；④ 局域网端到端
-      （HTTP 服务 + 签一份 manifest，走 Check→Install→重启→自证全流程，
-      需临时编 `OTA_ALLOW_PLAIN_HTTP` 台架版）。真机已过：自证窗口
-      `mark valid ok` 一次（机 #3）。
+      先于首次真实 OTA；PENDING_VERIFY 状态链真机未覆盖——2026-09-16
+      已核实回滚机制在位、otadata 现 VALID 态，见设计 §5.1）；③
+      覆盖层吸收 / 断网 45s 重试 / 低电安全阀 / 签名否定用例（大写 hex、
+      前导零、错锚验签）；④ 局域网端到端（HTTP 服务 + 签一份 manifest，
+      走 Check→Install→重启→自证全流程，需临时编 `OTA_ALLOW_PLAIN_HTTP`
+      台架版）。真机已过：自证窗口 `mark valid ok` 一次（机 #3）。
+- [ ] **session batch 修复复审**（`095e41a` 修复轮：P1 rollback + 五项
+      P2）：按评审指南 §2.5 修复轮安排 delta 复审（核销 71c09e7 四方
+      评审发现的修复证据 + 反例击穿）。
+- [ ] **设备版本统一**：`10:20:ba:34:18:5c`（COM7）按用户指令暂留
+      `71c09e7`；`28:37:2f:91:2c:20` 已在 `095e41a`（2026-09-16 验证
+      完整刷写后正常）。是否统一到 `095e41a` 待用户确认（一条命令）。
+      `10:20:ba:34:19:ec` 未连接，重连后核对版本。
 - [ ] **`PENPAL_BASE` 数据源不一致 + 机 #3 首次配置**：两台 V1.1 的 NVS 指向
       `https://www.studyreview.net`，但 `data/env.cfg` 与机 #3（2026-09-15
       整片擦除后 SPIFFS 克隆自 V1.1，NVS 为空）均为旧局域网地址
@@ -43,6 +54,9 @@
 
 ## 已知边界 / 观察（不挡使用）
 
+- [ ] **`ca_bundle_full.h` static 双拷贝去重**（低成本优化）：`static const`
+      数组在头文件里被 `http_utils.cpp` + `ota_update.cpp` 各含一份，
+      2×56.7KB flash（issue_list §22 顺带发现；改 extern 声明 + 单处定义）。
 - [ ] **机 #3（V1.0）睡眠观察**：面板假死（issue_list §18）判定为复位时序
       事故而非睡眠路径缺陷，自动休眠保留；观察该机后续睡眠/唤醒是否再现
       假死（再现则按 §18 教训 1 拔电池恢复，并重评 V1.0 禁用自动休眠）。

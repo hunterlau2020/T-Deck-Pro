@@ -199,7 +199,18 @@ ota_result_poll：gen 匹配且屏活 → UI 接管指针（CONFIRM_WAIT 期 UI 
 
 ## 5. 回滚与自证（v5 骨架 + v6 三处修正）
 
-### 5.1 机制事实（承前，本轮新增 §1 两条代码实锤）
+### 5.1 机制事实（承前，本轮新增 §1 两条代码实锤；2026-09-16 真机补三条）
+
+2026-09-16 两台真机核实（issue_list §22 事故顺带）：
+
+1. Arduino 核心 sdkconfig 确认 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`、
+   `CONFIG_APP_ROLLBACK_ENABLE=y`——回滚机制真实在位，`verifyRollbackLater()`
+   override 不是空操作。
+2. 两台机 otadata 均 seq=1 / `ESP_OTA_IMG_VALID`（`71c09e7` 起每次开机
+   initArduino 自动标 valid）；VALID 态下 override 为空操作，真机验证
+   `095e41a`（override 在版）启动无影响。
+3. **PENDING_VERIFY 真实路径未覆盖**：OTA 写入→重启→窗口内自证/超时的
+   状态链仍待 §8 回滚矩阵真测（机 #1 先行）。
 
 ### 5.2 自证窗口与喂狗合同（v5 合同 + Codex P3 修正）
 
@@ -276,6 +287,11 @@ Settings 流程）；USB 回退（先读 otadata → `erase_region 0xE000 0x2000
 `_busy_timeout` 实测值、SD 段间隔）。
 
 ## 8. 验证计划（v6：§8.3 重写 + 排空/生命周期用例）
+
+> **刷写纪律（2026-09-16 起）**：本节所有真机用例的固件写入一律走
+> `scripts/flash_verified.py`（每块强制 Hash verified + 失败即中止 +
+> `--readback` 终检）——手写 esptool 分块曾因 USB CDC 掉口漏写一块，
+> 两台机 bootloader 哈希拒绝"变砖"，详见 issue_list §22。
 
 1. 回滚矩阵（承 v4/v5：a 忙等 / b 让出型 / c 自证点前 / d 自证点后
    不回滚（边界）/ e drv 失败继续；每例记录 reset 来源与状态链）。
