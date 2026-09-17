@@ -793,6 +793,35 @@ ESP-IDF 规定 connecting 态下 `esp_wifi_scan_start()` 返回
 
 ---
 
+## 25. 4_2 同步扫描阻塞（v1.3 副作用）+ scan-pick 冲掉已存槽（2026-09-17，v1.4 修复）
+
+**症状 ①**（v1.3 复测）：Wifi app 内点 scan/config、scan 列表点
+SSID、backspace 退出都明显变慢。**根因**：4_2 列表屏的 10s lv_timer
+里是**同步** `WiFi.scanNetworks()`，主循环阻塞 2-3s。v1.3 修复 -2
+之前它被驱动秒拒（瞬间返回）——**"流畅"其实是故障的伪装**；修好
+-2 后扫描真的执行，潜伏的 UI 阻塞才显形。**修复**：port 层换成
+`ui_wifi_scan_async_start()/ui_wifi_scan_collect()` 异步对（同步
+getter 删除）；timer 10s→1s 只做非阻塞轮询、每 10s 节奏 kick 新扫
+描；退出屏复用 4_1 abort 的 SCAN_DONE 释放协议（提取
+`wifi_scan_stop_and_release()` 两屏共享）。
+
+**症状 ②**：从 Scan 点 SSID 跳 Config，永远落 slot 0 并清密码——
+已存配置被顶掉；且**不点 Save 也丢**：切槽是 "masked-aware
+outgoing save"（切走即把编辑缓冲写回 NVS），pick 清空的密码随下次
+切槽写入。**修复（三态）**：pick 的 SSID 已在某槽 → 跳该槽、密码
+保留（"Scan pick - existing slot"）；否则 → 第一个空槽重输密码；
+全满 → banner "Slots full - clear one first"，不动任何槽。
+
+**教训**：
+1. UI 线程（lv_timer/loop 回调）里禁止同步网络扫描/阻塞 IO——
+   "现在没出问题"可能只是被上游故障掩盖（-2 秒拒伪装成快）；
+2. **修复一个被掩盖的地雷时，把它的掩护范围内行为全部复测一遍**，
+   v1.3 验证只测了"能扫出结果"，没测交互响应速度；
+3. "选中即覆盖默认目标"类跳转必须找空位或匹配项，占位目标的
+   写回语义（outgoing save）会把展示层的临时覆盖固化为持久破坏。
+
+---
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：

@@ -471,17 +471,25 @@ int ui_wifi_scan_last_ret(void)
     return s_wifi_scan_last_ret;
 }
 
-void ui_wifi_get_scan_info(ui_wifi_scan_info_t *list, int list_len)
+int16_t ui_wifi_scan_async_start(void)
 {
     ui_wifi_scan_prepare();
-    int n = WiFi.scanNetworks();
-    ui_wifi_scan_reconnect();
-    s_wifi_scan_last_ret = n;
-    if(n < 0)
-        n = 0;   /* scan refused: empty list + "Scan failed" header in show_wifi_scan */
-    if(n > list_len)
-        n = list_len;
-    
+    int16_t r = WiFi.scanNetworks(true);
+    s_wifi_scan_last_ret = r;
+    if (r != WIFI_SCAN_RUNNING)
+        ui_wifi_scan_reconnect();          /* start refused: back to the saved slot */
+    return r;
+}
+
+int16_t ui_wifi_scan_collect(ui_wifi_scan_info_t *list, int list_len)
+{
+    int16_t r = WiFi.scanComplete();
+    if (r == WIFI_SCAN_RUNNING) return r;  /* caller polls again later */
+
+    s_wifi_scan_last_ret = r;
+    ui_wifi_scan_reconnect();              /* terminal state: resume saved slot */
+    if (r > list_len)
+        r = list_len;
     memset(list, 0, (sizeof(*list) * list_len));
     /* Compact on skip (device report 2026-09-16): a filtered-out CJK-named
      * AP used to leave a HOLE at list[i]; show_wifi_scan() breaks at the
@@ -489,7 +497,7 @@ void ui_wifi_get_scan_info(ui_wifi_scan_info_t *list, int list_len)
      * blanked the whole list. Also: hidden networks ("") are dropped, and
      * the copy is NUL-safe for 16-char SSIDs (name[16] was fillable
      * without a terminator). */
-    for(int i = 0, w = 0; i < n; i++)
+    for(int i = 0, w = 0; i < r; i++)
     {
         const char *str = WiFi.SSID(i).c_str();
         if(str[0] == '\0' || is_chinese_utf8(str))
@@ -499,6 +507,9 @@ void ui_wifi_get_scan_info(ui_wifi_scan_info_t *list, int list_len)
         list[w].rssi = WiFi.RSSI(i);
         w++;
     }
+    if (r >= 0)
+        WiFi.scanDelete();                 /* scanComplete != RUNNING: results are final */
+    return r;
 }
 //************************************[ screen 5 ]****************************************** Test
 bool ui_test_get(int peri_id)

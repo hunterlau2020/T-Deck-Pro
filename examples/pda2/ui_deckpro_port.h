@@ -111,15 +111,17 @@ typedef gps_snapshot_t ui_gps_snapshot_t;
 void ui_gps_get_snapshot(ui_gps_snapshot_t *out);
 
 // [ screen 4 ] --- Wifi Scan
-void ui_wifi_get_scan_info(ui_wifi_scan_info_t *list, int list_len);
-/* Device report 2026-09-17: while the saved AP is absent the boot-time
- * auto-reconnect keeps the STA permanently "connecting", and
- * esp_wifi_scan_start() refuses that state (Arduino wraps it as
- * WIFI_SCAN_FAILED/-2) - 4_1 showed "scan start failed(-2)", 4_2 silently
- * rendered an empty list. prepare() parks a non-connected STA idle for the
- * scan (a connected one scans in place); reconnect() resumes the saved
- * slot afterwards; last_ret() exposes the previous scanNetworks() return
- * for the 4_2 empty-list message. */
+/* Async scan pair for screen 4_2 (user report 2026-09-17, v1.4): the old
+ * synchronous getter blocked the UI thread 2-3s every 10s tick - it only
+ * seemed fast before v1.3 because the boot reconnect loop made every scan
+ * fail instantly with -2. async_start() parks a non-connected STA idle
+ * (a connected one scans in place) and kicks an async scan, reconnecting
+ * immediately on refusal; collect() reports scanComplete() to the caller,
+ * copies + frees the results (CJK/hidden compaction) and resumes the
+ * saved slot on completion. last_ret() exposes the previous raw return
+ * for the empty-list message. */
+int16_t ui_wifi_scan_async_start(void);
+int16_t ui_wifi_scan_collect(ui_wifi_scan_info_t *list, int list_len);
 void ui_wifi_scan_prepare(void);
 void ui_wifi_scan_reconnect(void);
 int  ui_wifi_scan_last_ret(void);

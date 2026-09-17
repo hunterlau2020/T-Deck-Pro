@@ -3,6 +3,28 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-17（v1.4：v1.3 复测暴露两项——4_2 同步扫描阻塞 + scan-pick 冲槽）
+
+- **症状**（真机复测 v1.3）：① Wifi app 内点击 scan/config、scan 里点
+  SSID、backspace 退出都明显变慢；② 从 Scan 点 SSID 跳 Config 永远落
+  slot 1，冲掉已存配置（不点 Save 也会丢）。
+- **①根因 = v1.3 副作用**：4_2 列表屏 10s lv_timer 里是**同步**
+  `WiFi.scanNetworks()`，主循环阻塞 2-3s；v1.3 前它被 -2 秒拒（瞬间
+  返回）所以"流畅"——修好 -2 反而把潜伏的阻塞暴露了。
+  **修复**：4_2 全面异步化——port 层 `ui_wifi_scan_async_start()/
+  ui_wifi_scan_collect()` 替换同步 getter；timer 周期 10s→1s 只做
+  非阻塞轮询，每 10s 节奏 kick 新扫描；退出屏时复用 4_1 abort 的
+  SCAN_DONE 释放协议（提取 `wifi_scan_stop_and_release()` 共享）。
+  空列表文案三态：Scan failed / No APs found / Scanning。
+- **②根因**：`entry4_1` 的 scan-pick 无条件落 slot 0 并清密码，叠加
+  切槽即"masked-aware outgoing save"——不点 Save 切走也会把清空后的
+  密码写进 NVS，已存配置被毁。**修复（三态）**：pick 的 SSID 已在某
+  槽 → 跳到该槽（密码保留，banner "existing slot"）；否则 → 第一个
+  **空槽**（新网络重输密码）；全满 → banner "Slots full - clear one
+  first" 且不动任何槽。
+- 版本 v1.3 → **v1.4**。教训：**"修好一个被掩盖的性能地雷"时，把
+  它遮挡的下游行为一起过一遍**（-2 秒拒曾伪装成"快"）。
+
 ## 2026-09-17（v1.3：WiFi 扫描 -2 定案——重连循环与扫描互斥）
 
 - **症状**（真机报告，v1.0 起两轮复现）：WIFI Scan 列表屏"停滞无反应"；

@@ -3077,25 +3077,52 @@ static void entry4_1(void)
 {
     ui_disp_full_refr();
     if (wifi_scan_pick_ssid[0]) {
-        /* a row was tapped on WIFI Scan: land on slot 0 with that SSID and
-         * the cursor in the password box */
-        if (wifi_cfg_slot != 0) {
-            wifi_cfg_set_slot(0);            /* masked-aware outgoing save */
+        /* A row was tapped on WIFI Scan (user report 2026-09-17): never
+         * clobber an existing configuration - if the SSID is already
+         * saved land on that slot with its password intact; otherwise
+         * land on the first EMPTY slot; refuse only when all are full.
+         * (Slot switching is a masked-aware outgoing save, so landing on
+         * an occupied slot used to destroy its stored password even
+         * without pressing Save.) */
+        int target = -1;
+        for (int i = 0; i < WIFI_SLOT_COUNT; i++) {
+            char s[65], pw[65];
+            wifi_slot_load(i, s, sizeof(s), pw, sizeof(pw));
+            if (strcmp(s, wifi_scan_pick_ssid) == 0) { target = i; break; }
+            if (target < 0 && s[0] == '\0') target = i;  /* first empty */
+        }
+        if (target < 0) {
+            wifi_scan_gen++;                 /* drop the pick, keep edits */
+            wifi_banner_show("Slots full - clear one first");
+            Serial.println("[WiFi] scan pick dropped: all slots occupied");
+            wifi_scan_pick_ssid[0] = '\0';
+            return;
+        }
+        char ts[65], tp[65];
+        wifi_slot_load(target, ts, sizeof(ts), tp, sizeof(tp));
+        bool existing = (strcmp(ts, wifi_scan_pick_ssid) == 0);
+        if (wifi_cfg_slot != target) {
+            wifi_cfg_set_slot(target);       /* masked-aware outgoing save */
         } else {
             wifi_scan_gen++;                 /* drop any in-flight scan */
         }
         lv_textarea_set_text(wifi_ssid_ta, wifi_scan_pick_ssid);
         strncpy(wifi_ssid, wifi_scan_pick_ssid, sizeof(wifi_ssid) - 1);
         wifi_ssid[sizeof(wifi_ssid) - 1] = '\0';
-        wifi_pass[0] = wifi_pass_real[0] = '\0';   /* new network: retype */
-        wifi_pass_masked = false;
-        lv_textarea_set_text(wifi_pass_ta, "");
+        if (!existing) {
+            /* new network in an empty slot: password must be retyped */
+            wifi_pass[0] = wifi_pass_real[0] = '\0';
+            wifi_pass_masked = false;
+            lv_textarea_set_text(wifi_pass_ta, "");
+        }
         wifi_cfg_scan_mode = false;
         wifi_cfg_set_field(1);               /* next input is the password */
         wifi_cfg_refresh_labels();
-        wifi_banner_show("Scan pick - enter password");
-        Serial.printf("[WiFi] scan pick: \"%s\" -> slot 0\n",
-                      wifi_scan_pick_ssid);
+        wifi_banner_show(existing ? "Scan pick - existing slot"
+                                  : "Scan pick - enter password");
+        Serial.printf("[WiFi] scan pick: \"%s\" -> slot %d%s\n",
+                      wifi_scan_pick_ssid, target,
+                      existing ? " (existing)" : "");
         wifi_scan_pick_ssid[0] = '\0';
     }
 }
@@ -3113,11 +3140,10 @@ static void exit4_1(void) {
  * has finished allocating/filling the results) before scanDelete(). On
  * timeout the release is DEFERRED and new scans are blocked until the
  * event arrives (review finding 1.3: a follow-up scan must not run
- * scanDelete() while the late callback may still be filling results). */
-static void wifi_cfg_scan_abort(void)
+ * scanDelete() while the late callback may still be filling results).
+ * Shared by 4_1 abort and the 4_2 scan screen exit (v1.4). */
+static void wifi_scan_stop_and_release(void)
 {
-    if (wifi_scan_state != WIFI_SCAN_RUNNING) return;
-
     /* Copilot 1.3: publish the release target BEFORE stopping the scan,
      * then re-check the counter. An event landing between the previous
      * judgement and the publish either passes the re-check or arrives
@@ -3141,6 +3167,12 @@ static void wifi_cfg_scan_abort(void)
     } else {
         Serial.println("[WiFi] scan abort timeout - release deferred");
     }
+}
+
+static void wifi_cfg_scan_abort(void)
+{
+    if (wifi_scan_state != WIFI_SCAN_RUNNING) return;
+    wifi_scan_stop_and_release();
     wifi_scan_state = WIFI_SCAN_FAILED;
     ui_wifi_scan_reconnect();   /* abort leaves the STA idle: resume saved slot */
 }
@@ -3366,16 +3398,39 @@ static void show_wifi_scan(void)
                       shown ? "Scanned APs - tap one to config"
                             : (ui_wifi_scan_last_ret() < 0
                                    ? "Scan failed - retry every 10s"
-                                   : "Scanning... (updates every 10s)"));
+                                   : (ui_wifi_scan_last_ret() == 0
+                                          ? "No APs found - retry every 10s"
+                                          : "Scanning... (updates every 10s)")));
 }
+
+/* Async scan cycle (user report 2026-09-17, v1.3): the old synchronous
+ * WiFi.scanNetworks() blocked the UI thread 2-3s every 10s tick - it only
+ * SEEMED fast before v1.3 because the boot reconnect loop made every scan
+ * fail instantly with -2. Now: 1s tick polls scanComplete() non-blocking,
+ * a new async scan is kicked every 10s to keep the list fresh. */
+static bool wifi_scan_async_inflight = false;
+static uint32_t wifi_scan_last_kick_ms = 0;
 
 static void wifi_scan_timer_event(lv_timer_t *t)
 {
-    ui_wifi_get_scan_info(wifi_info_list, UI_WIFI_SCAN_ITEM_MAX);
-    show_wifi_scan();
+    if (wifi_scan_async_inflight) {
+        if (WiFi.scanComplete() == WIFI_SCAN_RUNNING) return;   /* poll only */
+        wifi_scan_async_inflight = false;
+        ui_wifi_scan_collect(wifi_info_list, UI_WIFI_SCAN_ITEM_MAX);
+        show_wifi_scan();
+        wifi_scan_last_kick_ms = millis();
+        return;
+    }
+    if (millis() - wifi_scan_last_kick_ms < 10000) return;      /* 10s cadence */
+    if (ui_wifi_scan_async_start() == WIFI_SCAN_RUNNING) {
+        wifi_scan_async_inflight = true;
+    } else {
+        show_wifi_scan();       /* header: "Scan failed - retry every 10s" */
+    }
+    wifi_scan_last_kick_ms = millis();
 }
 
-static void create4_2(lv_obj_t *parent) 
+static void create4_2(lv_obj_t *parent)
 {
     scr4_2_cont = lv_obj_create(parent);
     lv_obj_set_size(scr4_2_cont, lv_pct(100), lv_pct(90));
@@ -3413,14 +3468,23 @@ static void create4_2(lv_obj_t *parent)
 static void entry4_2(void)
 {
     ui_disp_full_refr();
-    wifi_scan_timer = lv_timer_create(wifi_scan_timer_event, 10000, NULL);
+    wifi_scan_async_inflight = false;
+    wifi_scan_last_kick_ms = 0;         /* first tick kicks a scan right away */
+    wifi_scan_timer = lv_timer_create(wifi_scan_timer_event, 1000, NULL);
     lv_timer_ready(wifi_scan_timer);
 }
 static void exit4_2(void) {
     ui_disp_full_refr();
-    if(wifi_scan_timer) {
+    if (wifi_scan_timer) {
         lv_timer_del(wifi_scan_timer);
         wifi_scan_timer = NULL;
+    }
+    if (wifi_scan_async_inflight) {
+        /* stop + wait SCAN_DONE + scanDelete (same protocol as 4_1 abort),
+         * then resume the saved-slot reconnect loop */
+        wifi_scan_stop_and_release();
+        wifi_scan_async_inflight = false;
+        ui_wifi_scan_reconnect();
     }
 }
 
