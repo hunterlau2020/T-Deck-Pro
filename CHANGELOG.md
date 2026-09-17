@@ -3,6 +3,23 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-17（v1.8：Disc 断开按钮 + 扫描失败可见性 + kick 防御）
+
+- **用户诉求**：① wifi 没有 disconnect 功能；② 4_2 仍报
+  "Scan failed" 且无详细错误信息。
+- **Disc 按钮**（4_1 按钮行第 4 个）：`wifi_autoconn_stop()`（新增
+  管理器接口）+ `disconnect`（保 NVS）——STA 置 idle（扫描最友
+  好态），直到下次显式连接/重启；状态行 "Disconnected" + banner。
+- **失败可见性**：4_2 标题行带错误码 "Scan failed (-2) - retry 10s"；
+  kick/collect 失败串口打点带 `mode/status` 诊断字段——可区分
+  "启动被拒"（kick，connecting 残留）vs "扫描中途失败"（collect，
+  如迟到 SCAN_DONE/中止），v1.7 前两者在 UI 上不可分。
+- **kick 防御**：4_2 tick 启动前检查 `ui_wifi_scan_release_clear()`
+  （4_1 abort 协议的 pending 导出）——上一轮中止的迟到 SCAN_DONE
+  未落地时跳过本轮（下秒再试），消除反复进出屏后 kick 与迟到
+  回调的竞争（4_2 此前无此防御，是"仍失败"的候选根因之一）。
+- 版本 v1.7 → **v1.8**。
+
 ## 2026-09-17（v1.7：4_2 扫描循环全程挂起自动重连——kick 撞 begin 竞争）
 
 - **症状**（真机复测 v1.6，未连接场景）：进入 WIFI Scan 列表屏很快

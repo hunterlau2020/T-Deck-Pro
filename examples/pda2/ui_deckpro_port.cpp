@@ -483,8 +483,15 @@ int16_t ui_wifi_scan_async_start(void)
     }
     s_wifi_scan_last_ret = r;
     if (r != WIFI_SCAN_RUNNING)
-        Serial.printf("[WiFi] 4_2 scan kick failed r=%d\n", r);
+        Serial.printf("[WiFi] 4_2 kick failed r=%d mode=0x%x status=%d\n",
+                      r, (int)WiFi.getMode(), (int)WiFi.status());
     return r;
+}
+
+bool ui_wifi_scan_release_clear(void)
+{
+    extern bool wifi_scan_release_pending(void);
+    return !wifi_scan_release_pending();
 }
 
 int16_t ui_wifi_scan_collect(ui_wifi_scan_info_t *list, int list_len)
@@ -493,6 +500,9 @@ int16_t ui_wifi_scan_collect(ui_wifi_scan_info_t *list, int list_len)
     if (r == WIFI_SCAN_RUNNING) return r;  /* caller polls again later */
 
     s_wifi_scan_last_ret = r;
+    if (r < 0)
+        Serial.printf("[WiFi] 4_2 collect failed r=%d mode=0x%x status=%d\n",
+                      r, (int)WiFi.getMode(), (int)WiFi.status());
     /* No reconnect here (v1.7): 4_2 stays in its scan loop, so the
      * autoconn manager stays held - resuming between rounds let its
      * saved-slot begin collide with the NEXT kick's connecting window

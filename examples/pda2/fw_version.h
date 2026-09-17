@@ -8,12 +8,12 @@
  *   build     - COMPILE DATE, filled in automatically from __DATE__ -
  *               never maintained by hand.
  * Displayed on the boot splash, System info ("SF Version") and the
- * Whoami Cfg tab. 1.0 = baseline (`095e41a`); 1.1 = EPD grey + wifi CJK fixes; 1.2 = review round (whoami cfg-epoch P1, OTA NTP, sleep/OTA mutex); 1.3 = wifi scan vs reconnect-loop fix (-2); 1.4 = 4_2 async scan (no UI blocking) + scan-pick never clobbers a slot; 1.5 = bounded wifi auto-reconnect (5 tries + backoff, then idle); 1.6 = idle sleep 10 min while USB/charging (VBUS in), else 5; 1.7 = 4_2 scan loop holds the autoconn parked (kick-vs-begin collision fix).
+ * Whoami Cfg tab. 1.0 = baseline (`095e41a`); 1.1 = EPD grey + wifi CJK fixes; 1.2 = review round (whoami cfg-epoch P1, OTA NTP, sleep/OTA mutex); 1.3 = wifi scan vs reconnect-loop fix (-2); 1.4 = 4_2 async scan (no UI blocking) + scan-pick never clobbers a slot; 1.5 = bounded wifi auto-reconnect (5 tries + backoff, then idle); 1.6 = idle sleep 10 min while USB/charging (VBUS in), else 5; 1.7 = 4_2 scan loop holds the autoconn parked (kick-vs-begin collision fix); 1.8 = Disc button, scan-failure code on glass + kick/collect diagnostics, release-pending kick guard.
  */
 #pragma once
 
 #define FW_VERSION_MAJOR 1
-#define FW_VERSION_MINOR 7
+#define FW_VERSION_MINOR 8
 
 /** "v<x>.<y> build <yyyy-mm-dd>" - compile-date build, static buffer. */
 const char *fw_version_string(void);

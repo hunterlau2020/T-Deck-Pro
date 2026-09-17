@@ -125,6 +125,10 @@ int16_t ui_wifi_scan_collect(ui_wifi_scan_info_t *list, int list_len);
 void ui_wifi_scan_prepare(void);
 void ui_wifi_scan_reconnect(void);
 int  ui_wifi_scan_last_ret(void);
+/* False while a previously aborted scan's late SCAN_DONE release is still
+ * pending (4_1 abort protocol): starting a new scan in that window races
+ * the late callback, so the 4_2 tick waits for the next second. */
+bool ui_wifi_scan_release_clear(void);
 
 // [ screen 5 ] --- State
 bool ui_test_get(int peri_id);

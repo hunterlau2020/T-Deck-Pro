@@ -2419,6 +2419,18 @@ void wifi_autoconn_hold(bool on)             /* UI scan suspend/resume (port lay
     }
 }
 
+void wifi_autoconn_stop(void)                /* explicit Disconnect button */
+{
+    s_autoconn_active = false;
+    s_autoconn_held = false;
+    Serial.println("[WiFi] autoconn stopped (manual disconnect)");
+}
+
+bool wifi_scan_release_pending(void)         /* 4_2 kick guard (port layer) */
+{
+    return scan_release_is_pending();
+}
+
 void wifi_autoconn_restart(void)             /* after an explicit connect succeeded */
 {
     s_autoconn_fails = 0;
@@ -3015,6 +3027,22 @@ static void wifi_save_btn_cb(lv_event_t *e)
     wifi_cfg_refresh_labels();
 }
 
+/* Touch path for Disconnect (user request 2026-09-17): stop the bounded
+ * autoconn manager AND the link - the STA parks idle (best state for
+ * scans) until the next explicit connect or reboot. */
+static void wifi_disc_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    extern void wifi_autoconn_stop(void);
+    wifi_autoconn_stop();
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false, false);              /* keep NVS credentials */
+    snprintf(wifi_status, sizeof(wifi_status), "Disconnected");
+    Serial.println("[WiFi] manual disconnect");
+    wifi_banner_show("WiFi disconnected");
+    wifi_cfg_refresh_labels();
+}
+
 static void wifi_slot_prev_cb(lv_event_t *e) { wifi_cfg_set_slot(wifi_cfg_slot - 1); }
 static void wifi_slot_next_cb(lv_event_t *e) { wifi_cfg_set_slot(wifi_cfg_slot + 1); }
 
@@ -3159,6 +3187,14 @@ static void create4_1(lv_obj_t *parent)
     lv_label_set_text(clear_lab, "Clear");
     lv_obj_center(clear_lab);
     lv_obj_add_event_cb(clear_btn, wifi_clear_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *disc_btn = lv_btn_create(btn_row);
+    lv_obj_set_flex_grow(disc_btn, 1);
+    lv_obj_set_height(disc_btn, 28);
+    lv_obj_t *disc_lab = lv_label_create(disc_btn);
+    lv_label_set_text(disc_lab, "Disc");
+    lv_obj_center(disc_lab);
+    lv_obj_add_event_cb(disc_btn, wifi_disc_btn_cb, LV_EVENT_CLICKED, NULL);
 
     wifi_cfg_field = 0;
     wifi_cfg_scan_mode = false;
@@ -3492,13 +3528,20 @@ static void show_wifi_scan(void)
         lv_obj_set_style_bg_opa(sep, LV_OPA_COVER, 0);
         shown++;
     }
-    lv_label_set_text(wifi_scan_lab,
-                      shown ? "Scanned APs - tap one to config"
-                            : (ui_wifi_scan_last_ret() < 0
-                                   ? "Scan failed - retry every 10s"
-                                   : (ui_wifi_scan_last_ret() == 0
-                                          ? "No APs found - retry every 10s"
-                                          : "Scanning... (updates every 10s)")));
+    if (shown) {
+        lv_label_set_text(wifi_scan_lab, "Scanned APs - tap one to config");
+    } else if (ui_wifi_scan_last_ret() < 0) {
+        /* failure code on glass (user report: "no detailed error info") -
+         * -2 = start refused (connecting state), matches the serial log */
+        static char failhdr[44];
+        snprintf(failhdr, sizeof(failhdr), "Scan failed (%d) - retry 10s",
+                 ui_wifi_scan_last_ret());
+        lv_label_set_text(wifi_scan_lab, failhdr);
+    } else if (ui_wifi_scan_last_ret() == 0) {
+        lv_label_set_text(wifi_scan_lab, "No APs found - retry every 10s");
+    } else {
+        lv_label_set_text(wifi_scan_lab, "Scanning... (updates every 10s)");
+    }
 }
 
 /* Async scan cycle (user report 2026-09-17, v1.3): the old synchronous
@@ -3520,10 +3563,12 @@ static void wifi_scan_timer_event(lv_timer_t *t)
         return;
     }
     if (millis() - wifi_scan_last_kick_ms < 10000) return;      /* 10s cadence */
+    if (!ui_wifi_scan_release_clear())
+        return;   /* a previous abort's SCAN_DONE is still pending - next tick */
     if (ui_wifi_scan_async_start() == WIFI_SCAN_RUNNING) {
         wifi_scan_async_inflight = true;
     } else {
-        show_wifi_scan();       /* header: "Scan failed - retry every 10s" */
+        show_wifi_scan();       /* header shows the failure code */
     }
     wifi_scan_last_kick_ms = millis();
 }
