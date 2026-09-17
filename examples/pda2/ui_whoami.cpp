@@ -586,8 +586,12 @@ static void wa_cfg_build(lv_obj_t *page)
     lv_obj_align(fw_lab, LV_ALIGN_TOP_LEFT, 6, 212);
     lv_label_set_text_fmt(fw_lab, "FW: %s", fw_version_string());
     lv_obj_set_style_text_font(fw_lab, &lv_font_montserrat_14, 0);
+    /* EPD renders with a hard <128 brightness threshold: palette GREY
+     * (0x9E) comes out WHITE and is invisible on the white page (device
+     * report 2026-09-16 - the FW label "disappeared"). Status text must
+     * be black; the same fix is swept across every grey status label. */
     lv_obj_set_style_text_color(fw_lab,
-                                lv_palette_main(LV_PALETTE_GREY), 0);
+                                lv_color_black(), 0);
 
     lv_obj_t *save_btn = lv_btn_create(page);
     lv_obj_set_size(save_btn, 64, 30);
@@ -613,7 +617,7 @@ static void wa_cfg_build(lv_obj_t *page)
     lv_label_set_text(s_cfg_status, "");
     lv_obj_set_style_text_font(s_cfg_status, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_cfg_status,
-                                lv_palette_main(LV_PALETTE_GREY), 0);
+                                lv_color_black(), 0);
 }
 
 /* ---- tabs --------------------------------------------------------------- */
@@ -790,7 +794,7 @@ static void wa_create(lv_obj_t *parent)
     lv_label_set_text(s_me_status, "");
     lv_obj_set_style_text_font(s_me_status, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_me_status,
-                                lv_palette_main(LV_PALETTE_GREY), 0);
+                                lv_color_black(), 0);
 
     /* Cfg page */
     s_cfg_page = lv_obj_create(parent);

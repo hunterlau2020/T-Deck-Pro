@@ -450,13 +450,21 @@ void ui_wifi_get_scan_info(ui_wifi_scan_info_t *list, int list_len)
         n = list_len;
     
     memset(list, 0, (sizeof(*list) * list_len));
-    for(int i = 0; i < n; i++)
+    /* Compact on skip (device report 2026-09-16): a filtered-out CJK-named
+     * AP used to leave a HOLE at list[i]; show_wifi_scan() breaks at the
+     * first empty row, so one Chinese SSID near the top (they sort by RSSI)
+     * blanked the whole list. Also: hidden networks ("") are dropped, and
+     * the copy is NUL-safe for 16-char SSIDs (name[16] was fillable
+     * without a terminator). */
+    for(int i = 0, w = 0; i < n; i++)
     {
         const char *str = WiFi.SSID(i).c_str();
-        if(is_chinese_utf8(str))
+        if(str[0] == '\0' || is_chinese_utf8(str))
             continue;
-        strncpy(list[i].name, WiFi.SSID(i).c_str(), 16);
-        list[i].rssi = WiFi.RSSI(i);
+        strncpy(list[w].name, str, sizeof(list[w].name) - 1);
+        list[w].name[sizeof(list[w].name) - 1] = '\0';
+        list[w].rssi = WiFi.RSSI(i);
+        w++;
     }
 }
 //************************************[ screen 5 ]****************************************** Test

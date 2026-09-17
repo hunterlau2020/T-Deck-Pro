@@ -720,6 +720,40 @@ Whoami App / 菜单重排 / TTS 开关 / OTA 实现）细节见评审申请；�
 
 ---
 
+## 23. EPD 灰色文字系统性不可见 + WiFi 扫描列表中文名空洞（2026-09-16 真机
+回归发现，v1.1 修复）
+
+**症状**（用户真机回归 v1.0）：① Whoami Cfg 页看不到 "FW: vX.Y" label；
+② Wifi Scan 列表屏无数据。②与 v1.0 无关（存量）；①是 v1.0 新增 label
+用了项目惯用的灰色状态样式，踩中了同一个存量地雷。
+
+**根因 1——EPD 硬阈值二值化**：`convert_lvgl_buf_to_epd_bitmap()`
+（factory.ino）按 `lv_color_brightness < 128 → 黑、否则白` 转换。LVGL
+`LV_PALETTE_GREY` = 0x9E9E9E（158 ≥ 128）→ **渲染为白色，白底上不可见**。
+全项目 14 处灰色样式（PenPal/AI Chat/AI Cfg/Voice AI/Weather/Calculator/
+Dictionary/PenPal Write/Wifi/Whoami/OTA 屏的状态行 + Weather 表格边框）
+**全部从未显示过**——历轮"状态反馈缺失"类报告（含 OTA 下载状态、AI Test
+状态）部分由此解释。修复：全部改 `lv_color_black()`（v1.1，两个 commit：
+报告内三处 + 其余机械清扫）。
+
+**根因 2——WiFi 扫描 CJK 过滤留空洞**：`ui_wifi_get_scan_info()`
+（ui_deckpro_port.cpp）跳过中文名 SSID 时 `continue` 不压缩列表，
+`show_wifi_scan()` 遇第一个空行即 `break`——扫描结果按 RSSI 排序，附近
+最强的 AP 是中文名时**整个列表被清空**（环境相关，解释"好像失效了"的
+间歇感）。顺带修掉 `strncpy(name, ..., 16)` 对 `name[16]` 无终止符隐患
+与隐藏网络空 SSID 进列表问题。修复：写指针独立递增压缩 + NUL 安全拷贝。
+
+**教训**：
+1. 单色 EPD 上任何非黑样式（灰/淡色 palette）都是隐形炸弹——状态文字
+   一律 `lv_color_black()`；新 UI 复查样式颜色与 `convert_lvgl_buf_to_
+   epd_bitmap` 阈值的交互；
+2. "过滤 + 不压缩"的列表模式遇"空行即停"的渲染约定 = 单条被滤条目截断
+   整表——过滤必须伴随压缩（写指针独立于读指针）；
+3. v1.0 新增 `[FW] <版本串>` 开机串口打印（factory.ino setup 首行后），
+   任何串口抓取都能识别在跑的构建，本次诊断即受益。
+
+---
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：

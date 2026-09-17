@@ -669,6 +669,7 @@ void setup()
     gpio_deep_sleep_hold_dis();
 
     Serial.begin(115200);
+    Serial.printf("[FW] %s\n", fw_version_string());  /* build id in every serial capture */
 
     /* ---- OTA boot self-attestation window (design v6 §5.2) -----------
      * Open a task-WDT on loopTask for the whole setup()/first-frame span:
