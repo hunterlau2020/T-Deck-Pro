@@ -2426,6 +2426,13 @@ void wifi_autoconn_stop(void)                /* explicit Disconnect button */
     Serial.println("[WiFi] autoconn stopped (manual disconnect)");
 }
 
+void wifi_autoconn_retry_now(void)           /* scan dropped a healthy link */
+{
+    if (!s_autoconn_active) return;
+    s_autoconn_next_ms = millis();           /* next poll begins at once; the
+                                                drop was ours, not a failure */
+}
+
 bool wifi_scan_release_pending(void)         /* 4_2 kick guard (port layer) */
 {
     return scan_release_is_pending();

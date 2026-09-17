@@ -445,23 +445,39 @@ int is_chinese_utf8(const char *str) {
 
 static int s_wifi_scan_last_ret = 0;
 
+static bool s_scan_dropped_link = false;  /* prepare dropped a CONNECTED link */
+
 void ui_wifi_scan_prepare(void)
 {
-    if (WiFi.status() == WL_CONNECTED) return;     /* connected STA may scan in place */
     extern void wifi_autoconn_hold(bool on);
     wifi_autoconn_hold(true);        /* suspend the bounded retry cycle for the scan */
+    s_scan_dropped_link = (WiFi.status() == WL_CONNECTED);
+    if (s_scan_dropped_link)
+        Serial.println("[WiFi] prepare: dropping the link for an idle scan "
+                       "(connected async scans get aborted mid-flight)");
     WiFi.setAutoReconnect(false);    /* belt-and-braces: no event-driven re-begin */
-    WiFi.disconnect(false, false);   /* abort the connect loop, keep NVS credentials */
+    WiFi.disconnect(false, false);   /* CONNECTED STAs TOO: a connected async scan is
+                                      * aborted by the driver mid-flight (collect
+                                      * r=-2 mode=0x1 status=3, device report
+                                      * 2026-09-17); idle scans are 100% reliable.
+                                      * reconnect() re-begins the dropped link at
+                                      * once; 4_2 stays offline while listing APs. */
     delay(100);                      /* let the wifi task settle to idle */
 }
 
 void ui_wifi_scan_reconnect(void)
 {
     extern void wifi_autoconn_hold(bool on);
-    wifi_autoconn_hold(false);       /* manager resumes and owns any further retries
-                                      * (v1.4 re-began the saved slot here, which with
-                                      * a missing AP restarted the reconnect loop and
-                                      * kept the wifi app sluggish - user report) */
+    extern void wifi_autoconn_retry_now(void);
+    wifi_autoconn_hold(false);       /* manager resumes and owns any further retries */
+    if (s_scan_dropped_link) {
+        /* OUR scan dropped a healthy link: re-begin the saved slot right
+         * away instead of waiting out the manager's guard window */
+        s_scan_dropped_link = false;
+        wifi_autoconn_retry_now();
+        Serial.println("[WiFi] scan done - dropped link reconnecting now");
+        return;
+    }
     Serial.println("[WiFi] scan cycle done - autoconn resumed");
 }
 
