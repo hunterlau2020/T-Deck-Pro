@@ -3,6 +3,26 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-17（v1.10：4_1 双光标齐闪 + 空退格静默跳字段吃 SSID）
+
+- **症状**（真机报告，scan-pick 跳转后）：SSID/密码两个输入框都有
+  光标跳动；删密码字母时 SSID 同步掉字母。
+- **根因 1（blink 泄漏）**：项目 LVGL 的 textarea 无 DEFOCUSED 光标
+  处理，`LV_EVENT_FOCUSED` 一发 blink 即启动且**永不停止**——
+  `wifi_cfg_set_field` 只发 FOCUSED 不收尾，每次切字段泄漏一个闪烁；
+  pick 路径 `wifi_cfg_set_slot`（尾部 set_field(0)）+ 随后 set_field(1)
+  连发两次 → 两框齐闪。
+- **根因 2（静默跳字段）**：密码框删空后再按退格会 `set_field(0)`
+  静默跳回 SSID——EPD 慢刷新 + 双光标下用户无感知，继续按退格
+  开始删 SSID（感知为"同步删"）。
+- **修复**：光标可见性改由 CURSOR part 的 `bg_opa` 驱动（出框
+  TRANSP / 入框 COVER），`anim_time=0` 静态常显（EPD 本就不该闪，
+  每 530ms 的局部刷新风暴一并消除）；create 时 pass 框初始隐藏、
+  SSID 框点亮；空退格跳回 SSID 时 banner 明示 "Back at SSID field"。
+- 版本 v1.9 → **v1.10**。教训：**用一个 lv_event_send 驱动 UI 状态
+  前先核对该事件在所用 LVGL 构建里是否真的双向**（此处 FOCUSED
+  有效、DEFOCUSED 压根没有分支）。
+
 ## 2026-09-17（v1.9：已连接态异步扫描被驱动中止——统一空闲态扫描）
 
 - **定案证据**（串口打点，用户已连接态复现）：`4_2 collect failed

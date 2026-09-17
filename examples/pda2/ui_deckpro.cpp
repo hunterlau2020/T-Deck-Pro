@@ -2853,14 +2853,21 @@ static void wifi_pass_focus_cb(lv_event_t *e)
 }
 
 /* Field switch (keypad or touch): sync the outgoing field's draft, move the
- * visible cursor (LV_EVENT_FOCUSED restarts the textarea cursor blink) so it
- * matches the ">" marker, and refresh labels only — the other box's content
- * is never rewritten (finding 2.4). */
+ * visible cursor so it matches the ">" marker, and refresh labels only —
+ * the other box's content is never rewritten (finding 2.4). v1.10: cursor
+ * visibility is driven by the CURSOR part's bg_opa — this LVGL build has no
+ * DEFOCUSED handling, and every FOCUSED ever sent started a blink that
+ * never stopped, so the pick path ended with BOTH boxes blinking (user
+ * report 2026-09-17). anim_time=0 (create4_1) keeps the active one static. */
 static void wifi_cfg_set_field(int f)
 {
     if (f != wifi_cfg_field) {
         wifi_cfg_sync_draft();
     }
+    lv_obj_set_style_bg_opa(f == 0 ? (lv_obj_t *)wifi_pass_ta : (lv_obj_t *)wifi_ssid_ta,
+                            LV_OPA_TRANSP, LV_PART_CURSOR);    /* hide outgoing */
+    lv_obj_set_style_bg_opa(f == 0 ? (lv_obj_t *)wifi_ssid_ta : (lv_obj_t *)wifi_pass_ta,
+                            LV_OPA_COVER, LV_PART_CURSOR);     /* show incoming */
     wifi_cfg_field = f;
     wifi_cfg_scan_mode = false;
     if (f != 0 && wifi_scan_state == WIFI_SCAN_RUNNING) {
@@ -2983,6 +2990,11 @@ void wifi_cfg_keyboard_poll()
             } else if (txt && txt[0] != '\0') {
                 lv_textarea_del_char(wifi_pass_ta);
             } else {
+                /* pass box empty: backspace returns to the SSID field (keyboard
+                 * navigation), but SAY so - a silent jump made the NEXT
+                 * backspace eat the SSID while both cursors blinked (user
+                 * report 2026-09-17) */
+                wifi_banner_show("Back at SSID field");
                 wifi_cfg_set_field(0);
             }
         } else {
@@ -3134,6 +3146,7 @@ static void create4_1(lv_obj_t *parent)
     lv_textarea_set_max_length(wifi_ssid_ta, 32);
     lv_textarea_set_placeholder_text(wifi_ssid_ta, "type SSID or Enter=scan");
     lv_obj_set_style_text_font(wifi_ssid_ta, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_anim_time(wifi_ssid_ta, 0, LV_PART_CURSOR);   /* EPD: static cursor */
 
     wifi_pass_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(wifi_pass_lab, &lv_font_montserrat_14, LV_PART_MAIN);
@@ -3146,6 +3159,8 @@ static void create4_1(lv_obj_t *parent)
     lv_textarea_set_max_length(wifi_pass_ta, 64);
     lv_textarea_set_placeholder_text(wifi_pass_ta, "password");
     lv_obj_set_style_text_font(wifi_pass_ta, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_anim_time(wifi_pass_ta, 0, LV_PART_CURSOR);   /* EPD: static cursor */
+    lv_obj_set_style_bg_opa(wifi_pass_ta, LV_OPA_TRANSP, LV_PART_CURSOR);  /* field 0 = SSID */
 
     /* keep the keypad field state in sync with touch focus */
     lv_obj_add_event_cb(wifi_ssid_ta, wifi_ssid_focus_cb, LV_EVENT_FOCUSED, NULL);
@@ -3211,6 +3226,7 @@ static void create4_1(lv_obj_t *parent)
     lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
     wifi_pass_remask();                          /* pass box: middle masked */
     wifi_cfg_refresh_labels();
+    lv_event_send(wifi_ssid_ta, LV_EVENT_FOCUSED, NULL);  /* show the cursor */
     wifi_cfg_kbd_active = true;
 }
 
