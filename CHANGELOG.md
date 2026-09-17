@@ -3,6 +3,24 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-17（v1.11：pick 后不重连 + 双光标残留——draw 门与恢复条件修正）
+
+- **症状 1**（真机报告 v1.10）：已连接 → scan → 点 SSID 进 Config，
+  一直 "not connect" 不显示 IP。**根因**：`exit4_2` 的恢复重连被包在
+  `wifi_scan_async_inflight` 条件里——点 SSID 多半落在两轮扫描的间隔
+  （非 inflight），恢复被跳过，`s_scan_dropped_link` 悬挂，链路永不
+  重连。**修复**：exit4_2 **无条件** `ui_wifi_scan_reconnect()`（中止
+  处理仍按 inflight 条件）。
+- **症状 2**：pick 跳进 Config 后仍双光标闪（输入语义正确只影响
+  pass，手点 ssid→pass 后恢复单光标）。**修复（加固）**：v1.10 的
+  style 层（bg_opa/anim_time）之上，直接驱动 `cursor.show`——它是
+  本 LVGL 构建 `draw_cursor()` 的**绘制门**（`lv_textarea_t` 公开
+  结构体字段），show=0 无论 blink/style 层发生什么都画不出来；
+  set_field 与 create 时出框置 0、入框置 1。
+- 版本 v1.10 → **v1.11**。教训：**当"应该等效"的间接层在真机上不
+  表现时，降级到最底层的确定性门**（绘制开关）而不是继续在中间层
+  加码。
+
 ## 2026-09-17（v1.10：4_1 双光标齐闪 + 空退格静默跳字段吃 SSID）
 
 - **症状**（真机报告，scan-pick 跳转后）：SSID/密码两个输入框都有

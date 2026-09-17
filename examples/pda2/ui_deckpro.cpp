@@ -2864,17 +2864,24 @@ static void wifi_cfg_set_field(int f)
     if (f != wifi_cfg_field) {
         wifi_cfg_sync_draft();
     }
-    lv_obj_set_style_bg_opa(f == 0 ? (lv_obj_t *)wifi_pass_ta : (lv_obj_t *)wifi_ssid_ta,
-                            LV_OPA_TRANSP, LV_PART_CURSOR);    /* hide outgoing */
-    lv_obj_set_style_bg_opa(f == 0 ? (lv_obj_t *)wifi_ssid_ta : (lv_obj_t *)wifi_pass_ta,
-                            LV_OPA_COVER, LV_PART_CURSOR);     /* show incoming */
+    /* v1.11: cursor.show is the draw_cursor() gate itself (public struct in
+     * lv_textarea.h) - drive it DIRECTLY on top of the v1.10 style approach,
+     * which still left both cursors blinking after the pick jump on the
+     * device: whatever the blink/style layer does, show=0 cannot draw. */
+    lv_obj_t *hide_ta = (f == 0) ? (lv_obj_t *)wifi_pass_ta : (lv_obj_t *)wifi_ssid_ta;
+    lv_obj_t *show_ta = (f == 0) ? (lv_obj_t *)wifi_ssid_ta : (lv_obj_t *)wifi_pass_ta;
+    lv_obj_set_style_bg_opa(hide_ta, LV_OPA_TRANSP, LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(show_ta, LV_OPA_COVER, LV_PART_CURSOR);
+    ((lv_textarea_t *)hide_ta)->cursor.show = 0;
+    ((lv_textarea_t *)show_ta)->cursor.show = 1;
+    lv_obj_invalidate(hide_ta);
+    lv_obj_invalidate(show_ta);
     wifi_cfg_field = f;
     wifi_cfg_scan_mode = false;
     if (f != 0 && wifi_scan_state == WIFI_SCAN_RUNNING) {
         wifi_scan_gen++;        /* left the SSID field mid-scan: ignore its result (2.3) */
     }
-    lv_event_send(f == 0 ? (lv_obj_t *)wifi_ssid_ta : (lv_obj_t *)wifi_pass_ta,
-                  LV_EVENT_FOCUSED, NULL);
+    lv_event_send(show_ta, LV_EVENT_FOCUSED, NULL);
     wifi_cfg_refresh_labels();
 }
 
@@ -3226,7 +3233,8 @@ static void create4_1(lv_obj_t *parent)
     lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
     wifi_pass_remask();                          /* pass box: middle masked */
     wifi_cfg_refresh_labels();
-    lv_event_send(wifi_ssid_ta, LV_EVENT_FOCUSED, NULL);  /* show the cursor */
+    ((lv_textarea_t *)wifi_pass_ta)->cursor.show = 0;   /* single visible cursor */
+    lv_event_send(wifi_ssid_ta, LV_EVENT_FOCUSED, NULL);
     wifi_cfg_kbd_active = true;
 }
 
@@ -3653,12 +3661,15 @@ static void exit4_2(void) {
         wifi_scan_timer = NULL;
     }
     if (wifi_scan_async_inflight) {
-        /* stop + wait SCAN_DONE + scanDelete (same protocol as 4_1 abort),
-         * then resume the saved-slot reconnect loop */
+        /* stop + wait SCAN_DONE + scanDelete (same protocol as 4_1 abort) */
         wifi_scan_stop_and_release();
         wifi_scan_async_inflight = false;
-        ui_wifi_scan_reconnect();
     }
+    /* UNCONDITIONAL (user report 2026-09-17: entering 4_1 via a scan-row
+     * tap mostly lands in the gap between two scans, so gating this on
+     * 'inflight' skipped the resume and the dropped link never re-connected,
+     * leaving the config screen on 'not connect' forever) */
+    ui_wifi_scan_reconnect();
 }
 
 static void destroy4_2(void) { wifi_scan_rows = NULL; wifi_scan_lab = NULL; }
