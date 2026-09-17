@@ -2372,6 +2372,97 @@ static void wifi_slot_set_active(int slot)
     wifi_active_slot = slot;
 }
 
+/* ---- Wi-Fi auto-connect manager (user request 2026-09-17) -------------
+ * The old boot-time setAutoReconnect(true) retried a missing AP FOREVER
+ * (~2.4s cycle): that kept the STA permanently "connecting" (scan-hostile,
+ * issue_list §24) and kept the whole wifi app sluggish while disconnected.
+ * The manager now owns every background retry: bounded attempts with
+ * exponential backoff, then the STA stays idle until the next explicit
+ * connect (Save/Test) or reboot. UI scan cycles suspend it via
+ * wifi_autoconn_hold() (set by ui_wifi_scan_prepare/reconnect). */
+#define WIFI_AUTOCONN_MAX_TRIES 5
+static bool s_autoconn_active = false;       /* manager owns the retry cycle */
+static bool s_autoconn_held = false;         /* paused by a UI scan cycle */
+static int  s_autoconn_fails = 0;
+static uint32_t s_autoconn_next_ms = 0;
+static volatile bool s_ac_got_ip = false;
+static volatile bool s_ac_disconnected = false;
+
+static void wifi_autoconn_event(WiFiEvent_t ev)
+{
+    if (ev == ARDUINO_EVENT_WIFI_STA_GOT_IP) s_ac_got_ip = true;
+    else if (ev == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) s_ac_disconnected = true;
+}
+
+void wifi_autoconn_start(void)               /* boot entry (factory.ino) */
+{
+    char ssid[65] = {0}, pass[65] = {0};
+    wifi_slot_load(wifi_slot_get_active(), ssid, sizeof(ssid), pass, sizeof(pass));
+    if (ssid[0] == '\0') return;
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(false);            /* the manager drives all retries */
+    WiFi.onEvent(wifi_autoconn_event);
+    s_autoconn_active = true;
+    s_autoconn_fails = 0;
+    s_autoconn_held = false;
+    s_autoconn_next_ms = millis();           /* first attempt on the next poll */
+    Serial.printf("[WiFi] autoconn start (max %d tries)\n", WIFI_AUTOCONN_MAX_TRIES);
+}
+
+void wifi_autoconn_hold(bool on)             /* UI scan suspend/resume (port layer) */
+{
+    if (on) {
+        s_autoconn_held = true;
+    } else {
+        s_ac_disconnected = false;           /* drop the event our own prepare caused */
+        s_autoconn_held = false;
+    }
+}
+
+void wifi_autoconn_restart(void)             /* after an explicit connect succeeded */
+{
+    s_autoconn_fails = 0;
+    s_ac_got_ip = false;
+    s_autoconn_active = true;
+    s_autoconn_next_ms = millis() + 65000;   /* guard window, not an immediate retry */
+}
+
+void wifi_autoconn_poll(void)                /* factory loop(), every tick */
+{
+    if (!s_autoconn_active || s_autoconn_held) return;
+
+    uint32_t now = millis();
+    if (s_ac_got_ip) {                       /* connected: reset the cycle */
+        s_ac_got_ip = false;
+        s_autoconn_fails = 0;
+        s_autoconn_next_ms = now + 65000;
+        return;
+    }
+    if (s_ac_disconnected) {
+        s_ac_disconnected = false;
+        ++s_autoconn_fails;
+        if (s_autoconn_fails >= WIFI_AUTOCONN_MAX_TRIES) {
+            s_autoconn_active = false;
+            Serial.println("[WiFi] autoconn gave up (max tries) - STA idle "
+                           "until next connect/reboot");
+            return;
+        }
+        uint32_t backoff = 2500UL << (s_autoconn_fails - 1);   /* 2.5s..40s */
+        if (backoff > 60000) backoff = 60000;
+        s_autoconn_next_ms = now + backoff;
+    }
+    if ((int32_t)(now - s_autoconn_next_ms) < 0) return;
+    if (WiFi.status() == WL_CONNECTED) {     /* still up: just re-arm the guard */
+        s_autoconn_next_ms = now + 65000;
+        return;
+    }
+    char ssid[65] = {0}, pass[65] = {0};
+    wifi_slot_load(wifi_slot_get_active(), ssid, sizeof(ssid), pass, sizeof(pass));
+    if (ssid[0] == '\0') { s_autoconn_active = false; return; }
+    WiFi.begin(ssid, pass);
+    s_autoconn_next_ms = now + 65000;        /* next transition is event-driven */
+}
+
 static void wifi_cfg_load(void)
 {
     wifi_slot_migrate_legacy();
@@ -2627,7 +2718,7 @@ static bool wifi_cfg_connect(void)
     lv_label_set_text(wifi_status_lab, wifi_status);
 
     WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
+    WiFi.setAutoReconnect(false);   /* bounded autoconn manager owns retries (2026-09-17) */
     WiFi.begin(wifi_ssid, wifi_pass);
 
     unsigned long t0 = millis();
@@ -2640,6 +2731,7 @@ static bool wifi_cfg_connect(void)
 
     bool ok = (st == WL_CONNECTED);
     if (ok) {
+        wifi_autoconn_restart();   /* manager resumes watching this explicit link */
         snprintf(wifi_status, sizeof(wifi_status), "OK IP: %s", WiFi.localIP().toString().c_str());
         Serial.printf("[WiFi] connected ip=%s\n", WiFi.localIP().toString().c_str());
         wifi_time_sync();   /* automatic NTP calibration after connect */

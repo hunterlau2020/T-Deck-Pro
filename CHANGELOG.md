@@ -3,6 +3,28 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-17（v1.5：有界 WiFi 自动重连——5 次 + 指数退避，放弃后空闲）
+
+- **用户诉求**：连接失败会无限重试，未连接状态下 wifi app 明显慢；
+  应设重试上限。
+- **根因**：开机 `setAutoReconnect(true)` 在目标 AP 不在场时每 2.4s
+  无限重连（§24 的 -2 源头）——v1.3/v1.4 让扫描能"破局"，但每轮
+  重连的内部信道扫描仍持续与 UI 扫描竞争驱动，且 v1.4 扫描结束的
+  reconnect 还会**重启**重连循环，未连接状态永远"忙"。
+- **修复：自动连接管理器**（`wifi_autoconn_*`，ui_deckpro.cpp，
+  factory loop 每 tick poll）：
+  - 最多 **5 次**尝试，指数退避 **2.5s→5s→10s→20s→40s**，放弃后
+    串口打点、STA 保持 idle（对扫描最友好），直到下次显式连接
+    （Save/Test 成功 `wifi_autoconn_restart()`）或重启；
+  - 事件驱动（GOT_IP 重置计数 / DISCONNECTED 计数退避），65s 无
+    事件 guard 自愈；已连接状态下 guard 到期只重臂不重连；
+  - UI 扫描周期 `wifi_autoconn_hold(true/false)` 挂起/恢复管理器
+    （恢复时丢弃自身 prepare 引起的 disconnect 事件，不误计失败）；
+    port 层 reconnect 不再 begin——v1.4 在这里重启了重连循环；
+  - 手动连接（`wifi_cfg_connect`）也关 autoReconnect、成功后交
+    管理器接管，意外断开同样有界重试。
+- 版本 v1.4 → **v1.5**。TODO"WiFi 开机重连退避/上限"核销。
+
 ## 2026-09-17（v1.4：v1.3 复测暴露两项——4_2 同步扫描阻塞 + scan-pick 冲槽）
 
 - **症状**（真机复测 v1.3）：① Wifi app 内点击 scan/config、scan 里点

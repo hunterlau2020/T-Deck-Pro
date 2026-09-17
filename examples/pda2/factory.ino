@@ -856,10 +856,12 @@ void setup()
         wifi_slot_load(active, wifi_ssid_nvs, sizeof(wifi_ssid_nvs),
                        wifi_pass_nvs, sizeof(wifi_pass_nvs));
         if (wifi_ssid_nvs[0] != '\0') {
-            WiFi.mode(WIFI_STA);
-            WiFi.setAutoReconnect(true);
-            WiFi.begin(wifi_ssid_nvs, wifi_pass_nvs);
-            Serial.printf("[WiFi] Connecting slot %d to %s...\n",
+            /* bounded retries + exponential backoff (2026-09-17): the old
+             * setAutoReconnect(true) retried a missing AP forever, kept the
+             * STA scan-hostile and the wifi app sluggish (issue_list §24) */
+            extern void wifi_autoconn_start(void);
+            wifi_autoconn_start();
+            Serial.printf("[WiFi] auto-connect slot %d (%s) via manager\n",
                           active, wifi_ssid_nvs);
         }
     }
@@ -901,6 +903,8 @@ void loop()
      * happens before any screen-active gate, PenPal pattern) */
     extern void ota_result_poll(void);
     ota_result_poll();
+    extern void wifi_autoconn_poll(void);    /* bounded retry state machine */
+    wifi_autoconn_poll();
     extern void ota2_2_keyboard_poll(void);
     ota2_2_keyboard_poll();
 

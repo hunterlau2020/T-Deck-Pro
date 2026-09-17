@@ -448,22 +448,21 @@ static int s_wifi_scan_last_ret = 0;
 void ui_wifi_scan_prepare(void)
 {
     if (WiFi.status() == WL_CONNECTED) return;     /* connected STA may scan in place */
-    WiFi.setAutoReconnect(false);   /* else the DISCONNECTED event re-begins immediately */
-    WiFi.disconnect(false, false);  /* abort the reconnect loop, keep NVS credentials */
-    delay(100);                     /* let the wifi task settle to idle */
+    extern void wifi_autoconn_hold(bool on);
+    wifi_autoconn_hold(true);        /* suspend the bounded retry cycle for the scan */
+    WiFi.setAutoReconnect(false);    /* belt-and-braces: no event-driven re-begin */
+    WiFi.disconnect(false, false);   /* abort the connect loop, keep NVS credentials */
+    delay(100);                      /* let the wifi task settle to idle */
 }
 
 void ui_wifi_scan_reconnect(void)
 {
-    if (WiFi.status() == WL_CONNECTED) return;
-    extern void wifi_slot_load(int slot, char *ssid, int ssid_len,
-                               char *pass, int pass_len);
-    extern int  wifi_slot_get_active(void);
-    char ssid[65] = {0}, pass[65] = {0};
-    wifi_slot_load(wifi_slot_get_active(), ssid, sizeof(ssid), pass, sizeof(pass));
-    WiFi.setAutoReconnect(true);
-    if (ssid[0] != '\0') WiFi.begin(ssid, pass);   /* resume the saved slot */
-    Serial.println("[WiFi] saved-slot reconnect resumed after scan");
+    extern void wifi_autoconn_hold(bool on);
+    wifi_autoconn_hold(false);       /* manager resumes and owns any further retries
+                                      * (v1.4 re-began the saved slot here, which with
+                                      * a missing AP restarted the reconnect loop and
+                                      * kept the wifi app sluggish - user report) */
+    Serial.println("[WiFi] scan cycle done - autoconn resumed");
 }
 
 int ui_wifi_scan_last_ret(void)
