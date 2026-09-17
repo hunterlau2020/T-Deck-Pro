@@ -474,9 +474,16 @@ int16_t ui_wifi_scan_async_start(void)
 {
     ui_wifi_scan_prepare();
     int16_t r = WiFi.scanNetworks(true);
+    if (r != WIFI_SCAN_RUNNING) {
+        /* kick refused - usually a lingering connecting state the
+         * disconnect + delay(100) did not fully drain: retry once */
+        WiFi.disconnect(false, false);
+        delay(200);
+        r = WiFi.scanNetworks(true);
+    }
     s_wifi_scan_last_ret = r;
     if (r != WIFI_SCAN_RUNNING)
-        ui_wifi_scan_reconnect();          /* start refused: back to the saved slot */
+        Serial.printf("[WiFi] 4_2 scan kick failed r=%d\n", r);
     return r;
 }
 
@@ -486,7 +493,10 @@ int16_t ui_wifi_scan_collect(ui_wifi_scan_info_t *list, int list_len)
     if (r == WIFI_SCAN_RUNNING) return r;  /* caller polls again later */
 
     s_wifi_scan_last_ret = r;
-    ui_wifi_scan_reconnect();              /* terminal state: resume saved slot */
+    /* No reconnect here (v1.7): 4_2 stays in its scan loop, so the
+     * autoconn manager stays held - resuming between rounds let its
+     * saved-slot begin collide with the NEXT kick's connecting window
+     * and produced "scan failed" every cycle. exit4_2 resumes it. */
     if (r > list_len)
         r = list_len;
     memset(list, 0, (sizeof(*list) * list_len));

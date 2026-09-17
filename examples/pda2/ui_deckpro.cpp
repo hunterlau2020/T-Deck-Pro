@@ -2614,6 +2614,12 @@ static bool wifi_cfg_scan_start(void)
     WiFi.scanDelete();
     ui_wifi_scan_prepare();     /* leave the saved-slot reconnect loop for the scan (-2 fix) */
     int16_t r = WiFi.scanNetworks(true);        /* async; main loop keeps draining the key FIFO */
+    if (r != WIFI_SCAN_RUNNING) {
+        /* refused: drain a lingering connecting state, then retry once */
+        WiFi.disconnect(false, false);
+        delay(200);
+        r = WiFi.scanNetworks(true);
+    }
     if (r == WIFI_SCAN_RUNNING) {
         wifi_scan_state = WIFI_SCAN_RUNNING;
         snprintf(wifi_status, sizeof(wifi_status), "Scanning...");
@@ -3560,6 +3566,13 @@ static void create4_2(lv_obj_t *parent)
 static void entry4_2(void)
 {
     ui_disp_full_refr();
+    {
+        extern void wifi_autoconn_hold(bool on);
+        wifi_autoconn_hold(true);  /* whole-screen scan loop keeps the bounded
+                                      autoconn parked; exit4_2 resumes it (v1.7:
+                                      resuming between rounds made the saved-slot
+                                      begin collide with the next kick) */
+    }
     wifi_scan_async_inflight = false;
     wifi_scan_last_kick_ms = 0;         /* first tick kicks a scan right away */
     wifi_scan_timer = lv_timer_create(wifi_scan_timer_event, 1000, NULL);
