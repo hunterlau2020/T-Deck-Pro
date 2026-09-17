@@ -5128,7 +5128,11 @@ static scr_lifecycle_t screen11 = {
  * BOOT key" + a ~3 s countdown, back cancels). sleep_do_enter() itself
  * shows no UI - the prompt belongs to screen11, which calls it after
  * the countdown. */
-#define UI_IDLE_SLEEP_MS (5UL * 60UL * 1000UL)
+#define UI_IDLE_SLEEP_MS           (5UL * 60UL * 1000UL)
+#define UI_IDLE_SLEEP_CHARGING_MS  (10UL * 60UL * 1000UL)   /* user request
+ * 2026-09-17: USB plugged (BQ25896 VBUS in, e.g. charging or a serial/
+ * flashing session) doubles the window - the old 5-min deep sleep kept
+ * dropping USB CDC mid-capture; an I2C read failure degrades to 5 min. */
 static volatile uint32_t s_last_activity_ms = 0;
 
 void ui_activity_mark(void)
@@ -5143,7 +5147,9 @@ static void idle_sleep_timer_cb(lv_timer_t *t)
         s_last_activity_ms = millis();
         return;
     }
-    if (millis() - s_last_activity_ms < UI_IDLE_SLEEP_MS) return;
+    if (millis() - s_last_activity_ms <
+        (ui_battery_25896_is_vbus_in() ? UI_IDLE_SLEEP_CHARGING_MS
+                                       : UI_IDLE_SLEEP_MS)) return;
     extern Audio audio;
     if (audio.isRunning()) {                /* never cut playback off */
         s_last_activity_ms = millis();      /* re-arm: check again later */
