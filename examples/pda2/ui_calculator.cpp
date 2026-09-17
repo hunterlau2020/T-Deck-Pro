@@ -363,7 +363,7 @@ static void calc_create(lv_obj_t *parent)
     lv_obj_set_width(history_list, lv_pct(100));
     lv_obj_set_flex_grow(history_list, 1);
     lv_obj_set_style_text_font(history_list, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(history_list, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_obj_set_style_text_color(history_list, lv_color_black(), LV_PART_MAIN);
     lv_label_set_long_mode(history_list, LV_LABEL_LONG_WRAP);
     lv_label_set_text(history_list, "Enter to eval, Bksp to back");
 

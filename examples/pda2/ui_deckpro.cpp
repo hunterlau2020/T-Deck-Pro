@@ -1370,7 +1370,7 @@ static void create2_2(lv_obj_t *parent)
     lv_label_set_long_mode(s_ota2_2_status, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ota2_2_status, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_ota2_2_status,
-                                lv_palette_main(LV_PALETTE_GREY), 0);
+                                lv_color_black(), 0);
     lv_label_set_text(s_ota2_2_status, "");
 
     s_ota2_2_timer = lv_timer_create(ota2_2_timer_cb, 500, NULL);
@@ -3017,13 +3017,13 @@ static void create4_1(lv_obj_t *parent)
 
     wifi_status_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(wifi_status_lab, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(wifi_status_lab, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_obj_set_style_text_color(wifi_status_lab, lv_color_black(), LV_PART_MAIN);
     lv_label_set_long_mode(wifi_status_lab, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(wifi_status_lab, lv_pct(100));
 
     lv_obj_t *hint = lv_label_create(cont);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(hint, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_obj_set_style_text_color(hint, lv_color_black(), LV_PART_MAIN);
     lv_label_set_text(hint, "Vol:slot  Enter:conn\nAlt+Enter:scan  +/-:pick");
 
     /* Connect / Save / Clear buttons (touch path; keyboard: Enter on pass = connect) */

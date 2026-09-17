@@ -988,7 +988,7 @@ static void pp_home_build(lv_obj_t *parent)
     lv_label_set_long_mode(status, LV_LABEL_LONG_CLIP);
     lv_label_set_text(status, "");
     lv_obj_set_style_text_font(status, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(status, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(status, lv_color_black(), 0);
     pp_status_register(PP_PAGE_HOME, status);
 
     /* 5 thread rows x 34px; link-style list (user request 2026-08-26: no

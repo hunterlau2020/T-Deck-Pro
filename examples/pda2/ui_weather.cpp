@@ -685,7 +685,7 @@ static void style_table(lv_obj_t *table)
     lv_obj_set_style_pad_right(table, 1, LV_PART_ITEMS);
     lv_obj_set_style_border_side(table, LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM, LV_PART_ITEMS);
     lv_obj_set_style_border_width(table, 1, LV_PART_ITEMS);
-    lv_obj_set_style_border_color(table, lv_palette_main(LV_PALETTE_GREY), LV_PART_ITEMS);
+    lv_obj_set_style_border_color(table, lv_color_black(), LV_PART_ITEMS);
 }
 
 static lv_obj_t *make_page_container(lv_obj_t *parent)
@@ -746,7 +746,7 @@ static void weather_create(lv_obj_t *parent)
     status_label = lv_label_create(p0);
     lv_obj_set_width(status_label, lv_pct(100));
     lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(status_label, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_obj_set_style_text_color(status_label, lv_color_black(), LV_PART_MAIN);
     lv_label_set_text(status_label, "Enter/Space: next page");
 
     /* === Page 1: Hourly forecast === */

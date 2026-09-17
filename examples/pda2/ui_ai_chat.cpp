@@ -1042,7 +1042,7 @@ static void chat_create(lv_obj_t *parent)
     /* --- status line --- */
     chat_status_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(chat_status_lab, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(chat_status_lab, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_obj_set_style_text_color(chat_status_lab, lv_color_black(), LV_PART_MAIN);
     lv_label_set_text(chat_status_lab, "");
 
     /* --- Chat page: the history fills the whole page --- */

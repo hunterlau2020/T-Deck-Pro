@@ -711,7 +711,7 @@ static void ai_cfg_create(lv_obj_t *parent)
 
     ai_status_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(ai_status_lab, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(ai_status_lab, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_obj_set_style_text_color(ai_status_lab, lv_color_black(), LV_PART_MAIN);
     lv_label_set_long_mode(ai_status_lab, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(ai_status_lab, lv_pct(100));
 

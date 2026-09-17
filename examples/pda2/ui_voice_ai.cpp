@@ -745,7 +745,7 @@ static void ai_create(lv_obj_t *parent)
     status_label = lv_label_create(cont);
     lv_obj_set_width(status_label, lv_pct(100));
     lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(status_label, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+    lv_obj_set_style_text_color(status_label, lv_color_black(), LV_PART_MAIN);
     lv_label_set_text(status_label, "");
 
     /* Input at bottom */
