@@ -2864,24 +2864,20 @@ static void wifi_cfg_set_field(int f)
     if (f != wifi_cfg_field) {
         wifi_cfg_sync_draft();
     }
-    /* v1.11: cursor.show is the draw_cursor() gate itself (public struct in
-     * lv_textarea.h) - drive it DIRECTLY on top of the v1.10 style approach,
-     * which still left both cursors blinking after the pick jump on the
-     * device: whatever the blink/style layer does, show=0 cannot draw. */
-    lv_obj_t *hide_ta = (f == 0) ? (lv_obj_t *)wifi_pass_ta : (lv_obj_t *)wifi_ssid_ta;
-    lv_obj_t *show_ta = (f == 0) ? (lv_obj_t *)wifi_ssid_ta : (lv_obj_t *)wifi_pass_ta;
-    lv_obj_set_style_bg_opa(hide_ta, LV_OPA_TRANSP, LV_PART_CURSOR);
-    lv_obj_set_style_bg_opa(show_ta, LV_OPA_COVER, LV_PART_CURSOR);
-    ((lv_textarea_t *)hide_ta)->cursor.show = 0;
-    ((lv_textarea_t *)show_ta)->cursor.show = 1;
-    lv_obj_invalidate(hide_ta);
-    lv_obj_invalidate(show_ta);
+    /* v1.12: ALL 4_1 cursors stay off - the ">" label is the focus
+     * indicator. The v1.10/v1.1x style/show approaches still left the
+     * device showing two blinking cursors after the pick jump, so kill
+     * the draw gate unconditionally and stop sending FOCUSED (its only
+     * remaining effect was start_cursor_blink, i.e. showing a cursor). */
+    lv_obj_set_style_bg_opa(wifi_ssid_ta, LV_OPA_TRANSP, LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(wifi_pass_ta, LV_OPA_TRANSP, LV_PART_CURSOR);
+    ((lv_textarea_t *)wifi_ssid_ta)->cursor.show = 0;
+    ((lv_textarea_t *)wifi_pass_ta)->cursor.show = 0;
     wifi_cfg_field = f;
     wifi_cfg_scan_mode = false;
     if (f != 0 && wifi_scan_state == WIFI_SCAN_RUNNING) {
         wifi_scan_gen++;        /* left the SSID field mid-scan: ignore its result (2.3) */
     }
-    lv_event_send(show_ta, LV_EVENT_FOCUSED, NULL);
     wifi_cfg_refresh_labels();
 }
 
@@ -2906,6 +2902,28 @@ void wifi_cfg_keyboard_poll()
     wifi_cfg_scan_poll();                       /* async scan result (runs every loop) */
     wifi_scan_overlay_update();                 /* countdown/hide of the scan overlay */
     wifi_banner_update();                       /* auto-hide of the result banner */
+
+    /* Status line follows the live link state (user report 2026-09-17): a
+     * scan drops the link and the autoconn manager re-begins it seconds
+     * later, but the line was written once at entry and kept showing
+     * "Not connected" forever even after GOT_IP. Only react to real state
+     * CHANGES so in-progress banners (Connecting/Scan/etc) are preserved. */
+    {
+        static wl_status_t s_shown_link = WL_NO_SHIELD;
+        wl_status_t st = WiFi.status();
+        if (st != s_shown_link) {
+            s_shown_link = st;
+            if (st == WL_CONNECTED)
+                snprintf(wifi_status, sizeof(wifi_status), "IP: %s",
+                         WiFi.localIP().toString().c_str());
+            else if (st == WL_DISCONNECTED)
+                snprintf(wifi_status, sizeof(wifi_status), "Not connected");
+            if (wifi_status_lab) {
+                lv_label_set_text(wifi_status_lab, wifi_status);
+                Serial.printf("[WiFi] link state -> %s\n", wifi_status);
+            }
+        }
+    }
 
     /* burst processing (user feedback): drain the whole key backlog in
      * ONE poll pass so a typed run coalesces into a single EPD render
@@ -3154,6 +3172,7 @@ static void create4_1(lv_obj_t *parent)
     lv_textarea_set_placeholder_text(wifi_ssid_ta, "type SSID or Enter=scan");
     lv_obj_set_style_text_font(wifi_ssid_ta, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_anim_time(wifi_ssid_ta, 0, LV_PART_CURSOR);   /* EPD: static cursor */
+    lv_obj_set_style_bg_opa(wifi_ssid_ta, LV_OPA_TRANSP, LV_PART_CURSOR);  /* v1.12: off */
 
     wifi_pass_lab = lv_label_create(cont);
     lv_obj_set_style_text_font(wifi_pass_lab, &lv_font_montserrat_14, LV_PART_MAIN);
@@ -3167,7 +3186,7 @@ static void create4_1(lv_obj_t *parent)
     lv_textarea_set_placeholder_text(wifi_pass_ta, "password");
     lv_obj_set_style_text_font(wifi_pass_ta, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_anim_time(wifi_pass_ta, 0, LV_PART_CURSOR);   /* EPD: static cursor */
-    lv_obj_set_style_bg_opa(wifi_pass_ta, LV_OPA_TRANSP, LV_PART_CURSOR);  /* field 0 = SSID */
+    lv_obj_set_style_bg_opa(wifi_pass_ta, LV_OPA_TRANSP, LV_PART_CURSOR);  /* v1.12: off */
 
     /* keep the keypad field state in sync with touch focus */
     lv_obj_add_event_cb(wifi_ssid_ta, wifi_ssid_focus_cb, LV_EVENT_FOCUSED, NULL);
@@ -3233,8 +3252,8 @@ static void create4_1(lv_obj_t *parent)
     lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
     wifi_pass_remask();                          /* pass box: middle masked */
     wifi_cfg_refresh_labels();
-    ((lv_textarea_t *)wifi_pass_ta)->cursor.show = 0;   /* single visible cursor */
-    lv_event_send(wifi_ssid_ta, LV_EVENT_FOCUSED, NULL);
+    ((lv_textarea_t *)wifi_ssid_ta)->cursor.show = 0;   /* v1.12: no cursors, */
+    ((lv_textarea_t *)wifi_pass_ta)->cursor.show = 0;   /* ">" label = focus */
     wifi_cfg_kbd_active = true;
 }
 
