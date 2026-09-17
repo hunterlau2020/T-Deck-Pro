@@ -8,12 +8,12 @@
  *   build     - COMPILE DATE, filled in automatically from __DATE__ -
  *               never maintained by hand.
  * Displayed on the boot splash, System info ("SF Version") and the
- * Whoami Cfg tab. 1.0 = baseline up to `095e41a`; 1.1 = EPD grey-visibility + wifi CJK scan fixes.
+ * Whoami Cfg tab. 1.0 = baseline (`095e41a`); 1.1 = EPD grey + wifi CJK fixes; 1.2 = review round (whoami cfg-epoch P1, OTA NTP, sleep/OTA mutex).
  */
 #pragma once
 
 #define FW_VERSION_MAJOR 1
-#define FW_VERSION_MINOR 1
+#define FW_VERSION_MINOR 2
 
 /** "v<x>.<y> build <yyyy-mm-dd>" - compile-date build, static buffer. */
 const char *fw_version_string(void);

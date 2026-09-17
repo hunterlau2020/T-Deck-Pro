@@ -3,6 +3,25 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-17（v1.2：评审修复轮——095e41a..301c571 三方结果处置）
+
+- **评审结论**：Claude C / GPT C / Grok A（`session-batch-review-result-
+  095e41a..301c571-{claude,gpt,grok}.md`）。修复轮处置：
+- **P1（GPT/Grok）Whoami 旧账号结果回写**：请求/结果携带**配置代次**
+  `s_wa_cfg_gen`（Cfg 保存成功时 ++，契约规则 2 首字段 gen）；迟到
+  profile 代次不匹配即丢弃，不再渲染/写 NVS——修复"Refresh A →
+  Save B → A 响应到达 → 重启后 B 配置显示 A 资料"反例。
+- **P2-5 核销失实改正（Claude/Grok 证伪）**：上轮申请称"核实既有实现
+  已防"实为只核了 `sleep_do_enter()` 的深睡互斥，漏了 `idle_sleep_
+  timer_cb` 的**Sleep 屏压栈**——本轮补 `ota_busy()` re-arm 真修。
+  **教训：核销声明必须核代码，不是核提交说明（CLAIM_ONLY）。**
+- **P2（GPT）OTA NTP 与 AI 开关解耦**：HTTPS 分支无条件
+  `http_ensure_time(5000)`——原以 AI "Trust self-signed" 模式门控
+  NTP，冷启动 + 开关开启时 CA 校验静默失败。
+- **P2-6 闭合**：`async_ipc_contract.md` 补 Whoami/OTA 三行（含配置
+  代次语义、指针通道、单飞前置位）。
+- 版本 v1.1 → **v1.2**。
+
 ## 2026-09-16（v1.1：真机回归修复——EPD 灰色不可见 + WiFi 扫描空洞）
 
 - **EPD 灰色文字系统性不可见**（issue_list §23，真机回归发现）：EPD

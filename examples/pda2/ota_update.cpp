@@ -309,8 +309,11 @@ static void ota_check_task(void *param)
         return;
     }
 
-    if (strncmp(url, "https://", 8) == 0 &&
-        http_get_tls_mode() != HTTP_TLS_INSECURE && !http_ensure_time(5000)) {
+    /* HTTPS always needs a sane clock for cert validity: the Mozilla-CA
+     * check below runs regardless of the AI "Trust self-signed" toggle,
+     * so NTP must not read that toggle either (review GPT P2: cold-boot
+     * Check silently failed cert validation when the AI toggle was on). */
+    if (strncmp(url, "https://", 8) == 0 && !http_ensure_time(5000)) {
         r->err = "time not synced (NTP)";
         ota_send_result(r);
         ota_task_exit();
@@ -398,8 +401,11 @@ static void ota_update_task(void *param)
 
     WiFi.setSleep(false);                /* paired restore in ota_task_exit */
 
-    if (strncmp(m.url.c_str(), "https://", 8) == 0 &&
-        http_get_tls_mode() != HTTP_TLS_INSECURE && !http_ensure_time(5000)) {
+    /* HTTPS always needs a sane clock for cert validity: the Mozilla-CA
+     * check below runs regardless of the AI "Trust self-signed" toggle,
+     * so NTP must not read that toggle either (review GPT P2: cold-boot
+     * Check silently failed cert validation when the AI toggle was on). */
+    if (strncmp(m.url.c_str(), "https://", 8) == 0 && !http_ensure_time(5000)) {
         r->err = "time not synced (NTP)";
         delete snap;
         ota_send_result(r);

@@ -1,6 +1,6 @@
 # 异步 IPC 契约（pda2）
 
-> 本文档是 WiFi 页（WiFi Test / Time Sync）、AI Config、AI Chat 四处异步任务的统一合同。
+> 本文档是 WiFi 页（WiFi Test / Time Sync）、AI Config、AI Chat、Whoami、OTA 五组异步任务的统一合同。
 > 评审要求来源：`wifi-config-keyboard-review-result-01f8eac..8b96656.md` 主评审 §1.3。
 > 任何新增异步任务必须遵守本契约；违反时以本文件为准。
 >
@@ -16,6 +16,9 @@
 | Time Sync | `time_sync_task_func` | `s_time_sync_q` | `s_time_sync_busy` + `s_time_sync_busy_gen` | `s_wifi_page_gen` |
 | AI Test | `ai_test_task_func` | `s_ai_test_q` | `s_ai_test_busy` | `s_ai_test_req_gen` |
 | AI Chat Send | `chat_send_task_func` | `s_chat_q` | `s_chat_send_busy` | `s_chat_page_gen` |
+| Whoami Profile/Test | `wa_task_func` | `s_wa_q`（一次创建永不删除） | `s_wa_task`（任务句柄即 busy，单飞） | `s_wa_cfg_gen`（**配置代次**，非页面代次——同一次访问内换 key 保存也必须作废在飞 profile，评审 `095e41a..301c571` GPT P1） |
+| OTA Check | `ota_check_task` | `s_ota_q`（指针通道，单元素 overwrite，覆盖前回收旧指针） | `s_ota_inflight`（创建任务前置位） | 调用方传入的 `gen`（UI 覆盖层代次） |
+| OTA Update | `ota_update_task` | 同上（共用） | `s_ota_inflight` | 同上 |
 
 ## 2. 硬性规则
 

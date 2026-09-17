@@ -123,8 +123,15 @@ static lv_obj_t *s_cfg_status = NULL;
 
 /* async plumbing */
 enum { WA_REQ_PROFILE = 0, WA_REQ_TEST };
-struct wa_msg_t { int kind; bool ok; char text[160]; pp_profile_t prof; };
-struct wa_req_t { int kind; string base; string key; };
+/* cfg_gen FIRST in the result (async_ipc_contract.md rule 2). It is the
+ * CONFIG generation, not the page generation: a profile fetched under an
+ * older server/key must never render or reach the NVS cache after the user
+ * saved a new config - even within one visit, even after leaving the
+ * screen (review 095e41a..301c571 GPT P1 / Grok P2: stale-account
+ * write-back persisted across reboot). */
+struct wa_msg_t { uint32_t cfg_gen; int kind; bool ok; char text[160]; pp_profile_t prof; };
+struct wa_req_t { uint32_t cfg_gen; int kind; string base; string key; };
+static volatile uint32_t s_wa_cfg_gen = 0;   /* ++ on every successful Cfg save */
 /* Queue is created ONCE and NEVER deleted (penpal s_pp_q pattern): the
  * worker task may outlive the screen (user leaves mid-request), and a
  * queue delete between the task's NULL-check and its xQueueSend asserted
@@ -263,6 +270,7 @@ static void wa_task_func(void *param)
 {
     wa_req_t *rq = (wa_req_t *)param;
     wa_msg_t *m = new wa_msg_t;
+    m->cfg_gen = rq->cfg_gen;
     m->kind = rq->kind;
     m->ok = false;
     m->text[0] = '\0';
@@ -333,6 +341,7 @@ static void wa_start(int kind)
         return;
     }
     wa_req_t *rq = new wa_req_t;
+    rq->cfg_gen = s_wa_cfg_gen;
     rq->kind = kind;
     rq->base = base;
     rq->key = key;
@@ -363,6 +372,13 @@ static void wa_consume(void)
             Serial.printf("[Whoami] result kind=%d ok=%d\n",
                           m->kind, m->ok ? 1 : 0);
             wa_waitbox_hide();           /* result arrived - drop the box */
+            if (m->kind == WA_REQ_PROFILE && m->cfg_gen != s_wa_cfg_gen) {
+                /* config changed since this request launched: a profile for
+                 * the OLD account must not render or be cached (P1 fix) */
+                Serial.println("[Whoami] stale profile dropped (config changed)");
+                delete m;
+                continue;
+            }
             if (m->ok && m->kind == WA_REQ_PROFILE) {
                 s_profile = m->prof;
                 s_profile_valid = true;
@@ -494,6 +510,7 @@ static void wa_cfg_save_cb(lv_event_t *e)
     if (server_ok && prov_ok) {
         wa_cfg_status("saved");
         pp_notify_cfg_changed();           /* PenPal re-syncs with new config */
+        s_wa_cfg_gen++;                   /* invalidate in-flight profile results */
         /* key may point at another user: drop the cached profile (both the
          * NVS cache and the RAM copy) so the next entry refetches */
         wa_cache_clear();

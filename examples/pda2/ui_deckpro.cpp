@@ -4987,6 +4987,15 @@ static void idle_sleep_timer_cb(lv_timer_t *t)
         s_last_activity_ms = millis();      /* re-arm: check again later */
         return;
     }
+    if (ota_busy()) {                       /* P2-5 (review 095e41a..301c571):
+                                               pushing the Sleep screen on top
+                                               of the OTA overlay interrupts
+                                               the download UI even though
+                                               sleep_do_enter() later refuses
+                                               the deep sleep - re-arm instead */
+        s_last_activity_ms = millis();
+        return;
+    }
     s_last_activity_ms = millis();          /* one push per idle window */
     Serial.println("[Sleep] idle timeout - auto sleep");
     scr_mgr_push(SCREEN11_ID, false);
