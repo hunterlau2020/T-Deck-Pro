@@ -3,6 +3,29 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-17（v1.3：WiFi 扫描 -2 定案——重连循环与扫描互斥）
+
+- **症状**（真机报告，v1.0 起两轮复现）：WIFI Scan 列表屏"停滞无反应"；
+  WIFI Config 屏清空 SSID 框回车立刻报 `scan start failed(-2)`。
+- **根因**（串口抓取定案，`E:/tmp/wifi_capture.log`）：开机自动连
+  slot 0（HUAWEIP50）+ `setAutoReconnect(true)`，目标 AP 不在场 → 每
+  2.4s 一轮 `NO_AP_FOUND` 重连，**STA 永远处于 connecting 态**；
+  ESP-IDF 规定该状态下 `esp_wifi_scan_start()` 拒绝
+  （`ESP_ERR_WIFI_STATE`），Arduino 包装为 `WIFI_SCAN_FAILED(-2)`：
+  - 4_1 异步路径有打点 → 用户看到 "scan start failed(-2)"；
+  - 4_2 同步路径 `n=-2` 被当 "0 个结果" 渲染空表、无提示 → "停滞"。
+  两轮 CJK/渲染修复未中根因：这是**环境触发的既有缺陷**（保存的 AP
+  不在场才复现；之前 WiFi Test 能显示 LAN IP 时 AP 在场、已连接，
+  扫描合法），不是 v1.0 引入的回归。
+- **修复**：新增 `ui_wifi_scan_prepare()/ui_wifi_scan_reconnect()`
+  （port 层导出）：扫描前把**未连接**的 STA 停成 idle（关自动重连 +
+  `disconnect(false,false)` 保 NVS）；已连接 STA 原地扫（合法）。
+  扫描终态（完成/失败/丢弃/中止/启动失败）恢复保存槽位重连。
+  4_1 三处接入（start/poll/abort），4_2 同步扫描前后成对调用，
+  空列表 + 扫描失败时标题行显示 "Scan failed - retry every 10s"。
+- 版本 v1.2 → **v1.3**。教训：**"无反应"型症状先查驱动层状态机，
+  渲染修复在驱动拒绝面前是空转。**
+
 ## 2026-09-17（v1.2：评审修复轮——095e41a..301c571 三方结果处置）
 
 - **评审结论**：Claude C / GPT C / Grok A（`session-batch-review-result-

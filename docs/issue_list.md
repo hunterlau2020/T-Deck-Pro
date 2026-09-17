@@ -754,6 +754,45 @@ Dictionary/PenPal Write/Wifi/Whoami/OTA 屏的状态行 + Weather 表格边框�
 
 ---
 
+## 24. WiFi 扫描 -2：自动重连循环与扫描互斥（2026-09-17 定案，v1.3 修复）
+
+**症状**（真机报告 v1.0 起两轮复测）：① "- WIFI Scan" 列表屏停滞无
+反应、无数据；② "- WIFI Config" 清空 SSID 框回车**立刻**报
+"scan start failed(-2)"。"立刻"是关键线索——不是扫描慢，是启动即被拒。
+
+**根因**（串口抓取定案）：开机自动连 slot 0（factory.ino `WiFi.begin`
++ `setAutoReconnect(true)`），保存的 AP **不在场** → 每 2.4s 一轮
+`Reason: 201 - NO_AP_FOUND` 无限重连，**STA 永远处于 connecting 态**。
+ESP-IDF 规定 connecting 态下 `esp_wifi_scan_start()` 返回
+`ESP_ERR_WIFI_STATE`，Arduino 包装为 `WIFI_SCAN_FAILED(-2)`：
+- 4_1 异步路径有打点 → 屏显 "scan start failed(-2)"；
+- 4_2 同步路径 `n = WiFi.scanNetworks() = -2`，`for(i<n)` 不执行，
+  memset 后空表且**无任何提示** → 表现为"停滞"。
+
+**为什么 §23 的 CJK 修复没治好**：那是渲染层第二道独立地雷，本条是
+驱动层状态机拒绝——两道都存在时先撞哪道取决于环境。**为什么"好像
+是 v1.0 弄坏的"**：环境触发（保存的 AP 离场才复现；此前 WiFi Test
+能显示 LAN IP = AP 在场、已连接，连接态扫描合法）。存量缺陷，非回归。
+
+**修复**（v1.3，`ui_wifi_scan_prepare()/ui_wifi_scan_reconnect()`）：
+扫描前若 STA 未连接：`setAutoReconnect(false)`（否则 DISCONNECTED
+事件立刻重 begin）+ `disconnect(false,false)`（断重连循环、保 NVS）+
+100ms 落定 → idle 态扫描；已连接 STA 原地扫（合法，不折腾）。扫描
+**终态成对恢复**（完成/失败/丢弃/中止/启动失败五出口）：读回保存
+槽位 `begin` + 重开自动重连。4_2 空列表 + 失败时标题行显示
+"Scan failed - retry every 10s"，不再无声。
+
+**教训**：
+1. "无反应"型症状先抓串口查驱动层状态机，渲染层修复在驱动拒绝面前
+   是空转——两轮修复才碰到根因，代价本可一次付清（4_2 无打点是盲区，
+   修复顺带补上失败可见性）；
+2. ESP32 WiFi STA 的三种可扫态：**已连接（可扫）/ idle（可扫）/
+   connecting（扫描必拒）**——后台无限重连的固件迟早把 UI 扫描锁死；
+3. 开机无限重连本身值得收敛（退避/上限，省电+减少与扫描互斥窗口），
+   登记为改进项（见 TODO），不在本修内。
+
+---
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：

@@ -2521,6 +2521,7 @@ static bool wifi_cfg_scan_start(void)
         wifi_ssid_pre_scan[sizeof(wifi_ssid_pre_scan) - 1] = '\0';
     }
     WiFi.scanDelete();
+    ui_wifi_scan_prepare();     /* leave the saved-slot reconnect loop for the scan (-2 fix) */
     int16_t r = WiFi.scanNetworks(true);        /* async; main loop keeps draining the key FIFO */
     if (r == WIFI_SCAN_RUNNING) {
         wifi_scan_state = WIFI_SCAN_RUNNING;
@@ -2530,6 +2531,7 @@ static bool wifi_cfg_scan_start(void)
         Serial.println("[WiFi] scan started (async)");
         return true;
     }
+    ui_wifi_scan_reconnect();   /* start refused: back to the saved slot */
     wifi_scan_state = r;
     snprintf(wifi_status, sizeof(wifi_status), "Scan start fail (%d)", r);
     lv_label_set_text(wifi_status_lab, wifi_status);
@@ -2545,6 +2547,7 @@ static void wifi_cfg_scan_poll(void)
     if (wifi_scan_state != WIFI_SCAN_RUNNING) return;
     int16_t r = WiFi.scanComplete();
     if (r == WIFI_SCAN_RUNNING) return;         /* still scanning */
+    ui_wifi_scan_reconnect();   /* terminal state (fail/done/drop): resume saved slot */
 
     if (r < 0) {
         /* scan failure kept distinct from "no networks found" (finding 1.5) */
@@ -3139,6 +3142,7 @@ static void wifi_cfg_scan_abort(void)
         Serial.println("[WiFi] scan abort timeout - release deferred");
     }
     wifi_scan_state = WIFI_SCAN_FAILED;
+    ui_wifi_scan_reconnect();   /* abort leaves the STA idle: resume saved slot */
 }
 
 /* Scan progress overlay (user request): topmost message with a countdown.
@@ -3360,7 +3364,9 @@ static void show_wifi_scan(void)
     }
     lv_label_set_text(wifi_scan_lab,
                       shown ? "Scanned APs - tap one to config"
-                            : "Scanning... (updates every 10s)");
+                            : (ui_wifi_scan_last_ret() < 0
+                                   ? "Scan failed - retry every 10s"
+                                   : "Scanning... (updates every 10s)"));
 }
 
 static void wifi_scan_timer_event(lv_timer_t *t)

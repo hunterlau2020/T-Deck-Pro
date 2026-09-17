@@ -443,9 +443,42 @@ int is_chinese_utf8(const char *str) {
     return (c >= 0xE0 && c <= 0xEF);  // 检查第一个字节是否在 UTF-8 的中文字符范围内
 }
 
+static int s_wifi_scan_last_ret = 0;
+
+void ui_wifi_scan_prepare(void)
+{
+    if (WiFi.status() == WL_CONNECTED) return;     /* connected STA may scan in place */
+    WiFi.setAutoReconnect(false);   /* else the DISCONNECTED event re-begins immediately */
+    WiFi.disconnect(false, false);  /* abort the reconnect loop, keep NVS credentials */
+    delay(100);                     /* let the wifi task settle to idle */
+}
+
+void ui_wifi_scan_reconnect(void)
+{
+    if (WiFi.status() == WL_CONNECTED) return;
+    extern void wifi_slot_load(int slot, char *ssid, int ssid_len,
+                               char *pass, int pass_len);
+    extern int  wifi_slot_get_active(void);
+    char ssid[65] = {0}, pass[65] = {0};
+    wifi_slot_load(wifi_slot_get_active(), ssid, sizeof(ssid), pass, sizeof(pass));
+    WiFi.setAutoReconnect(true);
+    if (ssid[0] != '\0') WiFi.begin(ssid, pass);   /* resume the saved slot */
+    Serial.println("[WiFi] saved-slot reconnect resumed after scan");
+}
+
+int ui_wifi_scan_last_ret(void)
+{
+    return s_wifi_scan_last_ret;
+}
+
 void ui_wifi_get_scan_info(ui_wifi_scan_info_t *list, int list_len)
 {
+    ui_wifi_scan_prepare();
     int n = WiFi.scanNetworks();
+    ui_wifi_scan_reconnect();
+    s_wifi_scan_last_ret = n;
+    if(n < 0)
+        n = 0;   /* scan refused: empty list + "Scan failed" header in show_wifi_scan */
     if(n > list_len)
         n = list_len;
     

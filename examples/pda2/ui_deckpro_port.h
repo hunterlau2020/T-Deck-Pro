@@ -112,6 +112,17 @@ void ui_gps_get_snapshot(ui_gps_snapshot_t *out);
 
 // [ screen 4 ] --- Wifi Scan
 void ui_wifi_get_scan_info(ui_wifi_scan_info_t *list, int list_len);
+/* Device report 2026-09-17: while the saved AP is absent the boot-time
+ * auto-reconnect keeps the STA permanently "connecting", and
+ * esp_wifi_scan_start() refuses that state (Arduino wraps it as
+ * WIFI_SCAN_FAILED/-2) - 4_1 showed "scan start failed(-2)", 4_2 silently
+ * rendered an empty list. prepare() parks a non-connected STA idle for the
+ * scan (a connected one scans in place); reconnect() resumes the saved
+ * slot afterwards; last_ret() exposes the previous scanNetworks() return
+ * for the 4_2 empty-list message. */
+void ui_wifi_scan_prepare(void);
+void ui_wifi_scan_reconnect(void);
+int  ui_wifi_scan_last_ret(void);
 
 // [ screen 5 ] --- State
 bool ui_test_get(int peri_id);
