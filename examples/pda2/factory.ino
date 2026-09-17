@@ -930,6 +930,8 @@ void loop()
     ai_cfg_keyboard_poll();
     extern void penpal_keyboard_poll();
     penpal_keyboard_poll();
+    extern void leveltest_keyboard_poll();  /* LevelTest app (2026-09-18) */
+    leveltest_keyboard_poll();
     extern void whoami_keyboard_poll();
     whoami_keyboard_poll();
     extern void shutdown_keyboard_poll();

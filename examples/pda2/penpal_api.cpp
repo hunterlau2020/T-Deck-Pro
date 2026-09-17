@@ -481,6 +481,159 @@ bool penpal_get_profile(const char *base, const char *key,
     return true;
 }
 
+/* ---- level test (LevelTest app, 2026-09-18) -------------------------------- */
+
+static const char *s_lt_str(const cJSON *obj, const char *key)
+{
+    return cJSON_GetStringValue(cJSON_GetObjectItem(obj, key));
+}
+
+bool penpal_lt_get_questions(const char *base, const char *key,
+                             pp_lt_question_t *out, int max, int *count,
+                             string *err)
+{
+    if (count) *count = 0;
+    if (!pp_cfg_ok(base, key, err)) return false;
+
+    pp_http_t r = pp_request("GET", pp_url(base, "/users/me/level-test/questions"),
+                             NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);
+        Serial.printf("%s level-test questions failed: %s\n", PP_TAG,
+                      pp_fail(r).c_str());
+        return false;
+    }
+    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!root) {
+        if (err) *err = "bad JSON (questions)";
+        return false;
+    }
+    const cJSON *qs = cJSON_GetObjectItem(root, "questions");
+    int n = 0;
+    cJSON *it;
+    cJSON_ArrayForEach(it, qs) {
+        if (n >= max) break;
+        out[n] = pp_lt_question_t{};
+        out[n].index = cJSON_GetObjectItem(it, "index")->valueint;
+        s_copy(out[n].level, sizeof(out[n].level), s_lt_str(it, "level"));
+        s_copy(out[n].type, sizeof(out[n].type), s_lt_str(it, "type"));
+        s_copy(out[n].stem, sizeof(out[n].stem), s_lt_str(it, "stem"));
+        out[n].answer_index =
+            cJSON_GetObjectItem(it, "answer_index")->valueint;
+        const cJSON *opts = cJSON_GetObjectItem(it, "options");
+        int k = 0;
+        cJSON *o;
+        cJSON_ArrayForEach(o, opts) {
+            if (k >= PP_LT_OPT_MAX) break;
+            if (cJSON_IsString(o) && o->valuestring)
+                s_copy_disp(out[n].options[k], sizeof(out[n].options[k]),
+                            o->valuestring);
+            k++;
+        }
+        out[n].opt_count = k;
+        n++;
+    }
+    cJSON_Delete(root);
+    if (count) *count = n;
+    Serial.printf("%s level-test paper: %d questions\n", PP_TAG, n);
+    if (n == 0) {
+        if (err) *err = "empty question paper";
+        return false;
+    }
+    return true;
+}
+
+bool penpal_lt_submit(const char *base, const char *key,
+                      const pp_lt_question_t *qs, const bool *correct, int n,
+                      pp_lt_result_t *out, string *err)
+{
+    *out = pp_lt_result_t{};
+    if (!pp_cfg_ok(base, key, err)) return false;
+
+    /* self-reported staircase body: {answers:[{level,correct}..],
+     * mode:"staircase"} (contract: grading is client-side by design) */
+    string body = "{\"answers\":[";
+    for (int i = 0; i < n; i++) {
+        char item[48];
+        snprintf(item, sizeof(item), "%s{\"level\":\"%s\",\"correct\":%s}",
+                 i ? "," : "", qs[i].level, correct[i] ? "true" : "false");
+        body += item;
+    }
+    body += "],\"mode\":\"staircase\"}";
+
+    pp_http_t r = pp_request("POST", pp_url(base, "/users/me/level-test"),
+                             body.c_str(), NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);
+        Serial.printf("%s level-test submit failed: %s\n", PP_TAG,
+                      pp_fail(r).c_str());
+        return false;
+    }
+    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!root) {
+        if (err) *err = "bad JSON (result)";
+        return false;
+    }
+    out->score = cJSON_GetObjectItem(root, "score")->valueint;
+    s_copy(out->resulting_level, sizeof(out->resulting_level),
+           s_lt_str(root, "resulting_level"));
+    int d = 0;
+    cJSON *dit;
+    cJSON_ArrayForEach(dit, cJSON_GetObjectItem(root, "level_detail")) {
+        if (d >= PP_LT_DET_MAX) break;
+        s_copy(out->detail[d].level, sizeof(out->detail[d].level),
+               s_lt_str(dit, "level"));
+        out->detail[d].answered =
+            cJSON_GetObjectItem(dit, "answered")->valueint;
+        out->detail[d].correct =
+            cJSON_GetObjectItem(dit, "correct")->valueint;
+        const cJSON *p = cJSON_GetObjectItem(dit, "passed");
+        out->detail[d].passed = cJSON_IsTrue(p);
+        d++;
+    }
+    out->det_count = d;
+    cJSON_Delete(root);
+    Serial.printf("%s level-test result: score=%d level=%s\n", PP_TAG,
+                  out->score, out->resulting_level);
+    return true;
+}
+
+bool penpal_lt_get_history(const char *base, const char *key,
+                           pp_lt_hist_t *out, int max, int *count, string *err)
+{
+    if (count) *count = 0;
+    if (!pp_cfg_ok(base, key, err)) return false;
+
+    pp_http_t r = pp_request("GET", pp_url(base, "/users/me/level-test/history"),
+                             NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);
+        Serial.printf("%s level-test history failed: %s\n", PP_TAG,
+                      pp_fail(r).c_str());
+        return false;
+    }
+    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!root) {
+        if (err) *err = "bad JSON (history)";
+        return false;
+    }
+    int n = 0;
+    cJSON *it;
+    cJSON_ArrayForEach(it, cJSON_GetObjectItem(root, "items")) {
+        if (n >= max) break;
+        out[n] = pp_lt_hist_t{};
+        s_copy(out[n].created_at, sizeof(out[n].created_at),
+               s_lt_str(it, "created_at"));
+        out[n].score = cJSON_GetObjectItem(it, "score")->valueint;
+        s_copy(out[n].resulting_level, sizeof(out[n].resulting_level),
+               s_lt_str(it, "resulting_level"));
+        n++;
+    }
+    cJSON_Delete(root);
+    if (count) *count = n;
+    return true;
+}
+
 bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count)
 {
     if (count) *count = 0;

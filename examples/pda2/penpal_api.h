@@ -209,6 +209,66 @@ typedef struct {
 bool penpal_get_profile(const char *base, const char *key,
                         pp_profile_t *out, string *err);
 
+/* ---- level test (LevelTest app, 2026-09-18) --------------------------------
+ * GET/POST /api/v1/users/me/level-test[...] - "⓯ 定级测 (整卷 staircase)".
+ * Contract (openapi 2026-09-18): the FULL paper ships with answer_index on
+ * every question - grading is client-side and self-reported (server does not
+ * re-check; the schema doc states this is not an authoritative assessment).
+ * Submit body: {answers: [{level, correct} ...], mode: "staircase"} ->
+ * {score, resulting_level, level_detail[]}. Device always sends
+ * mode="staircase" (整卷 staircase, user request). */
+#define PP_LT_Q_MAX    16   /* one full paper; the server sends ~10 */
+#define PP_LT_OPT_MAX  4
+#define PP_LT_DET_MAX  8    /* level_detail rows (Pre-A1..B2+ = 5, headroom) */
+#define PP_LT_HIST_MAX 4    /* history rows shown on the entry page */
+
+typedef struct {
+    int  index;
+    char level[8];                        /* CEFR: Pre-A1 / A1 / A2 / B1 / B2+ */
+    char type[10];                        /* grammar | vocab */
+    char stem[128];                       /* display copy */
+    int  opt_count;
+    char options[PP_LT_OPT_MAX][48];      /* display copy */
+    int  answer_index;                    /* ships with the paper (client grades) */
+} pp_lt_question_t;
+
+typedef struct {
+    char level[8];
+    int  answered;
+    int  correct;
+    bool passed;
+} pp_lt_level_detail_t;
+
+typedef struct {
+    int  score;
+    char resulting_level[8];
+    int  det_count;
+    pp_lt_level_detail_t detail[PP_LT_DET_MAX];
+} pp_lt_result_t;
+
+typedef struct {
+    char created_at[20];                   /* "2026-09-13T16:00:05" (first 10 = date) */
+    int  score;
+    char resulting_level[8];
+} pp_lt_hist_t;
+
+/** @brief GET /users/me/level-test/questions - the whole paper, server order.
+ *  @param count number of questions stored (capped at max). */
+bool penpal_lt_get_questions(const char *base, const char *key,
+                             pp_lt_question_t *out, int max, int *count,
+                             string *err);
+
+/** @brief POST /users/me/level-test - self-reported staircase submission.
+ *         qs[] supplies each question's level, correct[] the client-graded
+ *         outcome; the body is assembled here (mode "staircase"). */
+bool penpal_lt_submit(const char *base, const char *key,
+                      const pp_lt_question_t *qs, const bool *correct, int n,
+                      pp_lt_result_t *out, string *err);
+
+/** @brief GET /users/me/level-test/history - most recent rows (entry page). */
+bool penpal_lt_get_history(const char *base, const char *key,
+                           pp_lt_hist_t *out, int max, int *count, string *err);
+
 bool penpal_get_topics(const char *base, const char *key,
                        pp_topic_t *out, int max, int *count, string *err);
 

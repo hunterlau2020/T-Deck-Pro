@@ -79,6 +79,8 @@ enum {
     SCREEN_AI_CFG_ID,
     SCREEN_PENPAL_ID,
     SCREEN_WHOAMI_ID,
+    /* LevelTest app (user request 2026-09-18): menu page one */
+    SCREEN_LEVELTEST_ID,
     /* appended at the END (OTA design §4/§10): Settings' OTA Update page */
     SCREEN2_2_ID,
 };
@@ -98,7 +100,11 @@ struct menu_btn {
     const void *icon;
     const char *name;
     lv_coord_t pos_x;
-    lv_coord_t pos_y; 
+    lv_coord_t pos_y;
+    /* Menu page assignment (user rearrange 2026-09-18): pages no longer
+     * follow array order (3 pages hold 6/7/8 entries) - each row names its
+     * page and create0() groups by it; page_num = max page. */
+    uint8_t page;
 };
 
 enum{

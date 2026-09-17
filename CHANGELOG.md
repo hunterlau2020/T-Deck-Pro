@@ -3,6 +3,33 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-18（v1.13：等级自测 APP + 主菜单三屏重排）
+
+- **用户需求**：① 根据 `remote_api_demo.py`（⓯ 定级测·整卷 staircase）
+  做等级自测 APP；② 菜单重排——Weather/Calendar/Calc/Dict 一屏→二屏，
+  GPS/TEST/Battery/Input/PCM5102/Motor 二屏→三屏，LevelTest 新 APP
+  放一屏。
+- **API 契约**（本机 `127.0.0.1:8000/openapi.json` 实拉 + 实调样例）：
+  - `GET /users/me/level-test/questions`：整卷 ~10 题（Pre-A1→B2+，
+    grammar|vocab），**answer_index 随题下发——判分在客户端、按契约
+    自报**（服务端不复核，非权威定性）；
+  - `POST /users/me/level-test`：`{answers:[{level,correct}],mode:
+    "staircase"}` → `{score, resulting_level, level_detail[]}`（每级
+    answered/correct/passed，"止步于哪级"透明化）；
+  - `GET /users/me/level-test/history`：历史记录（HOME 页"Last:"）。
+- **penpal_api**：`pp_lt_question_t/result_t/hist_t` + 三端点封装
+  （复用 pp_request/s_copy_disp 防御解析，CRUD 超时 20s）。
+- **ui_leveltest（新文件，~430 行）**：HOME（上次结果 + Enter 开始）→
+  QUIZ（逐题渲染，进度行 Q_n/N·等级·类型，键盘 1-4 / 触摸选项行，
+  本地判分）→ 答完自动 POST（mode=staircase）→ RESULT（分数 + 等级
+  + 每级明细 + Enter 重测）。异步走 whoami wa 模式（单飞 + 屏代次
+  首字段，迟到结果丢弃）。结果不写本地、不联动 profile（用户：服务
+  器后台自管）。
+- **菜单**：`menu_btn` 增加 `page` 字段（21 条目 = 6/7/8 非整除，数组
+  顺序分屏失效），create0 按 page 分组、page_num=max(page)；PCM5102
+  替换逻辑（A7682E 缺席时）不变。
+- 版本 v1.12 → **v1.13**。待真机验收：答题全流程 + 三屏布局。
+
 ## 2026-09-17（v1.12：4_1 光标全灭 + 状态行跟随真实链路状态）
 
 - **背景**：v1.11 后用户报告"还是老样子"（双光标 + not connect）。

@@ -6,6 +6,7 @@
 #include "Arduino.h"
 #include "openai_api.h"     /* openai_stats_flush() at the deep-sleep checkpoint */
 #include "Audio.h"          /* idle auto-sleep guard: audio.isRunning() */
+#include "ui_leveltest.h"   /* LevelTest app (menu page one, 2026-09-18) */
 
 #define SETTING_PAGE_MAX_ITEM 7
 #define GET_BUFF_LEN(a) sizeof(a)/sizeof(a[0])
@@ -264,31 +265,33 @@ static int page_curr = 0;
 
 static struct menu_btn menu_btn_list[] =
 {
-    /* Page one (user-requested order, 2026-09-13): PenPal first;
-     * AI Cfg to row-2-first; Dict to row-3-last (old PenPal slot) */
-    {SCREEN_PENPAL_ID,     &img_penpal,     "PenPal",  23,   13},
-    {SCREEN_AI_CHAT_ID,    &img_voice_ai,   "AI Text", 95,   13},
-    {SCREEN_VOICE_AI_ID,   &img_voice_ai,   "AI Chat", 167,  13},
-    {SCREEN_AI_CFG_ID,     &img_setting,    "AI Cfg",  23,   101},
-    {SCREEN_WEATHER_ID,    &img_weather,    "Weather", 95,   101},
-    {SCREEN_CALENDAR_ID,   &img_calendar,   "Calendar",167,  101},
-    {SCREEN_CALCULATOR_ID, &img_calculator, "Calc",    23,   189},
-    {SCREEN_WHOAMI_ID,     &img_touch,      "Whoami",  95,   189},
-    {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    167,  189},
-    /* Page two: hardware / system entries; Sleep takes the old Shutdown slot */
-    {SCREEN4_ID,           &img_wifi,       "Wifi",    23,   13},
-    {SCREEN2_ID,           &img_setting,    "Setting", 95,   13},
-    {SCREEN_GPS_ENHANCED_ID,&img_GPS,       "GPS",     167,  13},
-    {SCREEN5_ID,           &img_test,       "Test",    23,   101},
-    {SCREEN6_ID,           &img_batt,       "Battery", 95,   101},
-    {SCREEN7_ID,           &img_touch,      "Input",   167,  101},
-    {SCREEN8_ID,           &img_A7682E,     "A7682E",  23,   189},
-    {SCREEN11_ID,          &img_sleep,      "Sleep",   95,   189},
-    {SCREEN12_ID,          &img_motor,      "Motor",   167,  189},
-    /* Page three: shutdown + Lora (user rearrange 2026-09-14: Whoami took
-     * Wifi's page-1 slot, Wifi took Lora's page-2 slot) */
-    {SCREEN9_ID,           &img_lora,       "Shutdown",23,   13},
-    {SCREEN1_ID,           &img_lora,       "Lora",    95,   13},
+    /* Page one (user rearrange 2026-09-18): apps + the new LevelTest;
+     * Weather/Calendar/Calc/Dict moved to page two, hardware entries
+     * (GPS/TEST/Battery/Input/PCM5102/Motor) to page three */
+    {SCREEN_PENPAL_ID,     &img_penpal,     "PenPal",  23,   13,  0},
+    {SCREEN_AI_CHAT_ID,    &img_voice_ai,   "AI Text", 95,   13,  0},
+    {SCREEN_VOICE_AI_ID,   &img_voice_ai,   "AI Chat", 167,  13,  0},
+    {SCREEN_AI_CFG_ID,     &img_setting,    "AI Cfg",  23,   101, 0},
+    {SCREEN_LEVELTEST_ID,  &img_test,       "Level",   95,   101, 0},
+    {SCREEN_WHOAMI_ID,     &img_touch,      "Whoami",  95,   189, 0},
+    /* Page two: Wifi/Setting/Sleep + the four learning tools */
+    {SCREEN4_ID,           &img_wifi,       "Wifi",    23,   13,  1},
+    {SCREEN2_ID,           &img_setting,    "Setting", 95,   13,  1},
+    {SCREEN_WEATHER_ID,    &img_weather,    "Weather", 167,  13,  1},
+    {SCREEN_CALENDAR_ID,   &img_calendar,   "Calendar",23,   101, 1},
+    {SCREEN_CALCULATOR_ID, &img_calculator, "Calc",    95,   101, 1},
+    {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    167,  101, 1},
+    {SCREEN11_ID,          &img_sleep,      "Sleep",   23,   189, 1},
+    /* Page three: shutdown/Lora + hardware / system entries (A7682E shows
+     * as PCM5102 when the modem is absent - same list slot) */
+    {SCREEN9_ID,           &img_lora,       "Shutdown",23,   13,  2},
+    {SCREEN1_ID,           &img_lora,       "Lora",    95,   13,  2},
+    {SCREEN_GPS_ENHANCED_ID,&img_GPS,       "GPS",     167,  13,  2},
+    {SCREEN5_ID,           &img_test,       "Test",    23,   101, 2},
+    {SCREEN6_ID,           &img_batt,       "Battery", 95,   101, 2},
+    {SCREEN7_ID,           &img_touch,      "Input",   167,  101, 2},
+    {SCREEN8_ID,           &img_A7682E,     "A7682E",  23,   189, 2},
+    {SCREEN12_ID,          &img_motor,      "Motor",   95,   189, 2},
 };
 
 static void menu_btn_event_cb(lv_event_t *e)
@@ -459,8 +462,12 @@ static void create0(lv_obj_t *parent)
     lv_obj_set_style_text_font(menu_taskbar_battery_percent, &Font_Mono_Bold_14, LV_PART_MAIN);
 
     // page_num is the MAX page index used by the gesture gate
-    // (page_curr < page_num), not the page count: N=18 -> index 0..1.
-    page_num = (MENU_BTN_NUM - 1) / 9;
+    // (page_curr < page_num); pages are EXPLICIT per entry since the
+    // 2026-09-18 rearrange (6/7/8 entries - no longer a multiple of 9).
+    page_num = 0;
+    for(int i = 0; i < MENU_BTN_NUM; i++) {
+        if(menu_btn_list[i].page > page_num) page_num = menu_btn_list[i].page;
+    }
 
     menu_screen1 = menu_page_create(parent, LV_VER_RES - status_bar_height);
     menu_screen2 = menu_page_create(parent, LV_VER_RES - status_bar_height);
@@ -480,14 +487,11 @@ static void create0(lv_obj_t *parent)
         }
     }
 
+    lv_obj_t *menu_pages[3] = {menu_screen1, menu_screen2, menu_screen3};
     for(int i = 0; i < MENU_BTN_NUM; i++) {
-        if(i < 9) {
-            menu_btn_create(menu_screen1, &menu_btn_list[i]);
-        } else if(i < 18) {
-            menu_btn_create(menu_screen2, &menu_btn_list[i]);
-        } else {
-            menu_btn_create(menu_screen3, &menu_btn_list[i]);
-        }
+        int pg = menu_btn_list[i].page;
+        if(pg > 2) pg = 2;               /* defensive: struct is uint8_t */
+        menu_btn_create(menu_pages[pg], &menu_btn_list[i]);
     }
 
     if(MENU_BTN_NUM > 9) {
@@ -5573,6 +5577,8 @@ void ui_deckpro_entry(void)
 
     extern scr_lifecycle_t screen_whoami;
     scr_mgr_register(SCREEN_WHOAMI_ID, &screen_whoami);
+
+    scr_mgr_register(SCREEN_LEVELTEST_ID, &screen_leveltest);
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);
