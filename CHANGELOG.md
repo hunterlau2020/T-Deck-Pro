@@ -3,6 +3,34 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-18（v1.14：评审修复轮——1561b41..b92d021 四方结果处置）
+
+- **评审结论**：Claude A / Gemini C / GPT C / Grok A（`session-batch-
+  review-result-1561b41..b92d021-{claude,gemini,gpt,grok}.md`）。v1.2
+  四项核销经三方反例复核全部成立；WiFi 全链路发现 2×P1。
+- **P1-1（Gemini+GPT 独立同报，已核代码成立）SCAN_DONE 事件只在
+  create4_1 注册**：冷启动直进 4_2 → 扫描中按 Back → exit 的
+  stop-and-release 等一个**未注册的回调**，3 秒超时后 pending 永挂
+  （只有该回调能清）→ 4_2 的 kick 守卫永远拒绝 → **扫描功能死锁直到
+  重启**。修复：`wifi_scan_event_ensure_registered()` 幂等注册，
+  create4_1 与 entry4_2 都调用（任何可能 abort/release 的入口先注册）。
+- **P1-2（Gemini+GPT/Grok P2-2b 同源）autoconn 事件只在 start 注册**：
+  空槽新设备开机不跑 start（事件未注册）→ 首次手动 Connect 成功走
+  restart（不注册）→ 之后断链 DISCONNECTED 无回调 → fails 永不增长
+  → **5 次上限失效，退化为 65s 无限重连**。修复：
+  `wifi_autoconn_event_ensure_registered()`，start 与 restart 都调用。
+- **P2-1（Grok）dropped_link 覆写**：`= (status==CONNECTED)` 在 4_2
+  第二轮 kick 时把 true 清成 false → exit 不 retry_now、等 65s guard。
+  修复：粘性置位（仅 reconnect 清零）。
+- **P2-2a（Grok，上轮 P2-7 残余）whoami 部分保存**：server 成功但
+  provider 写失败时不 `++cfg_gen` 不清缓存 → 旧账号在途结果仍可回写。
+  修复：server_ok 即失效代次 + 清缓存 + 通知 PenPal。
+- **Nit×2（Claude）**：`s_shown_link` 提文件级并在 entry4_1 重置
+  （已修）；`cursor.show` 直写包 helper（登记 TODO，调用点集中不再
+  扩展）。
+- 版本 v1.13 → **v1.14**。真机反例待验：直进 4_2 扫描中 Back 再进
+  （P1-1）；4_2 停留 >10s 退出后立即重连（P2-1）。
+
 ## 2026-09-18（v1.13：等级自测 APP + 主菜单三屏重排）
 
 - **用户需求**：① 根据 `remote_api_demo.py`（⓯ 定级测·整卷 staircase）

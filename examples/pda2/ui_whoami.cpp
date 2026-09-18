@@ -510,17 +510,29 @@ static void wa_cfg_save_cb(lv_event_t *e)
     if (server_ok && prov_ok) {
         wa_cfg_status("saved");
         pp_notify_cfg_changed();           /* PenPal re-syncs with new config */
-        s_wa_cfg_gen++;                   /* invalidate in-flight profile results */
         /* key may point at another user: drop the cached profile (both the
          * NVS cache and the RAM copy) so the next entry refetches */
-        wa_cache_clear();
         s_profile_valid = false;
         s_profile_fetched = false;
         wa_me_render();
     } else if (server_ok) {
         wa_cfg_status("server saved; AI provider save failed");
+        /* P2-7 residual (Grok): the key is already in NVS even though the
+         * provider write failed - the epoch bump and cache drop must not
+         * wait for it, or an in-flight old-account profile still matches
+         * the generation and can write itself back into the cache */
+        s_profile_valid = false;
+        s_profile_fetched = false;
+        wa_me_render();
     } else {
         wa_cfg_status("save failed (NVS)");
+    }
+    if (server_ok) {
+        s_wa_cfg_gen++;                   /* invalidate in-flight results (any
+                                             * server-side success changes who
+                                             * the key identifies) */
+        wa_cache_clear();
+        pp_notify_cfg_changed();          /* PenPal re-syncs with new config */
     }
 }
 

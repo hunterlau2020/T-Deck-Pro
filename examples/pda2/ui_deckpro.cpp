@@ -2221,6 +2221,10 @@ static lv_obj_t *wifi_slot_lab = NULL;
 static lv_obj_t *wifi_cfg_popup = NULL;
 static bool wifi_cfg_kbd_active = false;
 static int  wifi_cfg_field = 0;                 // 0 = SSID, 1 = password
+/* link-state snapshot for the live status line; reset on 4_1 entry (Nit,
+ * review 1561b41..b92d021 Claude): a re-entry with an unchanged state but a
+ * NEW IP would otherwise skip the rewrite and show a stale line */
+static wl_status_t s_shown_link = WL_NO_SHIELD;
 static bool wifi_cfg_scan_mode = false;         // true: +/- cycle scan picks (else manual edit)
 static int16_t wifi_scan_state = WIFI_SCAN_FAILED; // WIFI_SCAN_RUNNING while async scan active
 static uint8_t wifi_scan_gen = 0;                 // bumped to invalidate an in-flight scan
@@ -2229,6 +2233,21 @@ static volatile uint32_t s_scan_done_cnt = 0;     // increments on every SCAN_DO
 static bool s_scan_event_registered = false;
 static bool s_scan_release_pending = false;       // aborted scan's SCAN_DONE still missing
 static uint32_t s_scan_release_target = 0;        // cnt at abort; an event past it clears pending
+
+/* Idempotent SCAN_DONE registration (review 1561b41..b92d021 P1, Gemini+GPT):
+ * the callback used to be hooked ONLY in create4_1, but 4_2's exit also runs
+ * the stop-and-release protocol when a scan is in flight - a cold boot that
+ * goes straight to WIFI Scan and presses Back mid-scan left the release
+ * pending forever (only the callback clears it) and 4_2 never scanned again.
+ * Every path that can abort/release a scan must land here first. */
+static void wifi_scan_done_cb(arduino_event_id_t event, arduino_event_info_t info);
+static void wifi_scan_event_ensure_registered(void)
+{
+    if (!s_scan_event_registered) {
+        WiFi.onEvent(wifi_scan_done_cb, ARDUINO_EVENT_WIFI_SCAN_DONE);
+        s_scan_event_registered = true;
+    }
+}
 /* The callback runs on the WiFi event task, the UI polls from the main
  * loop: cnt/pending/target are shared state and must be touched inside
  * this critical section (copilot finding 1.3: unsynchronized reads can
@@ -2398,6 +2417,20 @@ static void wifi_autoconn_event(WiFiEvent_t ev)
     else if (ev == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) s_ac_disconnected = true;
 }
 
+/* One-shot, idempotent (review 1561b41..b92d021 P1, Gemini+GPT/Grok P2-2b):
+ * the event hook used to live only inside wifi_autoconn_start(), which the
+ * boot path skips on an empty NVS - a FIRST manual Connect then only ran
+ * wifi_autoconn_restart(), so a later link drop never raised the fail count
+ * and the manager degraded into an unbounded 65s retry loop. */
+static void wifi_autoconn_event_ensure_registered(void)
+{
+    static bool s_hooked = false;
+    if (!s_hooked) {
+        WiFi.onEvent(wifi_autoconn_event);
+        s_hooked = true;
+    }
+}
+
 void wifi_autoconn_start(void)               /* boot entry (factory.ino) */
 {
     char ssid[65] = {0}, pass[65] = {0};
@@ -2405,7 +2438,7 @@ void wifi_autoconn_start(void)               /* boot entry (factory.ino) */
     if (ssid[0] == '\0') return;
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(false);            /* the manager drives all retries */
-    WiFi.onEvent(wifi_autoconn_event);
+    wifi_autoconn_event_ensure_registered();
     s_autoconn_active = true;
     s_autoconn_fails = 0;
     s_autoconn_held = false;
@@ -2444,6 +2477,7 @@ bool wifi_scan_release_pending(void)         /* 4_2 kick guard (port layer) */
 
 void wifi_autoconn_restart(void)             /* after an explicit connect succeeded */
 {
+    wifi_autoconn_event_ensure_registered();  /* P1 fix: first-connect path */
     s_autoconn_fails = 0;
     s_ac_got_ip = false;
     s_autoconn_active = true;
@@ -2913,7 +2947,6 @@ void wifi_cfg_keyboard_poll()
      * "Not connected" forever even after GOT_IP. Only react to real state
      * CHANGES so in-progress banners (Connecting/Scan/etc) are preserved. */
     {
-        static wl_status_t s_shown_link = WL_NO_SHIELD;
         wl_status_t st = WiFi.status();
         if (st != s_shown_link) {
             s_shown_link = st;
@@ -3115,10 +3148,7 @@ static void wifi_clear_btn_cb(lv_event_t *e)
 static void create4_1(lv_obj_t *parent)
 {
     /* SCAN_DONE event signal for the abort path (review round 4 finding 1.2) */
-    if (!s_scan_event_registered) {
-        WiFi.onEvent(wifi_scan_done_cb, ARDUINO_EVENT_WIFI_SCAN_DONE);
-        s_scan_event_registered = true;
-    }
+    wifi_scan_event_ensure_registered();
 
     scr_back_btn_create(parent, "Wifi Config", scr4_1_btn_event_cb);
 
@@ -3264,6 +3294,7 @@ static void create4_1(lv_obj_t *parent)
 static void entry4_1(void)
 {
     ui_disp_full_refr();
+    s_shown_link = WL_NO_SHIELD;   /* force one status-line refresh on entry */
     if (wifi_scan_pick_ssid[0]) {
         /* A row was tapped on WIFI Scan (user report 2026-09-17): never
          * clobber an existing configuration - if the SSID is already
@@ -3665,6 +3696,9 @@ static void create4_2(lv_obj_t *parent)
 static void entry4_2(void)
 {
     ui_disp_full_refr();
+    wifi_scan_event_ensure_registered();   /* P1 fix: exit4_2's stop-and-release
+                                             * path needs the SCAN_DONE callback
+                                             * even when 4_1 was never opened */
     {
         extern void wifi_autoconn_hold(bool on);
         wifi_autoconn_hold(true);  /* whole-screen scan loop keeps the bounded

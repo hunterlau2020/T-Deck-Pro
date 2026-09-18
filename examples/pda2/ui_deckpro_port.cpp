@@ -451,10 +451,15 @@ void ui_wifi_scan_prepare(void)
 {
     extern void wifi_autoconn_hold(bool on);
     wifi_autoconn_hold(true);        /* suspend the bounded retry cycle for the scan */
-    s_scan_dropped_link = (WiFi.status() == WL_CONNECTED);
-    if (s_scan_dropped_link)
+    /* Sticky set (review P2-1, Grok): writing =(status==CONNECTED) let the
+     * 4_2 loop's SECOND kick clear the flag while idle, so a later exit
+     * skipped retry_now and waited out the 65s guard. Only reconnect()
+     * clears the drop marker. */
+    if (WiFi.status() == WL_CONNECTED) {
+        s_scan_dropped_link = true;
         Serial.println("[WiFi] prepare: dropping the link for an idle scan "
                        "(connected async scans get aborted mid-flight)");
+    }
     WiFi.setAutoReconnect(false);    /* belt-and-braces: no event-driven re-begin */
     WiFi.disconnect(false, false);   /* CONNECTED STAs TOO: a connected async scan is
                                       * aborted by the driver mid-flight (collect
