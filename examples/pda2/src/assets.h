@@ -38,6 +38,10 @@ LV_FONT_DECLARE(Font_Mono_Bold_17)
 LV_FONT_DECLARE(Font_Mono_Bold_18)
 LV_FONT_DECLARE(Font_Mono_Bold_19)
 LV_FONT_DECLARE(Font_Mono_Bold_20)
+/* ASCII 0x20-0x7F + full level-test vocab hanzi set (SimSun 16px bpp4,
+ * generated 2026-09-18 from the words-table meaning_zh union - the ~1000
+ * hanzi lv_font_simsun_16_cjk misses ~1 glyph per live paper). */
+LV_FONT_DECLARE(Font_Hanzi_16)
 
 #ifdef __cplusplus
 } /*extern "C"*/

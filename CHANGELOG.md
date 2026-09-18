@@ -3,6 +3,28 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-18（v1.16：Level APP 中文支持——Font_Hanzi_16 自定义字库）
+
+- **背景**：真机验收 v1.15 反馈——定级测词汇题选项是中文释义
+  （words 表 `meaning_zh` 首义），ASCII mono 字体渲染为空白。
+- **字库选型**：`lv_font_simsun_16_cjk`（约 1000 常用汉字）不够用——
+  实拉一卷就有 11 字缺字形（围/谅/广/袋/鼠/浓/缩/习/惯/险/逆）。
+  从后端 DB 全量提取词库汉字并集（21311 词 meaning_zh 全串 + 语法
+  题库源码字符，共 3955 字），用 lv_font_conv 1.5.3 生成
+  **Font_Hanzi_16**（SimSun 16px bpp4，ASCII + 全集，4057 字形，
+  ~488KB flash；app 分区 6.5MB 余量充足）。生成后回读 .c 文件
+  验证 0 缺字 + 实拉试卷 0 缺字（生成管线与验证脚本见本轮记录）。
+- **按内容切字体**：ui_leveltest 加 `lt_set_text()`（penpal msgbox
+  模式）——题干/选项/状态行/历史行含高位字节即切 Font_Hanzi_16，
+  否则保持 Font_Mono_Bold_15；语法题观感不变。
+- **截断安全性核对**：选项解析本就走 `s_copy_disp`（UTF-8 边界 +
+  "..." 标记），48B 缓冲超长释义（106/21311 词，最长 151B）安全
+  截断，单行显示本就 ~13 汉字，缓冲无需扩。
+- 后端测试服务器（E:/works/english_learning_system）本轮由助手
+  启动（仅运行未改码）；设备 base 仍指向 192.168.3.186:8000。
+- 版本 v1.15 → **v1.16**；COM5 刷写 6/6 块 VERIFIED，串口自证
+  `[FW] v1.16 build 2026-09-18` + `self-attest: mark valid ok`。
+
 ## 2026-09-18（v1.15：ds4 评审处置——终态扫描释放快径 + cursor.show 勘误）
 
 - **背景**：用户指出第 5 份评审 `...-ds4.md`（DeepSeek，结论 C）。

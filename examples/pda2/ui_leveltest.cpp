@@ -41,6 +41,24 @@ using namespace std;
 /* ui_deckpro.cpp keeps this macro private - mirror it (same assets font) */
 #define LT_FONT &Font_Mono_Bold_15
 
+/* Vocab options are the word's Chinese meaning (server DB), and grammar
+ * stems/options stay English: switch the label font per content - the mono
+ * asset font has no CJK glyphs (penpal msgbox pattern, user report
+ * 2026-09-18). Font_Hanzi_16 = ASCII + the full vocab hanzi set. */
+static bool lt_has_cjk(const char *txt)
+{
+    for (const unsigned char *p = (const unsigned char *)txt; p && *p; p++)
+        if (*p & 0x80) return true;
+    return false;
+}
+
+static void lt_set_text(lv_obj_t *lab, const char *txt)
+{
+    lv_label_set_text(lab, txt);
+    lv_obj_set_style_text_font(lab,
+        lt_has_cjk(txt) ? &Font_Hanzi_16 : LT_FONT, LV_PART_MAIN);
+}
+
 /* ---- screen state (UI thread owned) ---------------------------------------- */
 
 enum { LT_PAGE_HOME = 0, LT_PAGE_QUIZ, LT_PAGE_RESULT };
@@ -68,7 +86,7 @@ static void lt_answer(int opt_index);    /* below */
 static void lt_status(const char *txt)
 {
     snprintf(s_status, sizeof(s_status), "%s", txt);
-    if (s_status_lab) lv_label_set_text(s_status_lab, s_status);
+    if (s_status_lab) lt_set_text(s_status_lab, s_status);
 }
 
 /* ---- async glue (wa_* pattern) ---------------------------------------------- */
@@ -289,7 +307,7 @@ static void lt_render_home(void)
         snprintf(buf, sizeof(buf), "Last: %s  score %d\n%.10s",
                  s_last_hist[0].resulting_level, s_last_hist[0].score,
                  s_last_hist[0].created_at);
-        lv_label_set_text(s_home_hist_lab, buf);
+        lt_set_text(s_home_hist_lab, buf);
     } else {
         lv_label_set_text(s_home_hist_lab, "(no previous result)");
     }
@@ -303,13 +321,13 @@ static void lt_render_question(void)
     snprintf(prog, sizeof(prog), "Q%d/%d  %s  %s", s_quiz_pos + 1,
              s_quiz_count, q->level, q->type);
     lv_label_set_text(s_progress_lab, prog);
-    lv_label_set_text(s_stem_lab, q->stem);
+    lt_set_text(s_stem_lab, q->stem);
     for (int i = 0; i < PP_LT_OPT_MAX; i++) {
         if (i < q->opt_count) {
             char buf[56];
             snprintf(buf, sizeof(buf), "%d. %s", i + 1, q->options[i]);
             lv_obj_clear_flag(s_opt[i], LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(s_opt[i], buf);
+            lt_set_text(s_opt[i], buf);
         } else {
             lv_obj_add_flag(s_opt[i], LV_OBJ_FLAG_HIDDEN);
         }
