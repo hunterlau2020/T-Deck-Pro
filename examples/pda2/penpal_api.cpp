@@ -655,7 +655,7 @@ bool penpal_lt_get_history(const char *base, const char *key,
 /* ---- word bank (Word Bank app "new_dict", 2026-09-18) ---------------------- */
 
 bool penpal_wb_list(const char *base, const char *key, int skip, const char *q,
-                    pp_wb_page_t *out, string *err)
+                    const char *exam, pp_wb_page_t *out, string *err)
 {
     *out = pp_wb_page_t{};
     if (!pp_cfg_ok(base, key, err)) return false;
@@ -666,6 +666,10 @@ bool penpal_wb_list(const char *base, const char *key, int skip, const char *q,
     if (q && q[0]) {
         url_path += "&q=";
         s_urlenc(url_path, q);
+    }
+    if (exam && exam[0]) {
+        url_path += "&exam=";
+        s_urlenc(url_path, exam);
     }
 
     pp_http_t r = pp_request("GET", pp_url(base, url_path.c_str()),
@@ -699,6 +703,43 @@ bool penpal_wb_list(const char *base, const char *key, int skip, const char *q,
     out->count = n;
     Serial.printf("%s words page: skip=%d n=%d total=%d\n", PP_TAG,
                   out->skip, n, out->total);
+    return true;
+}
+
+bool penpal_wb_exams(const char *base, const char *key,
+                     pp_wb_exam_t *out, int max, int *count,
+                     int *total_words, string *err)
+{
+    if (count) *count = 0;
+    if (total_words) *total_words = 0;
+    if (!pp_cfg_ok(base, key, err)) return false;
+
+    pp_http_t r = pp_request("GET", pp_url(base, "/words/exams"),
+                             NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);
+        Serial.printf("%s exams failed: %s\n", PP_TAG, pp_fail(r).c_str());
+        return false;
+    }
+    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!root) {
+        if (err) *err = "bad JSON (exams)";
+        return false;
+    }
+    if (total_words)
+        *total_words = cJSON_GetObjectItem(root, "total_words")->valueint;
+    int n = 0;
+    cJSON *it;
+    cJSON_ArrayForEach(it, cJSON_GetObjectItem(root, "items")) {
+        if (n >= max) break;
+        out[n] = pp_wb_exam_t{};
+        s_copy(out[n].exam, sizeof(out[n].exam), s_lt_str(it, "exam"));
+        out[n].count = cJSON_GetObjectItem(it, "count")->valueint;
+        n++;
+    }
+    cJSON_Delete(root);
+    if (count) *count = n;
+    Serial.printf("%s exams: %d cards\n", PP_TAG, n);
     return true;
 }
 

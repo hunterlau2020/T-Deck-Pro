@@ -284,16 +284,19 @@ bool penpal_lt_submit(const char *base, const char *key,
 bool penpal_lt_get_history(const char *base, const char *key,
                            pp_lt_hist_t *out, int max, int *count, string *err);
 
-/* ---- word bank (Word Bank app "new_dict", 2026-09-18) -----------------------
- * "⑫ 词库浏览" in remote_api_demo.py - read-only learn-scope endpoints:
- *   GET /words?skip&limit&cefr&theme&q -> {items, total, skip, limit};
- *   q matches word OR meaning_zh (LIKE), so English prefixes and Chinese
- *   substrings both work. GET /words/{id}/detail -> the VOCABD-2 detail
- *   card (pos-grouped senses, examples, chunks, assoc groups, tags). */
+/* ---- word bank (Word Bank app "new_dict", 2026-09-18; exam tabs v1.20) -------
+ * "⑫ 词库浏览 + ⑫b 考试选卡" in remote_api_demo.py - read-only learn-scope
+ * endpoints:
+ *   GET /words?skip&limit&cefr&theme&q&exam -> {items, total, skip, limit};
+ *   q matches word OR meaning_zh (LIKE); exam is an EXACT exam_tags match
+ *   (candidate values from GET /words/exams). GET /words/{id}/detail ->
+ *   the VOCABD-2 detail card (pos-grouped senses, examples, chunks, assoc
+ *   groups, tags). */
 #define PP_WB_ROWS      8    /* list rows fetched per page (device screen) */
 #define PP_WB_SENSE_MAX 6    /* flattened "pos: zh (en)" lines kept */
 #define PP_WB_EX_MAX    2    /* example lines kept */
 #define PP_WB_CHUNK_MAX 2    /* chunk lines kept */
+#define PP_WB_EXAM_MAX  16   /* exam cards kept (bank currently has 15) */
 
 typedef struct {
     int  id;
@@ -301,6 +304,11 @@ typedef struct {
     char cefr_level[8];                   /* Pre-A1 / A1 / A2 / B1 / B2+ */
     char meaning_zh[56];                  /* display copy (CJK possible) */
 } pp_wb_item_t;
+
+typedef struct {
+    char exam[20];                        /* "IELTS" / "中考"... (UTF-8) */
+    int  count;                           /* words tagged with this exam */
+} pp_wb_exam_t;
 
 typedef struct {
     int  total;                           /* whole-bank match count */
@@ -324,10 +332,16 @@ typedef struct {
     char assoc[96];                       /* first group "type: w1, w2" */
 } pp_wb_detail_t;
 
-/** @brief GET /words - one bank page. q may be "" (browse); percent-encoded
- *         here. cefr "" = no filter. */
+/** @brief GET /words - one bank page. q may be "" (browse) and exam ""
+ *         (no exam filter); both percent-encoded here. */
 bool penpal_wb_list(const char *base, const char *key, int skip, const char *q,
-                    pp_wb_page_t *out, string *err);
+                    const char *exam, pp_wb_page_t *out, string *err);
+
+/** @brief GET /words/exams - exam cards ordered by word count (desc).
+ *         15 in the current bank; *total_words receives the bank size. */
+bool penpal_wb_exams(const char *base, const char *key,
+                     pp_wb_exam_t *out, int max, int *count,
+                     int *total_words, string *err);
 
 /** @brief GET /words/{id}/detail - the detail card, flattened for EPD. */
 bool penpal_wb_detail(const char *base, const char *key, int id,

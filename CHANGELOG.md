@@ -3,6 +3,25 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-18（v1.20：NewDict 交互重做——搜索首页 + Home/List 双 Tab + 考试选卡）
+
+- **用户三条指令**：①入口挪到第一屏；②首页改为搜索输入框（参考本地
+  Dict），不再默认列全库；③顶部加 Home / List 两个 tab，List 列考试名
+  （范例 ⑫b"九十九"新 API：`GET /words/exams` 枚举 + `GET /words?exam=`
+  按考试名列词）。
+- **UI 重构**（ui_newdict.cpp）：共享行池 + 两个顶层页面（TABS/DETAIL）；
+  Home tab = 单行搜索框（v1.12 EPD 纪律：光标 bg_opa 透明 + anim_time 0，
+  无闪烁无插入符）+ 结果行；List tab = 考试卡（"IELTS 5700"，15 张本地
+  翻页）→ 点击进入该考试词书（服务端 skip 翻页）；退格逐级返回
+  （词书→考试卡→退出）；任意字母输入自动跳回 Home tab。
+- **penpal_api**：`penpal_wb_exams()`（考试卡枚举）+ `penpal_wb_list()`
+  增加 `exam` 参数（与 q 同走 percent-encode，中文考试名如"中考"）。
+- **联调**：本地服务进程又一次跑旧代码（/exams 被 /words/{word_id}
+  吞掉、exam 过滤被忽略）——重启后端后 15 张考试卡/中考 1903 词验证
+  通过（IELTS 5700 → 中考 1903 降序正确）。
+- 版本 v1.19 → **v1.20**。刷写遇设备深睡断 COM5 安全中止（零写入），
+  待唤醒后重刷。
+
 ## 2026-09-18（v1.19：新 APP "new_dict" 词库浏览——范例步骤 ⑫）
 
 - **功能**：按新范例 `demo_vocab_bank` 实现服务器词库在线浏览/查词：

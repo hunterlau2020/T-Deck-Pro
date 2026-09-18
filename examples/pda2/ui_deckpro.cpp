@@ -275,6 +275,7 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN_AI_CFG_ID,     &img_setting,    "AI Cfg",  23,   101, 0},
     {SCREEN_LEVELTEST_ID,  &img_test,       "Level",   95,   101, 0},
     {SCREEN_WHOAMI_ID,     &img_touch,      "Whoami",  95,   189, 0},
+    {SCREEN_NEWDICT_ID,    &img_dictionary, "NewDict", 23,   189, 0},
     /* Page two: Wifi/Setting/Sleep + the four learning tools */
     {SCREEN4_ID,           &img_wifi,       "Wifi",    23,   13,  1},
     {SCREEN2_ID,           &img_setting,    "Setting", 95,   13,  1},
@@ -283,7 +284,6 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN_CALCULATOR_ID, &img_calculator, "Calc",    95,   101, 1},
     {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    167,  101, 1},
     {SCREEN11_ID,          &img_sleep,      "Sleep",   23,   189, 1},
-    {SCREEN_NEWDICT_ID,    &img_dictionary, "NewDict", 95,   189, 1},
     /* Page three: shutdown/Lora + hardware / system entries (A7682E shows
      * as PCM5102 when the modem is absent - same list slot) */
     {SCREEN9_ID,           &img_lora,       "Shutdown",23,   13,  2},
