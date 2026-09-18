@@ -1,6 +1,6 @@
 # 异步 IPC 契约（pda2）
 
-> 本文档是 WiFi 页（WiFi Test / Time Sync）、AI Config、AI Chat、Whoami、OTA 五组异步任务的统一合同。
+> 本文档是 WiFi 页（WiFi Test / Time Sync）、AI Config、AI Chat、PenPal、Whoami、OTA、LevelTest、WordBank 各组异步任务的统一合同。
 > 评审要求来源：`wifi-config-keyboard-review-result-01f8eac..8b96656.md` 主评审 §1.3。
 > 任何新增异步任务必须遵守本契约；违反时以本文件为准。
 >
@@ -19,6 +19,9 @@
 | Whoami Profile/Test | `wa_task_func` | `s_wa_q`（一次创建永不删除） | `s_wa_task`（任务句柄即 busy，单飞） | `s_wa_cfg_gen`（**配置代次**，非页面代次——同一次访问内换 key 保存也必须作废在飞 profile，评审 `095e41a..301c571` GPT P1） |
 | OTA Check | `ota_check_task` | `s_ota_q`（指针通道，单元素 overwrite，覆盖前回收旧指针） | `s_ota_inflight`（创建任务前置位） | 调用方传入的 `gen`（UI 覆盖层代次） |
 | OTA Update | `ota_update_task` | 同上（共用） | `s_ota_inflight` | 同上 |
+| PenPal | `pp_task_func` | `s_pp_q`（一次创建永不删除） | `s_pp_busy` + `s_pp_busy_gen` | `s_pp_gen`（页面代次） |
+| LevelTest | `lt_task_func` | `s_lt_q`（一次创建永不删除） | `s_lt_task`（任务句柄即 busy，单飞，wa 模式） | `s_lt_gen`（屏幕代次，entry/exit 各 +1） |
+| WordBank (new_dict) | `nd_task_func` | `s_nd_q`（一次创建永不删除） | `s_nd_task`（同上） | `s_nd_gen`（同上） |
 
 ## 2. 硬性规则
 
@@ -36,6 +39,10 @@
 7. **阻塞策略**：`xQueueSend(..., portMAX_DELAY)` 无限等待。深度恒为 4，且 UI 在
    busy 期间拒绝新请求，故同一时刻最多 1 个在飞结果 —— 队列不会积压，无限等待
    不会实际发生。若未来允许并发请求，必须先重审队列深度与阻塞策略。
+   **已批准变体**（2026-09-18 登记）：wa 模式的后继（Whoami/LevelTest/WordBank）
+   用 `pdMS_TO_TICKS(2000)` 有界发送、超时自 `delete` 结果——前提同样是
+   "队列一次创建永不删除 + 单飞"，发送实际不会阻塞；有界 + 自释放只是队列
+   意外不存在的泄漏兜底。PenPal 维持 `portMAX_DELAY` 原文。
 8. **页面生命周期**：
    - `destroy()`：`kbd_active=false`、页面代次 +1、busy=false（安全：在飞任务持有
      自己的快照，其迟到结果会被代次校验丢弃）、弹窗关闭（Close 语义同步触发请求
@@ -66,3 +73,6 @@
 - 2026-08-16：初版。随"WiFi busy 代次 / AI Test 最小 chat-completion /
   AI Chat 每任务快照"整改落地；此前的 `busy` 无代次、任务读全局缓冲等
   违反项已修复（commit 见各模块提交记录）。
+- 2026-09-18：补登 PenPal（v1.13 前后落地，漏登）/ LevelTest（v1.13，
+  v1.17 重写）/ WordBank new_dict（v1.19）三行；规则 7 登记 wa 模式的
+  有界发送变体（2s + 超时自释放）。

@@ -220,7 +220,7 @@ pio run -e factory -t upload -t monitor   # 烧录 + 打开串口监视器（115
 | `test_lora_recv` | LoRa 接收 | RadioLib |
 | `test_lvgl` | LVGL UI | lvgl、GxEPD2、SensorLib、Adafruit GFX |
 | `factory` | 出厂固件（全套硬件自检） | lvgl、GxEPD2、TinyGPSPlus、SensorLib、XPowersLib、BQ27220、RadioLib 等 |
-| `pda2` | PDA 应用（计算器/天气/日历/词典/Gemini AI） | factory 全家桶 + WiFi/HTTPClient/WiFiClientSecure/ESP32-audioI2S |
+| `pda2` | PDA 应用（三屏 22 入口：PenPal/AI 三件套/LevelTest/Whoami/WiFi 槽位/Setting/天气/日历/计算/词典×2/系统硬件页） | factory 全家桶 + WiFi/HTTPClient/WiFiClientSecure/ESP32-audioI2S |
 
 ## 7. 常用命令速查
 
