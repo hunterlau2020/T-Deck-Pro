@@ -28,6 +28,7 @@ These come from prior session memory and review rounds; treat them as hard rules
 | Async task model (queues / busy generation / ownership) | `docs/async_ipc_contract.md` |
 | allinone consolidated firmware design (not yet implemented) | `docs/allinone-design.md` |
 | PenPal app design (v3.2), async model, §7 device-regression checklist | `docs/penpal-design.md` |
+| Learn-channel apps (LevelTest staircase, WordBank/new_dict) API contracts & state machines | code headers in `ui_leveltest.cpp` / `ui_newdict.cpp` + CHANGELOG v1.17/v1.19 + their review requests |
 | Working notes (EPD/touch/manual regression/latest review integration) | `docs/allinone-design.md` §11 |
 | Code review history (each round = paired request + result file under commit id) | `docs/reviews/wifi-config-keyboard-review-*` |
 | Review methodology (grading table / evidence rules / load-bearing invariants / request+result templates) | `docs/review_guide.md` |

@@ -6,6 +6,13 @@
 
 - 申请文件：`wifi-config-keyboard-review-request-<commit范围>.md`
   - 新申请**必须**带 commit id 范围；**绝不覆盖**旧申请文件。
+  - **非连续提交集的命名（2026-09-18 起）**：按主题拆段后提交集不连续时
+    （如 LevelTest 功能族与夹在中间的修复轮分属两份申请），允许描述性
+    文件名（如 `session-batch-review-request-leveltest-family.md`、
+    `...-newdict-d5755ae.md`），但文件内必须列明全部 commit id 并写清与
+    相邻申请的分界；连续区间沿用区间记法。此条收拢 ds4 Nit-2 /
+    issue_list §27 悬置的命名口径之争——区间记法的前提是"连续"，非连续
+    集合强行套区间名会误导评审范围。
 - 结果文件：`wifi-config-keyboard-review-result-<commit范围>.md`
   - 双评审时加后缀 `-copilot.md`。
 - 归档规则：评审结果由评审方直接放入本目录；申请人把设计评审类文档
