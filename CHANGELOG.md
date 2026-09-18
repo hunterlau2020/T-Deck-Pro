@@ -3,6 +3,29 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-18（v1.19：新 APP "new_dict" 词库浏览——范例步骤 ⑫）
+
+- **功能**：按新范例 `demo_vocab_bank` 实现服务器词库在线浏览/查词：
+  - LIST 页：8 行词表（单词 + CEFR + 中文释义），键盘输入即构建
+    搜索词（q 同时匹配 word 与 meaning_zh，英文前缀/中文子串均可）；
+    Enter 搜索（或打开焦点行），+/- 移动焦点、到边翻页（skip±8），
+    触摸行直接打开；退格删查询字符、查询空时退格退出。
+  - DETAIL 页：词头（词/音标/级别/释义）+ 词性分组义项 + 双语例句
+    ×2 + 词块 ×2 + 关联词组首组；Enter/退格返回列表。
+  - 中文内容按 LevelTest v1.16 模式切 Font_Hanzi_16；异步走 wa_*
+    单飞 + gen 丢弃契约；v1.18 的"在飞吞键"教训直接落地（Enter
+    缓冲、前置拒绝打点）。
+- **penpal_api**：`pp_wb_page_t`/`pp_wb_detail_t` + `penpal_wb_list`
+  （q percent-encode）/ `penpal_wb_detail`（服务端 senses 分组在
+  解析层拍平为 EPD 显示行）。
+- **菜单**：第 2 屏新增 "NewDict"（Dict 旁，page=1），SCREEN_NEWDICT_ID。
+- **联调插曲**：本地服务 20:40 拉起后 words 端点 401——词库 learn-scope
+  改动落盘晚于进程启动且 uvicorn 无 --reload，重启后端即恢复（仅
+  运维操作）。
+- **验证**：API 冒烟（分页/q=app→41 词/q=苹果→apple/详情卡字段）；
+  COM5 6/6 VERIFIED，`[FW] v1.19` + `mark valid ok`。
+- 版本 v1.18 → **v1.19**。
+
 ## 2026-09-18（v1.18：Level APP 首次进入 Enter 被吞——在飞请求窗口缓冲按键意图）
 
 - **现象**（真机报告）：首次进入 Level APP 后第一次按 Enter 总是没反应，

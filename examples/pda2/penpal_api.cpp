@@ -652,6 +652,162 @@ bool penpal_lt_get_history(const char *base, const char *key,
     return true;
 }
 
+/* ---- word bank (Word Bank app "new_dict", 2026-09-18) ---------------------- */
+
+bool penpal_wb_list(const char *base, const char *key, int skip, const char *q,
+                    pp_wb_page_t *out, string *err)
+{
+    *out = pp_wb_page_t{};
+    if (!pp_cfg_ok(base, key, err)) return false;
+
+    char path[96];
+    snprintf(path, sizeof(path), "/words?limit=%d&skip=%d", PP_WB_ROWS, skip);
+    string url_path = path;
+    if (q && q[0]) {
+        url_path += "&q=";
+        s_urlenc(url_path, q);
+    }
+
+    pp_http_t r = pp_request("GET", pp_url(base, url_path.c_str()),
+                             NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);
+        Serial.printf("%s words list failed: %s\n", PP_TAG, pp_fail(r).c_str());
+        return false;
+    }
+    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!root) {
+        if (err) *err = "bad JSON (words page)";
+        return false;
+    }
+    out->total = cJSON_GetObjectItem(root, "total")->valueint;
+    out->skip = cJSON_GetObjectItem(root, "skip")->valueint;
+    int n = 0;
+    cJSON *it;
+    cJSON_ArrayForEach(it, cJSON_GetObjectItem(root, "items")) {
+        if (n >= PP_WB_ROWS) break;
+        out->items[n].id = cJSON_GetObjectItem(it, "id")->valueint;
+        s_copy(out->items[n].word, sizeof(out->items[n].word),
+               s_lt_str(it, "word"));
+        s_copy(out->items[n].cefr_level, sizeof(out->items[n].cefr_level),
+               s_lt_str(it, "cefr_level"));
+        s_copy_disp(out->items[n].meaning_zh, sizeof(out->items[n].meaning_zh),
+                    s_lt_str(it, "meaning_zh"));
+        n++;
+    }
+    cJSON_Delete(root);
+    out->count = n;
+    Serial.printf("%s words page: skip=%d n=%d total=%d\n", PP_TAG,
+                  out->skip, n, out->total);
+    return true;
+}
+
+bool penpal_wb_detail(const char *base, const char *key, int id,
+                      pp_wb_detail_t *out, string *err)
+{
+    *out = pp_wb_detail_t{};
+    if (!pp_cfg_ok(base, key, err)) return false;
+
+    char path[48];
+    snprintf(path, sizeof(path), "/words/%d/detail", id);
+    pp_http_t r = pp_request("GET", pp_url(base, path),
+                             NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);
+        Serial.printf("%s word detail failed: %s\n", PP_TAG, pp_fail(r).c_str());
+        return false;
+    }
+    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!root) {
+        if (err) *err = "bad JSON (word detail)";
+        return false;
+    }
+    out->id = cJSON_GetObjectItem(root, "id")->valueint;
+    s_copy(out->word, sizeof(out->word), s_lt_str(root, "word"));
+    s_copy(out->phonetic, sizeof(out->phonetic), s_lt_str(root, "phonetic"));
+    s_copy(out->cefr_level, sizeof(out->cefr_level),
+           s_lt_str(root, "cefr_level"));
+    s_copy_disp(out->meaning_zh, sizeof(out->meaning_zh),
+                s_lt_str(root, "meaning_zh"));
+
+    /* flatten pos-grouped senses into "pos: zh (en)" display lines */
+    int s = 0;
+    cJSON *grp, *sen;
+    cJSON_ArrayForEach(grp, cJSON_GetObjectItem(root, "senses")) {
+        cJSON_ArrayForEach(sen, cJSON_GetObjectItem(grp, "senses")) {
+            if (s >= PP_WB_SENSE_MAX) goto senses_done;
+            const char *pos = s_lt_str(grp, "pos");
+            const char *zh = s_lt_str(sen, "zh");
+            const char *en = s_lt_str(sen, "en");
+            if (!zh || !zh[0]) zh = en;         /* some senses are EN-only */
+            if (!zh || !zh[0]) continue;
+            if (en && en[0] && zh != en)
+                snprintf(out->senses[s], sizeof(out->senses[s]), "%s: %s (%s)",
+                         pos ? pos : "?", zh, en);
+            else
+                snprintf(out->senses[s], sizeof(out->senses[s]), "%s: %s",
+                         pos ? pos : "?", zh);
+            s++;
+        }
+    }
+senses_done:
+    out->sense_count = s;
+
+    int e = 0;
+    cJSON *ex;
+    cJSON_ArrayForEach(ex, cJSON_GetObjectItem(root, "examples")) {
+        if (e >= PP_WB_EX_MAX) break;
+        const char *en = s_lt_str(ex, "en");
+        const char *zh = s_lt_str(ex, "zh");
+        if (!en || !en[0]) continue;
+        if (zh && zh[0])
+            snprintf(out->examples[e], sizeof(out->examples[e]), "%s / %s",
+                     en, zh);
+        else
+            snprintf(out->examples[e], sizeof(out->examples[e]), "%s", en);
+        e++;
+    }
+    out->ex_count = e;
+
+    int c = 0;
+    cJSON *ck;
+    cJSON_ArrayForEach(ck, cJSON_GetObjectItem(root, "chunks")) {
+        if (c >= PP_WB_CHUNK_MAX) break;
+        const char *text = s_lt_str(ck, "text");
+        const char *zh = s_lt_str(ck, "zh");
+        if (!text || !text[0]) continue;
+        if (zh && zh[0])
+            snprintf(out->chunks[c], sizeof(out->chunks[c]), "%s (%s)", text,
+                     zh);
+        else
+            snprintf(out->chunks[c], sizeof(out->chunks[c]), "%s", text);
+        c++;
+    }
+    out->chunk_count = c;
+
+    /* first assoc group only (screen real estate): "type: w1, w2 ..." */
+    const cJSON *ag = cJSON_GetArrayItem(cJSON_GetObjectItem(root,
+                                                             "assoc_groups"), 0);
+    if (ag) {
+        const char *type = s_lt_str(ag, "type");
+        int off = snprintf(out->assoc, sizeof(out->assoc), "[%s]",
+                           type ? type : "rel");
+        bool started = false;
+        cJSON *w;
+        cJSON_ArrayForEach(w, cJSON_GetObjectItem(ag, "words")) {
+            if (!cJSON_IsString(w) || !w->valuestring) continue;
+            if (off >= (int)sizeof(out->assoc) - 2) break;
+            off += snprintf(out->assoc + off, sizeof(out->assoc) - off,
+                            "%s%s", started ? ", " : ": ", w->valuestring);
+            started = true;
+        }
+    }
+    cJSON_Delete(root);
+    Serial.printf("%s word detail: %s (%s) senses=%d ex=%d\n", PP_TAG,
+                  out->word, out->cefr_level, out->sense_count, out->ex_count);
+    return true;
+}
+
 bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count)
 {
     if (count) *count = 0;

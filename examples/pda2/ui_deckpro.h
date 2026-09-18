@@ -81,6 +81,8 @@ enum {
     SCREEN_WHOAMI_ID,
     /* LevelTest app (user request 2026-09-18): menu page one */
     SCREEN_LEVELTEST_ID,
+    /* Word Bank app "new_dict" (user request 2026-09-18): menu page two */
+    SCREEN_NEWDICT_ID,
     /* appended at the END (OTA design §4/§10): Settings' OTA Update page */
     SCREEN2_2_ID,
 };

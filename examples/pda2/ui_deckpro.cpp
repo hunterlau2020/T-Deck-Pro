@@ -7,6 +7,7 @@
 #include "openai_api.h"     /* openai_stats_flush() at the deep-sleep checkpoint */
 #include "Audio.h"          /* idle auto-sleep guard: audio.isRunning() */
 #include "ui_leveltest.h"   /* LevelTest app (menu page one, 2026-09-18) */
+#include "ui_newdict.h"     /* Word Bank app "new_dict" (menu page two, 2026-09-18) */
 
 #define SETTING_PAGE_MAX_ITEM 7
 #define GET_BUFF_LEN(a) sizeof(a)/sizeof(a[0])
@@ -282,6 +283,7 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN_CALCULATOR_ID, &img_calculator, "Calc",    95,   101, 1},
     {SCREEN_DICTIONARY_ID, &img_dictionary, "Dict",    167,  101, 1},
     {SCREEN11_ID,          &img_sleep,      "Sleep",   23,   189, 1},
+    {SCREEN_NEWDICT_ID,    &img_dictionary, "NewDict", 95,   189, 1},
     /* Page three: shutdown/Lora + hardware / system entries (A7682E shows
      * as PCM5102 when the modem is absent - same list slot) */
     {SCREEN9_ID,           &img_lora,       "Shutdown",23,   13,  2},
@@ -5631,6 +5633,8 @@ void ui_deckpro_entry(void)
     scr_mgr_register(SCREEN_WHOAMI_ID, &screen_whoami);
 
     scr_mgr_register(SCREEN_LEVELTEST_ID, &screen_leveltest);
+
+    scr_mgr_register(SCREEN_NEWDICT_ID, &screen_newdict);
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);
