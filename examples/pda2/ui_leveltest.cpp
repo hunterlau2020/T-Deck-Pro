@@ -84,6 +84,9 @@ static pp_lt_answer_t s_ans[PP_LT_A_MAX];
 static int s_ans_n = 0;
 static pp_lt_question_t s_cur;           /* question currently on screen */
 static bool s_next_retry = false;        /* one silent retry for a NEXT fetch */
+static bool s_enter_pending = false;     /* Enter seen during an in-flight
+                                          * request - fires when the task
+                                          * goes idle (see keyboard poll) */
 
 /* Asked-stem list for the exclude param ("|||"-joined, RAW/decoded bytes -
  * the server validates the decoded value at 2000; stop appending when the
@@ -122,6 +125,7 @@ static void lt_session_reset(void)
     s_excl_len = 0;
     s_exclude[0] = '\0';
     s_next_retry = false;
+    s_enter_pending = false;
 }
 
 /* One step per recorded answer; returns the termination reason or NULL. */
@@ -238,10 +242,12 @@ static bool lt_start(int kind)
     penpal_load_config(base, sizeof(base), key, sizeof(key));
     if (base[0] == '\0' || key[0] == '\0') {
         lt_status("server/key not set (Whoami Cfg)");
+        Serial.println("[LT] start refused: server/key not set");
         return false;
     }
     if (WiFi.status() != WL_CONNECTED) {
         lt_status("WiFi not connected");
+        Serial.println("[LT] start refused: WiFi not connected");
         return false;
     }
     if (!s_lt_q) s_lt_q = xQueueCreate(4, sizeof(void *));
@@ -533,6 +539,21 @@ void leveltest_keyboard_poll(void)
     if (!s_status_lab) return;           /* screen never created */
     lt_consume();
 
+    /* An Enter seen while a request was in flight fires as soon as the
+     * task goes idle. First entry after boot is the deterministic trap:
+     * entry_lt() launches the history fetch, the session's FIRST HTTP(S)
+     * round-trip can hold s_lt_task for seconds, and the old plain
+     * `continue` ate the key with zero feedback - the user had to press
+     * Enter twice (device report 2026-09-18). Quiz keys 1-4 stay dropped
+     * in flight ON PURPOSE: the visible question is already answered. */
+    if (s_enter_pending && !s_lt_task && s_lt_page != LT_PAGE_QUIZ) {
+        s_enter_pending = false;
+        lt_session_reset();
+        lt_status("Fetching first question...");
+        lt_start(LT_REQ_NEXT);
+        return;
+    }
+
     char c;
     int guard = 8;
     while (guard-- > 0 && keypad_get_val(&c)) {
@@ -542,7 +563,11 @@ void leveltest_keyboard_poll(void)
             keypad_clear_chars();
             return;
         }
-        if (s_lt_task) continue;         /* request in flight */
+        if (s_lt_task) {                 /* request in flight */
+            if (c == '\n' && s_lt_page != LT_PAGE_QUIZ)
+                s_enter_pending = true;  /* buffered, not eaten */
+            continue;
+        }
 
         if (s_lt_page != LT_PAGE_QUIZ && c == '\n') {
             lt_session_reset();
