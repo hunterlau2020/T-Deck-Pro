@@ -233,7 +233,12 @@ typedef struct {
     int  index;
     char level[8];                        /* CEFR: Pre-A1 / A1 / A2 / B1 / B2+ */
     char type[10];                        /* grammar | vocab */
-    char stem[128];                       /* display copy */
+    char stem[128];                       /* display copy. PREMISE (review
+                                             ds4 Nit-2): current grammar
+                                             stems are far shorter; a future
+                                             stem >127B truncates here and
+                                             would MISMATCH the exclude list
+                                             (repeats possible) */
     int  opt_count;
     char options[PP_LT_OPT_MAX][48];      /* display copy */
     int  answer_index;                    /* ships with the question (client grades) */

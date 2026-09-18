@@ -171,7 +171,9 @@ static void nd_task_func(void *param)
     snprintf(m->err, sizeof(m->err), "%s", err.c_str());
 
     if (s_nd_q) {
-        xQueueSend(s_nd_q, &m, pdMS_TO_TICKS(2000));
+        if (xQueueSend(s_nd_q, &m, pdMS_TO_TICKS(2000)) != pdTRUE)
+            delete m;                   /* Nit-1: implement the documented
+                                          * bounded-send leak guard */
     } else {
         delete m;
     }
@@ -399,9 +401,17 @@ static void nd_page_show(int page)
 
 static void nd_tab_style(void)
 {
-    for (int i = 0; i < 2; i++)
+    /* EPD-safe active cue: black bg + white text vs transparent + black
+     * (issue_list §23: a gray fill like LV_OPA_20 blends to ~204 > the
+     * 128 threshold and renders WHITE - invisible). */
+    for (int i = 0; i < 2; i++) {
+        bool act = (i == s_tab);
         lv_obj_set_style_bg_opa(s_tab_btn[i],
-            i == s_tab ? LV_OPA_20 : LV_OPA_TRANSP, LV_PART_MAIN);
+            act ? LV_OPA_COVER : LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(s_tab_btn[i], lv_color_black(), LV_PART_MAIN);
+        lv_obj_set_style_text_color(lv_obj_get_child(s_tab_btn[i], 0),
+            act ? lv_color_white() : lv_color_black(), LV_PART_MAIN);
+    }
 }
 
 static void nd_render_tabs(void)
@@ -477,6 +487,9 @@ static void nd_render_tabs(void)
 
 static void nd_render_detail(void)
 {
+    s_enter_pending = false;            /* N2 (ds4 P3): a buffered Enter
+                                          * must not fire after returning
+                                          * from DETAIL to the tabs page */
     char head[96];
     if (s_detail.phonetic[0])
         snprintf(head, sizeof(head), "%s  %s  %s\n%s", s_detail.word,
@@ -500,7 +513,9 @@ static void nd_render_detail(void)
     for (int i = 0; i < s_detail.ex_count && off < (int)sizeof(ex) - 164; i++)
         off += snprintf(ex + off, sizeof(ex) - off, "- %s\n",
                         s_detail.examples[i]);
-    lv_label_set_text(s_d_ex_lab, ex);
+    nd_set_text(s_d_ex_lab, ex);        /* N1 (ds4 P2): bilingual example
+                                          * lines carry zh - mono font
+                                          * renders it blank */
 
     char tail[PP_WB_CHUNK_MAX * 84 + 100];
     off = 0;
@@ -511,7 +526,7 @@ static void nd_render_detail(void)
     if (s_detail.assoc[0])
         off += snprintf(tail + off, sizeof(tail) - off, "%s\n",
                         s_detail.assoc);
-    lv_label_set_text(s_d_tail_lab, tail);
+    nd_set_text(s_d_tail_lab, tail);    /* N1: chunks/assoc carry zh too */
     nd_page_show(ND_PAGE_DETAIL);
 }
 
@@ -625,6 +640,9 @@ static void nd_tab_set(int tab)
 {
     if (s_nd_page != ND_PAGE_TABS) return;
     s_tab = tab;
+    s_enter_pending = false;            /* N2: page context changed - a
+                                          * buffered Enter no longer maps
+                                          * to a valid action here */
     if (tab == ND_TAB_LIST && s_exam_count == 0 && !s_nd_task) {
         nd_render_tabs();
         nd_status("Fetching exam books...");

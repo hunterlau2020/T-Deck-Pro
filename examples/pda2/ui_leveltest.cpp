@@ -221,7 +221,9 @@ static void lt_task_func(void *param)
     snprintf(m->err, sizeof(m->err), "%s", err.c_str());
 
     if (s_lt_q) {
-        xQueueSend(s_lt_q, &m, pdMS_TO_TICKS(2000));
+        if (xQueueSend(s_lt_q, &m, pdMS_TO_TICKS(2000)) != pdTRUE)
+            delete m;                   /* Nit-1: implement the documented
+                                          * bounded-send leak guard */
     } else {
         delete m;
     }
@@ -397,6 +399,9 @@ static void lt_render_home(void)
 
 static void lt_render_question(void)
 {
+    s_enter_pending = false;            /* L1 (ds4 P2): entering QUIZ
+                                          * voids any buffered Enter - it
+                                          * must never survive to RESULT */
     char prog[48];
     snprintf(prog, sizeof(prog), "Q%d  %s  %s", s_ans_n + 1, s_cur.level,
              s_cur.type);
@@ -564,7 +569,10 @@ void leveltest_keyboard_poll(void)
             return;
         }
         if (s_lt_task) {                 /* request in flight */
-            if (c == '\n' && s_lt_page != LT_PAGE_QUIZ)
+            /* L1 (ds4 P2): buffer ONLY on HOME - a flag set on any other
+             * page survives the page flip and auto-fires on RESULT,
+             * overwriting the score page with a fresh Q1. */
+            if (c == '\n' && s_lt_page == LT_PAGE_HOME)
                 s_enter_pending = true;  /* buffered, not eaten */
             continue;
         }

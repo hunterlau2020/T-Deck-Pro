@@ -7,6 +7,9 @@
  * Keyboard: letters+digits build the search query, Enter fetches (or opens
  * the focused row), +/- move focus / turn pages, Backspace deletes a query
  * char or exits. Touch: rows open, back button exits.
+ * Device-side search is English prefix/substring only (the keypad has no
+ * Chinese input) - the server's meaning_zh substring match is unreachable
+ * from this UI and not a defect (review ds4 Nit-2).
  * penpal_api carries the two endpoints; this module is UI + async glue.
  */
 #ifndef __UI_NEWDICT_H__

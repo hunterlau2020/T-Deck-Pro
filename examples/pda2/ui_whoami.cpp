@@ -290,7 +290,8 @@ static void wa_task_func(void *param)
                   m->ok ? 1 : 0, m->text);
     delete rq;
     if (s_wa_q) {
-        xQueueSend(s_wa_q, &m, pdMS_TO_TICKS(2000));
+        if (xQueueSend(s_wa_q, &m, pdMS_TO_TICKS(2000)) != pdTRUE)
+            delete m;                   /* Nit-1: documented leak guard */
     } else {
         delete m;
     }

@@ -3,6 +3,33 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-18（v1.21：ds4 三段评审处置——L1/N1 两 P2 + F1′/N2 + 3×Nit）
+
+- **评审结论**：三份分段申请全部 **C 部分接受**（`...-bdb75bf..7bab081-ds4.md`
+  / `...-leveltest-family-ds4.md` / `...-newdict-d5755ae-ds4.md`）。
+  核销面全部成立（含 v1.14/v1.15 修复、阶梯状态机**穷举式**独立复核
+  117586 条前缀 0 偏差、字库对当前库差集只剩有意排除的 4 码位）。
+- **L1（P2，绑 G-合入）**：`s_enter_pending` 只发不销——起步连按两次
+  Enter，缓冲活到 RESULT 渲染同 tick 被补射，结果页被自动重开的新 Q1
+  覆盖。修复：置位收紧为 **HOME 页** + `lt_render_question()` 进入即清。
+- **N1（P2，绑 G-合入）**：newdict 详情页 examples/tail 两标签漏切
+  CJK 字体——双语例句/词块的中文半句全空白（v1.20 重写时同款漏切，
+  ds4 预判在案 :503/:514）。修复：改 `nd_set_text`（两行）。
+- **F1′（P3，绑 G-真机）**：终态快径把 `scanComplete()` 的**超时判负**
+  分支（6s `_scanTimeout` 清 SCANNING 位但驱动扫描仍在飞）也当终态，
+  早退跳过 `esp_wifi_scan_stop()`。修复：快径内无条件补 stop（无扫描
+  时 no-op）+ 注释按 ds4 收窄免竞态论证范围。
+- **N2（P3）**：newdict 缓冲 Enter 跨页存活（详情返回后被补射弹回）。
+  修复：`nd_render_detail()` 与 `nd_tab_set()` 均清位。**N3（P3）**在
+  v1.20 重构后**路径消失**（entry 不再自动拉取，搜索优先）——台账记
+  闭环方式为"结构性消除"。
+- **Nit×3**：whoami/leveltest/newdict 三处补 `xQueueSend != pdTRUE`
+  自释放（契约规则 7 文本与实现对齐，选"补实现"支）；ui_newdict.h 补
+  "设备侧仅英文检索"能力注记；penpal_api.h `stem[128]` 补截断与
+  exclude 错配前提。
+- 版本 v1.20 → **v1.21**；真机回归清单 +2（LT 双 Enter 结果页停留、
+  详情双语例句中文出字）+1（慢扫描环境 F1′ 反例）。
+
 ## 2026-09-18（v1.20：NewDict 交互重做——搜索首页 + Home/List 双 Tab + 考试选卡）
 
 - **用户三条指令**：①入口挪到第一屏；②首页改为搜索输入框（参考本地

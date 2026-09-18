@@ -3376,9 +3376,13 @@ static void wifi_scan_stop_and_release(void)
      * to a second behind), esp_wifi_scan_stop() posts no NEW event, the
      * wait below times out and the pending flag wedges forever - killing
      * every later scan on both screens until reboot. scanComplete() != RUN
-     * means the framework's _scanDone already finished filling results, so
-     * releasing right here is race-free. */
+     * covers "done with results" (race-free: _scanDone finished filling)
+     * AND the timeout-judged-failed branch (review ds4 F1': Arduino's 6s
+     * _scanTimeout clears the SCANNING bit while the DRIVER scan is still
+     * in flight) - so stop() first anyway: a no-op when nothing runs, and
+     * it keeps a still-flying scan from leaking into the next cycle. */
     if (WiFi.scanComplete() != WIFI_SCAN_RUNNING) {
+        esp_wifi_scan_stop();               /* F1' P3: timeout-judged scans */
         WiFi.scanDelete();
         return;
     }
