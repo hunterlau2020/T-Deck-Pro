@@ -209,15 +209,22 @@ typedef struct {
 bool penpal_get_profile(const char *base, const char *key,
                         pp_profile_t *out, string *err);
 
-/* ---- level test (LevelTest app, 2026-09-18) --------------------------------
- * GET/POST /api/v1/users/me/level-test[...] - "⓯ 定级测 (整卷 staircase)".
- * Contract (openapi 2026-09-18): the FULL paper ships with answer_index on
- * every question - grading is client-side and self-reported (server does not
- * re-check; the schema doc states this is not an authoritative assessment).
- * Submit body: {answers: [{level, correct} ...], mode: "staircase"} ->
- * {score, resulting_level, level_detail[]}. Device always sends
- * mode="staircase" (整卷 staircase, user request). */
-#define PP_LT_Q_MAX    16   /* one full paper; the server sends ~10 */
+/* ---- level test (LevelTest app, 2026-09-18; reworked 2026-09-18 v1.17) -----
+ * Single-question adaptive staircase ("⓰ 定级测 (单题自适应循环)" in
+ * remote_api_demo.py - the ESP32 reference flow):
+ *   GET /users/me/level-test/questions/next?level=<CEFR>&exclude=<stems>
+ *     one question per call; answer_index ships with it (client grades,
+ *     self-reported, 契约 §5); exclude = already-asked stems joined "|||"
+ *     (same paper, no repeats); "B2+" must arrive URL-encoded as B2%2B.
+ *   POST /users/me/level-test  {answers:[{level,correct}..], mode:"staircase"}
+ *     SUBMIT CONDITION IS A TERMINATION EVENT, not a fixed answer count:
+ *     B2+ 2-correct top / Pre-A1 2-wrong floor / 2nd demotion / 16-answer
+ *     cap; 2..16 answers. The client mirrors the server staircase locally
+ *     (2 up / 2 down / max 2 demotions, leveling.py grade_staircase) and
+ *     submits exactly the consumed prefix - force-submitting after a fixed
+ *     10 questions gets HTTP 400 "session incomplete" (v1.16 device report).
+ */
+#define PP_LT_A_MAX    16   /* staircase answer cap = server STAIR_MAX_ANSWERS */
 #define PP_LT_OPT_MAX  4
 #define PP_LT_DET_MAX  8    /* level_detail rows (Pre-A1..B2+ = 5, headroom) */
 #define PP_LT_HIST_MAX 4    /* history rows shown on the entry page */
@@ -229,8 +236,13 @@ typedef struct {
     char stem[128];                       /* display copy */
     int  opt_count;
     char options[PP_LT_OPT_MAX][48];      /* display copy */
-    int  answer_index;                    /* ships with the paper (client grades) */
+    int  answer_index;                    /* ships with the question (client grades) */
 } pp_lt_question_t;
+
+typedef struct {
+    char level[8];                        /* probed CEFR level of this answer */
+    bool correct;                         /* client-graded outcome (self-report) */
+} pp_lt_answer_t;
 
 typedef struct {
     char level[8];
@@ -252,22 +264,26 @@ typedef struct {
     char resulting_level[8];
 } pp_lt_hist_t;
 
-/** @brief GET /users/me/level-test/questions - the whole paper, server order.
- *  @param count number of questions stored (capped at max). */
-bool penpal_lt_get_questions(const char *base, const char *key,
-                             pp_lt_question_t *out, int max, int *count,
-                             string *err);
+/** @brief GET /users/me/level-test/questions/next - one adaptive question for
+ *         the probed level. exclude = already-asked stems joined "|||"
+ *         ("" = none); both params are percent-encoded here (B2+ -> B2%2B).
+ *         404 "No questions available for this level" arrives as false+err. */
+bool penpal_lt_next_question(const char *base, const char *key,
+                             const char *level, const char *exclude,
+                             pp_lt_question_t *out, string *err);
 
 /** @brief POST /users/me/level-test - self-reported staircase submission.
- *         qs[] supplies each question's level, correct[] the client-graded
- *         outcome; the body is assembled here (mode "staircase"). */
+ *         answers[] must be a TERMINATED session (top/floor/2nd demotion/
+ *         16-cap - the client mirrors the server staircase); otherwise the
+ *         server answers 400 "session incomplete". */
 bool penpal_lt_submit(const char *base, const char *key,
-                      const pp_lt_question_t *qs, const bool *correct, int n,
+                      const pp_lt_answer_t *answers, int n,
                       pp_lt_result_t *out, string *err);
 
 /** @brief GET /users/me/level-test/history - most recent rows (entry page). */
 bool penpal_lt_get_history(const char *base, const char *key,
                            pp_lt_hist_t *out, int max, int *count, string *err);
+
 
 bool penpal_get_topics(const char *base, const char *key,
                        pp_topic_t *out, int max, int *count, string *err);

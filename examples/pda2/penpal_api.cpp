@@ -481,70 +481,87 @@ bool penpal_get_profile(const char *base, const char *key,
     return true;
 }
 
-/* ---- level test (LevelTest app, 2026-09-18) -------------------------------- */
+/* ---- level test (LevelTest app, 2026-09-18; single-question v1.17) --------- */
 
 static const char *s_lt_str(const cJSON *obj, const char *key)
 {
     return cJSON_GetStringValue(cJSON_GetObjectItem(obj, key));
 }
 
-bool penpal_lt_get_questions(const char *base, const char *key,
-                             pp_lt_question_t *out, int max, int *count,
-                             string *err)
+/* RFC 3986 percent-encode (unreserved = ALAN - _ . ~). The next-question
+ * query carries "B2+" (must arrive as B2%2B) and English stems with spaces. */
+static void s_urlenc(string &out, const char *s)
 {
-    if (count) *count = 0;
+    static const char *hex = "0123456789ABCDEF";
+    for (const unsigned char *p = (const unsigned char *)(s ? s : "");
+         *p; p++) {
+        unsigned char c = *p;
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+            c == '.' || c == '~') {
+            out += (char)c;
+        } else {
+            out += '%';
+            out += hex[c >> 4];
+            out += hex[c & 0x0F];
+        }
+    }
+}
+
+bool penpal_lt_next_question(const char *base, const char *key,
+                             const char *level, const char *exclude,
+                             pp_lt_question_t *out, string *err)
+{
+    *out = pp_lt_question_t{};
     if (!pp_cfg_ok(base, key, err)) return false;
 
-    pp_http_t r = pp_request("GET", pp_url(base, "/users/me/level-test/questions"),
+    string path = "/users/me/level-test/questions/next?level=";
+    s_urlenc(path, level);
+    if (exclude && exclude[0]) {
+        path += "&exclude=";
+        s_urlenc(path, exclude);
+    }
+
+    pp_http_t r = pp_request("GET", pp_url(base, path.c_str()),
                              NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
     if (!r.ok) {
         if (err) *err = pp_fail(r);
-        Serial.printf("%s level-test questions failed: %s\n", PP_TAG,
+        Serial.printf("%s level-test next failed: %s\n", PP_TAG,
                       pp_fail(r).c_str());
         return false;
     }
     cJSON *root = cJSON_Parse(r.body.c_str());
     if (!root) {
-        if (err) *err = "bad JSON (questions)";
+        if (err) *err = "bad JSON (next question)";
         return false;
     }
-    const cJSON *qs = cJSON_GetObjectItem(root, "questions");
-    int n = 0;
-    cJSON *it;
-    cJSON_ArrayForEach(it, qs) {
-        if (n >= max) break;
-        out[n] = pp_lt_question_t{};
-        out[n].index = cJSON_GetObjectItem(it, "index")->valueint;
-        s_copy(out[n].level, sizeof(out[n].level), s_lt_str(it, "level"));
-        s_copy(out[n].type, sizeof(out[n].type), s_lt_str(it, "type"));
-        s_copy(out[n].stem, sizeof(out[n].stem), s_lt_str(it, "stem"));
-        out[n].answer_index =
-            cJSON_GetObjectItem(it, "answer_index")->valueint;
-        const cJSON *opts = cJSON_GetObjectItem(it, "options");
-        int k = 0;
-        cJSON *o;
-        cJSON_ArrayForEach(o, opts) {
-            if (k >= PP_LT_OPT_MAX) break;
-            if (cJSON_IsString(o) && o->valuestring)
-                s_copy_disp(out[n].options[k], sizeof(out[n].options[k]),
-                            o->valuestring);
-            k++;
-        }
-        out[n].opt_count = k;
-        n++;
+    out->index = cJSON_GetObjectItem(root, "index")->valueint;
+    s_copy(out->level, sizeof(out->level), s_lt_str(root, "level"));
+    s_copy(out->type, sizeof(out->type), s_lt_str(root, "type"));
+    s_copy(out->stem, sizeof(out->stem), s_lt_str(root, "stem"));
+    out->answer_index = cJSON_GetObjectItem(root, "answer_index")->valueint;
+    int k = 0;
+    cJSON *o;
+    cJSON_ArrayForEach(o, cJSON_GetObjectItem(root, "options")) {
+        if (k >= PP_LT_OPT_MAX) break;
+        if (cJSON_IsString(o) && o->valuestring)
+            s_copy_disp(out->options[k], sizeof(out->options[k]),
+                        o->valuestring);
+        k++;
     }
+    out->opt_count = k;
     cJSON_Delete(root);
-    if (count) *count = n;
-    Serial.printf("%s level-test paper: %d questions\n", PP_TAG, n);
-    if (n == 0) {
-        if (err) *err = "empty question paper";
+    Serial.printf("%s level-test next: %s %s (%d opts)\n", PP_TAG,
+                  out->level, out->type, out->opt_count);
+    if (out->opt_count < 2) {
+        if (err) *err = "question with <2 options";
         return false;
     }
     return true;
 }
 
 bool penpal_lt_submit(const char *base, const char *key,
-                      const pp_lt_question_t *qs, const bool *correct, int n,
+                      const pp_lt_answer_t *answers, int n,
                       pp_lt_result_t *out, string *err)
 {
     *out = pp_lt_result_t{};
@@ -556,7 +573,8 @@ bool penpal_lt_submit(const char *base, const char *key,
     for (int i = 0; i < n; i++) {
         char item[48];
         snprintf(item, sizeof(item), "%s{\"level\":\"%s\",\"correct\":%s}",
-                 i ? "," : "", qs[i].level, correct[i] ? "true" : "false");
+                 i ? "," : "", answers[i].level,
+                 answers[i].correct ? "true" : "false");
         body += item;
     }
     body += "],\"mode\":\"staircase\"}";

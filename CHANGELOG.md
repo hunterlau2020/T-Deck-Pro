@@ -3,6 +3,31 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-18（v1.17：Level APP 重写——单题自适应阶梯，终止事件提交）
+
+- **背景**：真机反馈——定级测答到第 10 题强制提交报 400。新范例
+  `remote_api_demo.py` 步骤 ⓰ 明确契约已变：**提交条件是终止事件而非
+  固定题数**（B2+ 连对 2 登顶 / Pre-A1 连错 2 地板 / 二次降级 /
+  16 题上限），题数 2..16 不定；整卷端点仅作冒烟，硬件须按单题
+  自适应循环实现。
+- **重写 ui_leveltest**：`GET /questions/next?level=&exclude=` 单题拉取
+  （exclude = 已出题干 "|||" 连接、封顶 1990B 防超服务端 2000 限），
+  本地镜像服务端状态机（`lt_stair_step`：连对 2 升级 / 连错 2 降级 /
+  最多 2 次降级 / 16 答封顶，与 `grade_staircase` 逐行同口径），
+  终止即 POST 恰好消费前缀。中途拉题失败：静默重试一次，再失败放弃
+  不提交（真人无法作答没拉到的题，盲报是虚构——与演示脚本的模拟
+  学生循环有意不同，代码注释已注明该偏差）。
+- **penpal_api**：新增 `penpal_lt_next_question`（RFC3986 percent-encode，
+  B2+ → B2%2B）；`penpal_lt_submit` 改收 `pp_lt_answer_t[]`；删除
+  整卷 `penpal_lt_get_questions`。宏 `PP_LT_Q_MAX`→`PP_LT_A_MAX`（答案
+  上限语义）。
+- **验证**：①状态机口径——设备逻辑转录为 Python 与服务端
+  `grade_staircase` 对跑 20000 组随机序列，终止/消费数 **0 偏差**；
+  ②端到端——真实 next+exclude+submit 循环 3 轮（11/16/12 答三种
+  终止路径）全部 HTTP 200；③COM5 刷写 6/6 VERIFIED，串口
+  `[FW] v1.17` + `mark valid ok`。
+- 版本 v1.16 → **v1.17**。
+
 ## 2026-09-18（v1.16：Level APP 中文支持——Font_Hanzi_16 自定义字库）
 
 - **背景**：真机验收 v1.15 反馈——定级测词汇题选项是中文释义
