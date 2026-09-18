@@ -730,8 +730,9 @@ Whoami App / 菜单重排 / TTS 开关 / OTA 实现）细节见评审申请；�
 **根因 1——EPD 硬阈值二值化**：`convert_lvgl_buf_to_epd_bitmap()`
 （factory.ino）按 `lv_color_brightness < 128 → 黑、否则白` 转换。LVGL
 `LV_PALETTE_GREY` = 0x9E9E9E（158 ≥ 128）→ **渲染为白色，白底上不可见**。
-全项目 14 处灰色样式（PenPal/AI Chat/AI Cfg/Voice AI/Weather/Calculator/
-Dictionary/PenPal Write/Wifi/Whoami/OTA 屏的状态行 + Weather 表格边框）
+全项目 15 处灰色样式（PenPal/AI Chat/AI Cfg/Voice AI/Weather/Calculator/
+Dictionary/PenPal Write/Wifi/Whoami/OTA 屏的状态行 + Weather 表格边框；
+计数勘误 2026-09-18：评审 ds4 Nit-1 实测 diff 为 15，原记 14）
 **全部从未显示过**——历轮"状态反馈缺失"类报告（含 OTA 下载状态、AI Test
 状态）部分由此解释。修复：全部改 `lv_color_black()`（v1.1，两个 commit：
 报告内三处 + 其余机械清扫）。
@@ -857,6 +858,49 @@ scan → 进 Config 状态行一直 "Not connected"。
    （绘制开关），或干脆移除依赖（无光标设计）；
 3. EPD 输入框不必模拟 CRT 光标闪烁——焦点箭头标签是更合适的
    单色慢刷新交互原语。
+
+---
+
+## 27. 评审台账补录（§7.2 欠账）：P2-5 idle-sleep 门控 + 1561b41..b92d021 五方发现落账（2026-09-18）
+
+**补录背景**：评审 ds4 入库轮义务核对指出——上轮（095e41a..301c571）
+P2-5（`idle_sleep_timer_cb` 补 `ota_busy()` 门控）在 `f8c6b38`（v1.2）
+确已真修，但 issue_list **无台账条目**（只有 CHANGELOG 时点记录）。
+按 §7.2"台账是应修不阻断的唯一承接面"，本条补录并落本轮五方发现。
+
+**P2-5 补录（已修，f8c6b38）**：`idle_sleep_timer_cb` 在 audio 检查后加
+`if (ota_busy()) { s_last_activity_ms = millis(); return; }`——OTA 下载
+覆盖层期间自动休眠只重臂不压 Sleep 屏。上轮核销失实（只核了
+`sleep_do_enter` 深睡互斥漏了 Sleep 屏压栈）的教训已入 CHANGELOG：
+**核销声明必须核代码，不是核提交说明**。
+
+**1561b41..b92d021 五方发现处置表**（Claude A / Gemini C / GPT C /
+Grok A / ds4 C；修复轮 v1.14+v1.15）：
+
+| 发现 | 处置 |
+|---|---|
+| **P1-1**（Gemini+GPT）SCAN_DONE 回调只在 create4_1 注册 → 直进 4_2 扫描中 Back，pending 永挂扫描死锁 | ✅ v1.14：幂等 `wifi_scan_event_ensure_registered()`，create4_1/entry4_2 |
+| **P1-2**（Gemini+GPT/Grok P2-2b）autoconn 事件只在 start 注册 → 空槽首连后断链 5 次上限失效 | ✅ v1.14：`wifi_autoconn_event_ensure_registered()`，start/restart 共用 |
+| **F1**（ds4 P2）扫描已终结但 1s tick 未 collect 的窗口内 Back——事件已投递过不再来，pending 永挂（与 P1-1 不同路径！） | ✅ v1.15：`wifi_scan_stop_and_release()` 前置 `scanComplete() != RUNNING` 早退（免竞态：scanComplete 终结值前提是 _scanDone 已填完） |
+| **F2/P2-1**（ds4+Grok）`s_scan_dropped_link` 赋值被 4_2 第二轮 kick 覆写 → 退出不立即重连，等 65s guard | ✅ v1.14：粘滞置位（仅 reconnect 清零） |
+| **P2-2a**（Grok，上轮 P2-7 残余）whoami server_ok 但 provider 写失败不 ++gen 清缓存 | ✅ v1.14：server_ok 即失效代次+清缓存+通知 |
+| **F3**（ds4 P3）`cursor.show=0` **不是绘制门**——`start_cursor_blink()` 在 anim_time=0 分支强制置 1，每次输入都打回；v1.12 真正生效的是 CURSOR part `bg_opa=TRANSP` | ✅ v1.15：删 4 行直写 + 注释改"生效门=bg_opa+anim_time"；v1.10→v1.12 三轮收敛的真实机制至此明确 |
+| **F4**（ds4 P3）状态行块缺 else——过渡态（IDLE/NO_SSID 等）重写旧缓冲、串口打误导行 | ✅ v1.15：仅 CONNECTED/DISCONNECTED 有文案，过渡态记已见不重写 |
+| **F5**（ds4 P3）v1.9"已连接扫描被驱动中止"归因不唯一——Arduino `scanComplete()` 的 **6s `_scanTimeout` 判负**同样产生 -2（连接态信道切换更慢更易超时）；驱动中止则应返回计数≥0 | ✅ v1.15 勘误本表：connecting 必拒（IDF 文档）；已连接态 -2 的可能机制为 scanComplete 超时判负或驱动拒绝，**未定论**；"统一 idle 扫描"修复本身经真机验证有效不受影响 |
+| Nit（Claude）s_shown_link 进屏重置 | ✅ v1.14 |
+| Nit（Claude/ds4）cursor.show helper | ✅ v1.15 消解：直写已删，无需 helper |
+| Nit-1（ds4）灰色计数 14→15 | ✅ §23 勘误 |
+| Nit-2（ds4）评审文件名区间记法 vs review_guide §7.1 | 登记见下"流程项" |
+| Nit-3（ds4）`wifi_cfg_load` 与状态行块两处链路态→文案映射需同款 | 当前一致；两处均已加对齐注释的必要性留待后续 |
+
+**真机反例待验**：P1-1（直进 4_2 扫描中 Back 再进可扫）；F1（扫描完成
+瞬间 Back ×10 不出 `release deferred`）；F2（4_2 停留 >30s 退出数秒内
+恢复 IP）。
+
+**流程项**（ds4 Nit-2 + GPT 流程偏差）：评审产物文件名沿用 git 区间
+记法（`<base>..<head>`）与 review_guide §7.1"非区间记法"措辞冲突，
+且 14 提交超出 §1.1 的 5-7 分段建议——**下轮申请拆段（修复轮/功能/
+文档分报）**，文件名口径与 §7.1 的取舍交由 guide 维护轮定夺。
 
 ---
 

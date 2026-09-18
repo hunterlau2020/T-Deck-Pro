@@ -53,10 +53,10 @@
 - [ ] **Apache Gate-Pin 双活过渡**：能否同时接受新旧两个 PIN（平滑轮换）
 - [ ] **轮换 PenPal 测试 key**（`89rg35eua2`/`3s60yrgdua` 已入 git 的
       penpal-design.md）并把设计文档里的明文换成占位符
-- [ ] **`cursor.show` 直写包 helper**（评审 1561b41..b92d021 Claude Nit）：
-      4_1 三处直写 `((lv_textarea_t *)ta)->cursor.show`，LVGL 升级时
-      字段语义可能变——封一个小 helper 集中调用点（v1.12 后不再新增
-      调用，优先级低）。
+- [x] **`cursor.show` 直写包 helper**（评审 1561b41..b92d021 Claude Nit）：
+      **v1.15 消解**——ds4 F3 证实该直写不是绘制门（start_cursor_blink
+      会打回 1，真正生效的是 CURSOR part bg_opa=TRANSP），4 行直写已删，
+      不再需要 helper/compat 宏。
 - [x] **WiFi 开机重连退避/上限**（issue_list §24 改进项，**v1.5 已修**
       2026-09-17）：自动连接管理器——最多 5 次、指数退避 2.5s→40s、
       放弃后 STA 空闲直到显式连接/重启；UI 扫描周期挂起管理器。

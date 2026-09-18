@@ -2902,15 +2902,14 @@ static void wifi_cfg_set_field(int f)
     if (f != wifi_cfg_field) {
         wifi_cfg_sync_draft();
     }
-    /* v1.12: ALL 4_1 cursors stay off - the ">" label is the focus
-     * indicator. The v1.10/v1.1x style/show approaches still left the
-     * device showing two blinking cursors after the pick jump, so kill
-     * the draw gate unconditionally and stop sending FOCUSED (its only
-     * remaining effect was start_cursor_blink, i.e. showing a cursor). */
+    /* v1.12/v1.15: the effective gate is the CURSOR part's bg_opa=TRANSP
+     * (draw_cursor() paints via lv_draw_rect with that dsc - a transparent
+     * bg and no border draw nothing) plus anim_time=0 (no blink restarts,
+     * no periodic invalidation). NOTE: writing cursor.show=0 is NOT a gate
+     * (review ds4 F3): start_cursor_blink() forces it back to 1 on every
+     * set_text/add_char/del_char, so those direct writes were removed. */
     lv_obj_set_style_bg_opa(wifi_ssid_ta, LV_OPA_TRANSP, LV_PART_CURSOR);
     lv_obj_set_style_bg_opa(wifi_pass_ta, LV_OPA_TRANSP, LV_PART_CURSOR);
-    ((lv_textarea_t *)wifi_ssid_ta)->cursor.show = 0;
-    ((lv_textarea_t *)wifi_pass_ta)->cursor.show = 0;
     wifi_cfg_field = f;
     wifi_cfg_scan_mode = false;
     if (f != 0 && wifi_scan_state == WIFI_SCAN_RUNNING) {
@@ -2944,20 +2943,27 @@ void wifi_cfg_keyboard_poll()
     /* Status line follows the live link state (user report 2026-09-17): a
      * scan drops the link and the autoconn manager re-begins it seconds
      * later, but the line was written once at entry and kept showing
-     * "Not connected" forever even after GOT_IP. Only react to real state
-     * CHANGES so in-progress banners (Connecting/Scan/etc) are preserved. */
+     * "Not connected" forever even after GOT_IP. Only these two states have
+     * copy of their own (review ds4 F4): transitional states keep the last
+     * text instead of rewriting a stale buffer. NOTE a scan's own DISCONNECT
+     * ->CONNECT transitions DO overwrite transient lines like "Scan: N found"
+     * (the banner is separate and unaffected). */
     {
         wl_status_t st = WiFi.status();
         if (st != s_shown_link) {
-            s_shown_link = st;
-            if (st == WL_CONNECTED)
+            const char *write = NULL;
+            if (st == WL_CONNECTED) {
                 snprintf(wifi_status, sizeof(wifi_status), "IP: %s",
                          WiFi.localIP().toString().c_str());
-            else if (st == WL_DISCONNECTED)
+                write = wifi_status;
+            } else if (st == WL_DISCONNECTED) {
                 snprintf(wifi_status, sizeof(wifi_status), "Not connected");
-            if (wifi_status_lab) {
-                lv_label_set_text(wifi_status_lab, wifi_status);
-                Serial.printf("[WiFi] link state -> %s\n", wifi_status);
+                write = wifi_status;
+            }
+            s_shown_link = st;           /* transitional states count as seen */
+            if (write && wifi_status_lab) {
+                lv_label_set_text(wifi_status_lab, write);
+                Serial.printf("[WiFi] link state -> %s\n", write);
             }
         }
     }
@@ -3286,8 +3292,8 @@ static void create4_1(lv_obj_t *parent)
     lv_textarea_set_text(wifi_ssid_ta, wifi_ssid);
     wifi_pass_remask();                          /* pass box: middle masked */
     wifi_cfg_refresh_labels();
-    ((lv_textarea_t *)wifi_ssid_ta)->cursor.show = 0;   /* v1.12: no cursors, */
-    ((lv_textarea_t *)wifi_pass_ta)->cursor.show = 0;   /* ">" label = focus */
+    /* no cursors on glass: the ">" label marks the focus (v1.12); the
+     * CURSOR part bg_opa=TRANSP set above is what actually hides them */
     wifi_cfg_kbd_active = true;
 }
 
@@ -3363,6 +3369,18 @@ static void exit4_1(void) {
  * Shared by 4_1 abort and the 4_2 scan screen exit (v1.4). */
 static void wifi_scan_stop_and_release(void)
 {
+    /* Already-terminal scan (review ds4 F1): if the scan FINISHED and its
+     * SCAN_DONE was already delivered+counted (the 4_2 1s-tick can lag up
+     * to a second behind), esp_wifi_scan_stop() posts no NEW event, the
+     * wait below times out and the pending flag wedges forever - killing
+     * every later scan on both screens until reboot. scanComplete() != RUN
+     * means the framework's _scanDone already finished filling results, so
+     * releasing right here is race-free. */
+    if (WiFi.scanComplete() != WIFI_SCAN_RUNNING) {
+        WiFi.scanDelete();
+        return;
+    }
+
     /* Copilot 1.3: publish the release target BEFORE stopping the scan,
      * then re-check the counter. An event landing between the previous
      * judgement and the publish either passes the re-check or arrives

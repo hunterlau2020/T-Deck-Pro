@@ -3,6 +3,35 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-18（v1.15：ds4 评审处置——终态扫描释放快径 + cursor.show 勘误）
+
+- **背景**：用户指出第 5 份评审 `...-ds4.md`（DeepSeek，结论 C）。
+  其 F2 与 Grok P2-1 同源（v1.14 已修）；F1/F3/F4/F5 为新发现。
+- **F1（P2）终态扫描的释放楔死**：扫描已完成、SCAN_DONE 已投递计数、
+  但 4_2 的 1s tick 尚未 collect 的窗口（每周期存在）内按 Back——
+  `esp_wifi_scan_stop()` 不再投递新事件，stop-and-release 协议等一个
+  **已过去的事件**，3s 超时后 pending 永挂，两屏扫描全灭直到重启。
+  **与 v1.14 的 P1-1（回调未注册）是不同路径**——回调在也修不了。
+  修复：`wifi_scan_stop_and_release()` 前置 `scanComplete() != RUNNING`
+  早退（免竞态：scanComplete 终结值的前提是 _scanDone 已填完结果）。
+- **F3（P3）`cursor.show` 不是绘制门**：`start_cursor_blink()` 在
+  anim_time=0 分支就是"删动画 + 强制 show=1"，且 set_text/add_char/
+  del_char 都会走到它——每次输入把 show 打回 1；v1.10/v1.11 的
+  "style/show 压光标"看到两条**静止**光标的原因，v1.12 真正生效的是
+  同批写下的 CURSOR part `bg_opa=TRANSP`（透明画不出像素）。修复：
+  删 4 行直写 + 注释改真机制；三轮收敛史至此闭环（§27 表）。
+- **F4（P3）状态行过渡态**：仅 CONNECTED/DISCONNECTED 有文案，过渡态
+  （IDLE/NO_SSID 等）记已见不重写——避免用未更新旧缓冲重写标签 +
+  串口打误导行。注释撤回"in-progress banners preserved"过度承诺。
+- **F5（P3）v1.9 归因勘误**：`collect r=-2 status=3` 的已连接态失败，
+  Arduino `scanComplete()` 的 6s `_scanTimeout` 判负同样产生 -2（连接
+  态信道切换更慢），"驱动中止"不是唯一机制（中止应返回计数≥0）——
+  措辞勘误入 issue_list §27；"统一 idle 扫描"修复本身真机验证有效，
+  不受影响。
+- **台账**：issue_list §27 补录（上轮 P2-5 欠账 + 五方发现处置表 +
+  流程项：下轮申请拆段）。§23 灰色计数勘误 14→15（ds4 Nit-1）。
+- 版本 v1.14 → **v1.15**。
+
 ## 2026-09-18（v1.14：评审修复轮——1561b41..b92d021 四方结果处置）
 
 - **评审结论**：Claude A / Gemini C / GPT C / Grok A（`session-batch-
