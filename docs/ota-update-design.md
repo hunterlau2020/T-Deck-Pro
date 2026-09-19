@@ -288,6 +288,11 @@ Settings 流程）；USB 回退（先读 otadata → `erase_region 0xE000 0x2000
 
 ## 8. 验证计划（v6：§8.3 重写 + 排空/生命周期用例）
 
+> **进度（2026-09-20）**：**端到端正向用例已真机通过**（issue_list §35，
+> LAN 台架 `pda2_ota_bench` + 签名 manifest：Check→Install→重启→自证→
+> already up to date；顺带修复台架宏名漂移 P2 并完成换根 `325BDA1A`）。
+> 下述 1-8 项仍待逐项真测，回滚矩阵（1）先行。
+
 > **刷写纪律（2026-09-16 起）**：本节所有真机用例的固件写入一律走
 > `scripts/flash_verified.py`（每块强制 Hash verified + 失败即中止 +
 > `--readback` 终检）——手写 esptool 分块曾因 USB CDC 掉口漏写一块，
