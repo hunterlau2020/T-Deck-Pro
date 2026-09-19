@@ -164,8 +164,11 @@ static pp_http_t pp_request(const char *method, const string &url,
      * 403s any request without this shared header before it reaches the
      * backend - defense-in-depth against indiscriminate scans, NOT a
      * security boundary (extractable from firmware; real credential stays
-     * the per-user API key). Hardcoded by owner decision 2026-09-13. */
-    http.addHeader("X-Gate-Pin", "49ef146ed5");
+     * the per-user API key). Hardcoded by owner decision 2026-09-13,
+     * configurable since v1.26 (Whoami Cfg field / GATE_PIN in env.cfg). */
+    char gpin[24];
+    penpal_load_gate_pin(gpin, sizeof(gpin));
+    if (gpin[0]) http.addHeader("X-Gate-Pin", gpin);
     if (idem_key && idem_key[0]) {
         http.addHeader("Idempotency-Key", idem_key);
     }
@@ -280,6 +283,40 @@ bool penpal_save_config(const char *base, const char *key)
                     p.getString("key", "") == nk;
     p.end();
     if (!ok) Serial.println("[PenPal] config save failed (NVS write/verify)");
+    return ok;
+}
+
+/* ---- gate pin (v1.26) ------------------------------------------------------- */
+
+#define PENPAL_GATE_PIN_DEFAULT "49ef146ed5"   /* owner value 2026-09-13 */
+
+void penpal_load_gate_pin(char *pin, int pin_len)
+{
+    String g = "";
+    Preferences p;
+    p.begin("penpal", true);
+    if (p.isKey("gpin")) g = p.getString("gpin", "");
+    p.end();
+    if (g.isEmpty()) {                 /* saved-empty falls through (header) */
+        char v[32] = "";
+        if (env_get("GATE_PIN", v, sizeof(v))) {
+            g = v;
+        } else {
+            g = PENPAL_GATE_PIN_DEFAULT;
+        }
+    }
+    s_copy(pin, pin_len, g.c_str());
+}
+
+bool penpal_save_gate_pin(const char *pin)
+{
+    Preferences p;
+    p.begin("penpal", false);
+    const String ng = pin ? String(pin) : String("");
+    p.putString("gpin", ng);
+    const bool ok = p.isKey("gpin") && p.getString("gpin", "") == ng;
+    p.end();
+    if (!ok) Serial.println("[PenPal] gate-pin save failed (NVS write/verify)");
     return ok;
 }
 

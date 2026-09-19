@@ -22,10 +22,13 @@
  *         ("IELTS  5700"); opening one switches to that exam's word list
  *         (server-paginated with +/-); Backspace climbs back words->exams.
  *   DETAIL (shared, either tab) word/phonetic/CEFR/meaning + senses +
- *         examples + chunks + assoc; Enter/Backspace returns to the caller.
+ *         examples + chunks + assoc; the body is flattened and locally
+ *         paged with +/- (EPD: one re-render per turn, never scrolled);
+ *         Enter/Backspace returns to the caller.
  *
  * Keyboard: letters/digits edit the query (from EITHER tab - typing on List
- * jumps to Home), Enter search/open, +/- focus/page, Backspace delete-query-
+ * jumps to Home), Enter search/open, +/- turn whole pages (touch picks
+ * rows; DETAIL: +/- pages the card), Backspace delete-query-
  * char / climb / exit. Touch: tabs, rows. Chinese switches labels to
  * Font_Hanzi_16 per content (LevelTest v1.16 pattern).
  */
@@ -44,7 +47,7 @@
 using namespace std;
 
 /* ui_deckpro.cpp keeps this macro private - mirror it (same assets font) */
-#define ND_FONT &Font_Mono_Bold_15
+#define ND_FONT (&Font_Mono_Bold_15)
 
 /* ---- screen state (UI thread owned) ---------------------------------------- */
 
@@ -79,6 +82,24 @@ static char s_status[96] = "type a word, Enter: search";
 static bool s_enter_pending = false;     /* Enter buffered across an
                                           * in-flight request (LevelTest
                                           * v1.18 lesson: never eat keys) */
+static bool s_exams_deferred = false;    /* List tab opened while the worker
+                                          * was busy (P2-1): fire the lazy
+                                          * exams fetch once idle again */
+
+/* DETAIL local pagination (EPD discipline: slice + re-render, no scroll).
+ * Page geometry is MEASURED, not estimated: glyph advances come from the
+ * LVGL font, page capacity from the live container size - only one safety
+ * row is subtracted, so a page fills the area down to the hint label. */
+#define ND_D_LINES_MAX  12               /* senses 6 + ex 2 + chunks 2 + assoc 1 */
+#define ND_D_PAGES_MAX  8
+#define ND_D_FALLBACK_W 200              /* before the first layout pass */
+#define ND_D_FALLBACK_H 180              /* ditto: err toward shorter pages */
+
+static char s_d_body[ND_D_LINES_MAX][164];   /* flattened logical lines */
+static int  s_d_body_h[ND_D_LINES_MAX];      /* measured px height per line */
+static int  s_d_body_n = 0;
+static int  s_d_page_top[ND_D_PAGES_MAX];    /* first body line of each page */
+static int  s_d_pages = 1, s_d_page = 0;
 
 /* ---- LVGL objects (created once per create; nulled on destroy) ------------- */
 
@@ -88,8 +109,7 @@ static lv_obj_t *s_search_ta;
 static lv_obj_t *s_home_head_lab;
 static lv_obj_t *s_row[PP_WB_ROWS];      /* shared by HOME results / exams /
                                           * exam words - one row pool */
-static lv_obj_t *s_hint_lab;
-static lv_obj_t *s_d_head_lab, *s_d_senses_lab, *s_d_ex_lab, *s_d_tail_lab;
+static lv_obj_t *s_d_head_lab, *s_d_body_lab, *s_d_hint_lab;
 static lv_obj_t *s_status_lab;
 
 static void nd_open_detail(int row);     /* below */
@@ -125,6 +145,13 @@ struct nd_msg_t {
     uint32_t gen;                        /* screen generation (contract rule 2) */
     int kind;
     bool ok;
+    bool exam_words;                     /* LIST destination snapshot (P2-1):
+                                          * land the result by where it was
+                                          * asked, not by the tab shown on
+                                          * arrival */
+    char q[26];                          /* LIST home: query snapshot - text
+                                          * typed during the flight must not
+                                          * be "confirmed" by this result */
     char err[96];
     pp_wb_page_t page;                   /* LIST */
     int exam_count;                      /* EXAMS */
@@ -136,6 +163,7 @@ struct nd_msg_t {
 struct nd_req_t {
     uint32_t gen;
     int kind;
+    bool exam_words;                     /* LIST: destination snapshot */
     string base;
     string key;
     int skip;                            /* LIST */
@@ -154,6 +182,8 @@ static void nd_task_func(void *param)
     nd_msg_t *m = new nd_msg_t;
     m->gen = rq->gen;
     m->kind = rq->kind;
+    m->exam_words = rq->exam_words;      /* P2-1: carry the destination */
+    snprintf(m->q, sizeof(m->q), "%s", rq->q.c_str());
     string err;
     const char *base = rq->base.c_str();
     const char *key = rq->key.c_str();
@@ -217,9 +247,11 @@ static bool nd_start(int kind, int detail_row)
         if (s_tab == ND_TAB_LIST) {      /* exam words (List tab) */
             rq->skip = s_skip;
             rq->exam = s_cur_exam;
+            rq->exam_words = true;
         } else {                         /* home search */
             rq->skip = s_skip;
             rq->q = s_query;
+            rq->exam_words = false;
         }
     } else if (kind == ND_REQ_DETAIL) {
         rq->id = (s_tab == ND_TAB_LIST && s_list_sub == ND_LS_WORDS)
@@ -280,12 +312,15 @@ static lv_obj_t *nd_row_create(lv_obj_t *parent, int idx)
 {
     lv_obj_t *row = lv_btn_create(parent);
     lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, lv_pct(100), 26);
+    /* 22px rows (acceptance 2026-09-19): the tabs page content box is
+     * 263px and the old 8x26+hint stack overflowed it - the last two
+     * rows and the hint were silently clipped (focus "vanished") */
+    lv_obj_set_size(row, lv_pct(100), 23);
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(row, nd_row_cb, LV_EVENT_CLICKED,
                         (void *)(intptr_t)idx);
     lv_obj_t *l = lv_label_create(row);
-    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 4, 4);
+    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 2, 2);
     lv_obj_set_width(l, lv_pct(100));
     lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_font(l, ND_FONT, LV_PART_MAIN);
@@ -303,14 +338,16 @@ static void create_nd(lv_obj_t *parent)
     lv_obj_align(s_pg_tabs, LV_ALIGN_BOTTOM_MID, 0, -22);
     lv_obj_set_style_bg_opa(s_pg_tabs, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(s_pg_tabs, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(s_pg_tabs, 6, LV_PART_MAIN);
+    /* pad 2 (acceptance A-1 v1.25): the old pad 6 ate 8px the row stack
+     * needed - row 8 was clipped again on device */
+    lv_obj_set_style_pad_all(s_pg_tabs, 2, LV_PART_MAIN);
     lv_obj_set_flex_flow(s_pg_tabs, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_pg_tabs, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(s_pg_tabs, 3, LV_PART_MAIN);
     lv_obj_clear_flag(s_pg_tabs, LV_OBJ_FLAG_SCROLLABLE);
 
     /* tab row */
     lv_obj_t *tabrow = lv_obj_create(s_pg_tabs);
-    lv_obj_set_size(tabrow, lv_pct(100), 30);
+    lv_obj_set_size(tabrow, lv_pct(100), 26);
     lv_obj_set_flex_flow(tabrow, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_bg_opa(tabrow, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(tabrow, 0, LV_PART_MAIN);
@@ -320,7 +357,7 @@ static void create_nd(lv_obj_t *parent)
     for (int i = 0; i < 2; i++) {
         lv_obj_t *b = lv_btn_create(tabrow);
         lv_obj_remove_style_all(b);
-        lv_obj_set_size(b, 76, 28);
+        lv_obj_set_size(b, 76, 26);
         lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(b, nd_tab_cb, LV_EVENT_CLICKED,
                             (void *)(intptr_t)i);
@@ -340,7 +377,9 @@ static void create_nd(lv_obj_t *parent)
      * typed text itself is the echo). */
     s_search_ta = lv_textarea_create(s_pg_tabs);
     lv_obj_set_width(s_search_ta, lv_pct(100));
-    lv_obj_set_height(s_search_ta, 34);
+    lv_obj_set_height(s_search_ta, 24);
+    lv_obj_set_style_pad_top(s_search_ta, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(s_search_ta, 2, LV_PART_MAIN);
     lv_textarea_set_one_line(s_search_ta, true);
     lv_textarea_set_max_length(s_search_ta, sizeof(s_query) - 1);
     lv_textarea_set_placeholder_text(s_search_ta, "type to search");
@@ -354,8 +393,8 @@ static void create_nd(lv_obj_t *parent)
     s_home_head_lab = nd_label(s_pg_tabs, "");
 
     for (int i = 0; i < PP_WB_ROWS; i++) s_row[i] = nd_row_create(s_pg_tabs, i);
-
-    s_hint_lab = nd_label(s_pg_tabs, "+/-: focus/page  Enter: open");
+    /* no hint label on the tabs page - the status line carries the page
+     * indicator now (the old hint was the clipped overflow's last victim) */
 
     /* DETAIL page */
     s_pg_detail = lv_obj_create(parent);
@@ -363,16 +402,14 @@ static void create_nd(lv_obj_t *parent)
     lv_obj_align(s_pg_detail, LV_ALIGN_BOTTOM_MID, 0, -22);
     lv_obj_set_style_bg_opa(s_pg_detail, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(s_pg_detail, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(s_pg_detail, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_pg_detail, 2, LV_PART_MAIN);
     lv_obj_set_flex_flow(s_pg_detail, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_pg_detail, 4, LV_PART_MAIN);
     lv_obj_clear_flag(s_pg_detail, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_pg_detail, LV_OBJ_FLAG_HIDDEN);
     s_d_head_lab = nd_label(s_pg_detail, "");
-    s_d_senses_lab = nd_label(s_pg_detail, "");
-    s_d_ex_lab = nd_label(s_pg_detail, "");
-    s_d_tail_lab = nd_label(s_pg_detail, "");
-    nd_label(s_pg_detail, "Enter/Back: back");
+    s_d_body_lab = nd_label(s_pg_detail, "");
+    s_d_hint_lab = nd_label(s_pg_detail, "Enter/Back: back");
 
     /* shared status line (always black - EPD lesson, issue_list §23) */
     s_status_lab = lv_label_create(parent);
@@ -382,6 +419,20 @@ static void create_nd(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_status_lab, lv_color_black(), LV_PART_MAIN);
     lv_obj_align(s_status_lab, LV_ALIGN_BOTTOM_LEFT, 10, -4);
     lv_label_set_text(s_status_lab, s_status);
+
+    /* one-shot layout telemetry (acceptance A-1: hand-budgeted px clipped
+     * row 8 twice on device - log the real numbers for the next retune) */
+    lv_obj_update_layout(s_pg_tabs);
+    Serial.printf("[ND] layout: content %d, tab %d, ta %d, head %d, row %d, "
+                  "rows8 %d, mono lh %d, hanzi lh %d\n",
+                  (int)lv_obj_get_height(s_pg_tabs) - 4,
+                  (int)lv_obj_get_height(tabrow),
+                  (int)lv_obj_get_height(s_search_ta),
+                  (int)lv_obj_get_height(s_home_head_lab),
+                  (int)lv_obj_get_height(s_row[0]),
+                  PP_WB_ROWS * 23 + 4 * 3,
+                  (int)ND_FONT->line_height,
+                  (int)Font_Hanzi_16.line_height);
 }
 
 /* ---- render (one EPD flush per state change) ---------------------------------- */
@@ -414,9 +465,46 @@ static void nd_tab_style(void)
     }
 }
 
-static void nd_render_tabs(void)
+/* bottom page indicator for the visible list view (acceptance 2026-09-19:
+ * same pattern as DETAIL). Only fires when there is content, so transient
+ * caller messages and the idle hint survive an empty render. */
+static bool nd_render_page_indicator(void)
+{
+    int page = 0, pages = 0;
+    if (s_nd_page != ND_PAGE_TABS) return false;
+    if (s_tab == ND_TAB_HOME) {
+        if (s_list.count > 0) {
+            page = s_list.skip / PP_WB_ROWS + 1;
+            pages = (s_list.total + PP_WB_ROWS - 1) / PP_WB_ROWS;
+        }
+    } else if (s_list_sub == ND_LS_EXAMS) {
+        if (s_exam_count > 0) {
+            page = s_exam_top / PP_WB_ROWS + 1;
+            pages = (s_exam_count + PP_WB_ROWS - 1) / PP_WB_ROWS;
+        }
+    } else {
+        if (s_exam_list.count > 0) {
+            page = s_exam_list.skip / PP_WB_ROWS + 1;
+            pages = (s_exam_list.total + PP_WB_ROWS - 1) / PP_WB_ROWS;
+        }
+    }
+    if (pages > 0) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "page %d/%d", page, pages);
+        nd_status(buf);
+    }
+    return pages > 0;
+}
+
+static bool nd_render_tabs(void)
 {
     nd_tab_style();
+    /* the search box lives on HOME only (acceptance 2026-09-19: on LIST
+     * it was a dead "type to search" strip - hidden exits the flex flow) */
+    if (s_tab == ND_TAB_HOME)
+        lv_obj_clear_flag(s_search_ta, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_add_flag(s_search_ta, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_border_width(s_search_ta, s_tab == ND_TAB_HOME ? 2 : 0,
                                   LV_PART_MAIN);
 
@@ -442,7 +530,10 @@ static void nd_render_tabs(void)
         }
     } else if (s_list_sub == ND_LS_EXAMS) {
         char head[72];
-        snprintf(head, sizeof(head), "Exam books (%d words in bank)",
+        int vis = s_exam_count - s_exam_top;
+        if (vis > PP_WB_ROWS) vis = PP_WB_ROWS;
+        snprintf(head, sizeof(head), "Exams %d-%d/%d, %d words",
+                 s_exam_top + 1, s_exam_top + vis, s_exam_count,
                  s_exam_total_words);
         lv_label_set_text(s_home_head_lab, head);
         for (int i = 0; i < PP_WB_ROWS; i++) {
@@ -483,13 +574,79 @@ static void nd_render_tabs(void)
         }
     }
     nd_page_show(ND_PAGE_TABS);
+    return nd_render_page_indicator();
+}
+
+/* one UTF-8 codepoint; *pp advanced past its bytes */
+static uint32_t nd_next_cp(const char **pp)
+{
+    const unsigned char *p = (const unsigned char *)*pp;
+    uint32_t cp;
+    int n;
+    if (p[0] < 0x80)      { cp = p[0];        n = 1; }
+    else if (p[0] < 0xE0) { cp = p[0] & 0x1F; n = 2; }
+    else if (p[0] < 0xF0) { cp = p[0] & 0x0F; n = 3; }
+    else                  { cp = p[0] & 0x07; n = 4; }
+    for (int i = 1; i < n && p[i]; i++) cp = (cp << 6) | (p[i] & 0x3F);
+    *pp += n;
+    return cp;
+}
+
+/* exact glyph advance from the font (fallback: half a row, conservative) */
+static int nd_glyph_w(const lv_font_t *f, uint32_t cp)
+{
+    lv_font_glyph_dsc_t dsc;
+    if (lv_font_get_glyph_dsc(f, &dsc, cp, 0)) return dsc.box_w;
+    return f->line_height / 2;
+}
+
+/* rendered px height of one logical line in font f: char-level wrap on
+ * measured advances, width kept a few px shy of the label so LVGL's
+ * word-boundary wrapping can only ever err toward shorter pages */
+static int nd_text_px_h(const char *s, const lv_font_t *f, int wrap_w)
+{
+    int row_w = 0, rows = 1;
+    for (; s && *s;) {
+        uint32_t cp = nd_next_cp(&s);
+        int cw = nd_glyph_w(f, cp);
+        if (row_w > 0 && row_w + cw > wrap_w) {
+            rows++;
+            row_w = 0;
+        }
+        row_w += cw;
+    }
+    return rows * f->line_height;
+}
+
+/* render the current DETAIL body page + the page-count hint in the
+ * status line (one label write = one EPD refresh, never scrolled) */
+static void nd_render_detail_page(void)
+{
+    int top = s_d_page_top[s_d_page];
+    int end = (s_d_page + 1 < s_d_pages) ? s_d_page_top[s_d_page + 1]
+                                         : s_d_body_n;
+    static char buf[1100];               /* worst page = whole body */
+    int off = 0;
+    for (int i = top; i < end; i++)
+        off += snprintf(buf + off, sizeof(buf) - off, "%s\n", s_d_body[i]);
+    if (off == 0) buf[0] = '\0';
+    lv_label_set_text(s_d_body_lab, buf);
+    lv_obj_set_style_text_font(s_d_body_lab, &Font_Hanzi_16, LV_PART_MAIN);
+        /* font pinned to match the measurement font (body text carries zh
+         * in practice, so this is also the N1 zh-safe choice) */
+
+    if (s_d_pages > 1) {
+        char pg[32];
+        snprintf(pg, sizeof(pg), "page %d/%d  (+/- turns)",
+                 s_d_page + 1, s_d_pages);
+        nd_status(pg);
+    } else {
+        nd_status("");
+    }
 }
 
 static void nd_render_detail(void)
 {
-    s_enter_pending = false;            /* N2 (ds4 P3): a buffered Enter
-                                          * must not fire after returning
-                                          * from DETAIL to the tabs page */
     char head[96];
     if (s_detail.phonetic[0])
         snprintf(head, sizeof(head), "%s  %s  %s\n%s", s_detail.word,
@@ -499,34 +656,55 @@ static void nd_render_detail(void)
                  s_detail.cefr_level, s_detail.meaning_zh);
     nd_set_text(s_d_head_lab, head);
 
-    char sen[PP_WB_SENSE_MAX * 84 + 1];
-    int off = 0;
-    for (int i = 0; i < s_detail.sense_count &&
-                    off < (int)sizeof(sen) - 84; i++)
-        off += snprintf(sen + off, sizeof(sen) - off, "%s\n",
-                        s_detail.senses[i]);
-    if (off == 0) snprintf(sen, sizeof(sen), "(no senses)");
-    nd_set_text(s_d_senses_lab, sen);
+    /* flatten the body into logical lines (N1: nd_set_text re-runs the
+     * CJK font switch per rendered page, so zh lines stay visible) */
+    s_d_body_n = 0;
+    if (s_detail.sense_count == 0 && s_d_body_n < ND_D_LINES_MAX)
+        snprintf(s_d_body[s_d_body_n++], sizeof(s_d_body[0]), "(no senses)");
+    for (int i = 0; i < s_detail.sense_count && s_d_body_n < ND_D_LINES_MAX;
+         i++)
+        snprintf(s_d_body[s_d_body_n++], sizeof(s_d_body[0]), "%s",
+                 s_detail.senses[i]);
+    for (int i = 0; i < s_detail.ex_count && s_d_body_n < ND_D_LINES_MAX; i++)
+        snprintf(s_d_body[s_d_body_n++], sizeof(s_d_body[0]), "- %s",
+                 s_detail.examples[i]);
+    for (int i = 0; i < s_detail.chunk_count && s_d_body_n < ND_D_LINES_MAX;
+         i++)
+        snprintf(s_d_body[s_d_body_n++], sizeof(s_d_body[0]), "# %s",
+                 s_detail.chunks[i]);
+    if (s_detail.assoc[0] && s_d_body_n < ND_D_LINES_MAX)
+        snprintf(s_d_body[s_d_body_n++], sizeof(s_d_body[0]), "%s",
+                 s_detail.assoc);
 
-    char ex[PP_WB_EX_MAX * 164 + 1];
-    off = 0;
-    for (int i = 0; i < s_detail.ex_count && off < (int)sizeof(ex) - 164; i++)
-        off += snprintf(ex + off, sizeof(ex) - off, "- %s\n",
-                        s_detail.examples[i]);
-    nd_set_text(s_d_ex_lab, ex);        /* N1 (ds4 P2): bilingual example
-                                          * lines carry zh - mono font
-                                          * renders it blank */
+    /* measured page geometry: body font is fixed (see the page renderer),
+     * the head font follows nd_set_text's CJK switch like on screen */
+    const lv_font_t *body_f = &Font_Hanzi_16;
+    lv_obj_update_layout(s_pg_detail);
+    int wrap_w = lv_obj_get_width(s_d_body_lab) - 6;
+    int area_h = lv_obj_get_height(s_pg_detail) - 4;    /* minus pad 2x2 */
+    if (wrap_w < 100) wrap_w = ND_D_FALLBACK_W;
+    if (area_h < 120) area_h = ND_D_FALLBACK_H;
+    int head_px = nd_text_px_h(head, nd_has_cjk(head) ? body_f : ND_FONT,
+                               wrap_w);
+    int cap = area_h - head_px - ND_FONT->line_height - 8 /* flex row gaps */
+              - body_f->line_height;              /* one safety row */
+    if (cap < body_f->line_height) cap = body_f->line_height;
 
-    char tail[PP_WB_CHUNK_MAX * 84 + 100];
-    off = 0;
-    for (int i = 0; i < s_detail.chunk_count &&
-                    off < (int)sizeof(tail) - 84; i++)
-        off += snprintf(tail + off, sizeof(tail) - off, "# %s\n",
-                        s_detail.chunks[i]);
-    if (s_detail.assoc[0])
-        off += snprintf(tail + off, sizeof(tail) - off, "%s\n",
-                        s_detail.assoc);
-    nd_set_text(s_d_tail_lab, tail);    /* N1: chunks/assoc carry zh too */
+    /* greedy slice in px; a line taller than a page gets its own */
+    s_d_pages = 1;
+    s_d_page_top[0] = 0;
+    int used = 0;
+    for (int i = 0; i < s_d_body_n; i++) {
+        s_d_body_h[i] = nd_text_px_h(s_d_body[i], body_f, wrap_w);
+        if (used > 0 && used + s_d_body_h[i] > cap &&
+            s_d_pages < ND_D_PAGES_MAX) {
+            s_d_page_top[s_d_pages++] = i;
+            used = 0;
+        }
+        used += s_d_body_h[i];
+    }
+    s_d_page = 0;
+    nd_render_detail_page();
     nd_page_show(ND_PAGE_DETAIL);
 }
 
@@ -545,30 +723,36 @@ static void nd_consume(void)
     }
     if (!m) return;
 
+    /* order matters: render FIRST (it refreshes the page indicator), then
+     * any transient status message on top - a message set before the
+     * render would be wiped by the indicator */
     if (m->kind == ND_REQ_LIST) {
         if (!m->ok) {
+            nd_render_tabs();
             char buf[128];
             snprintf(buf, sizeof(buf), "list failed: %s", m->err);
             nd_status(buf);
-        } else if (s_tab == ND_TAB_LIST) {
+        } else if (m->exam_words) {      /* P2-1: land by the destination
+                                          * the request was given, not by
+                                          * the tab visible on arrival */
             s_exam_list = m->page;
             s_exam_list_focus = 0;
+            nd_render_tabs();
             if (s_exam_list.count == 0)
                 nd_status("exam book empty");
-            else
-                nd_status("");
         } else {
             s_list = m->page;
             s_focus = 0;
-            s_query_dirty = false;
+            s_query_dirty = strcmp(s_query, m->q) != 0;
+                /* in-flight typing/deleting is not this result's
+                 * confirmation (P2-1 kin) */
+            nd_render_tabs();
             if (s_list.count == 0)
                 nd_status(s_query[0] ? "no match - keep typing" : "bank empty");
-            else
-                nd_status("");
         }
-        nd_render_tabs();
     } else if (m->kind == ND_REQ_EXAMS) {
         if (!m->ok) {
+            nd_render_tabs();
             char buf[128];
             snprintf(buf, sizeof(buf), "exams failed: %s", m->err);
             nd_status(buf);
@@ -577,22 +761,39 @@ static void nd_consume(void)
             s_exam_count = m->exam_count;
             s_exam_total_words = m->exam_total_words;
             s_exam_focus = s_exam_top = 0;
-            nd_status("");
+            nd_render_tabs();
         }
-        nd_render_tabs();
     } else {                             /* DETAIL */
+        s_enter_pending = false;         /* N2 (ds4) + its failure-path
+                                          * residual (batch round P3): a
+                                          * buffered Enter must not outlive
+                                          * the request - clear for both
+                                          * outcomes (success renders
+                                          * DETAIL, failure renders tabs) */
         if (!m->ok) {
+            nd_render_tabs();
             char buf[128];
             snprintf(buf, sizeof(buf), "detail failed: %s", m->err);
             nd_status(buf);
-            nd_render_tabs();
         } else {
             s_detail = m->detail;
-            nd_status("");
-            nd_render_detail();
+            nd_render_detail();          /* sets its own page indicator */
         }
     }
     delete m;
+
+    /* P2-1: a List tab opened while the worker was busy deferred its lazy
+     * exams fetch - fire it now that a result has landed and gone idle */
+    if (s_exams_deferred && !s_nd_task) {
+        if (s_tab == ND_TAB_LIST && s_exam_count == 0 &&
+            s_nd_page == ND_PAGE_TABS) {
+            s_exams_deferred = false;
+            nd_status("Fetching exam books...");
+            nd_start(ND_REQ_EXAMS, 0);
+        } else if (s_tab != ND_TAB_LIST) {
+            s_exams_deferred = false;    /* user moved on - not wanted */
+        }
+    }
 }
 
 /* ---- actions -------------------------------------------------------------------- */
@@ -643,13 +844,22 @@ static void nd_tab_set(int tab)
     s_enter_pending = false;            /* N2: page context changed - a
                                           * buffered Enter no longer maps
                                           * to a valid action here */
-    if (tab == ND_TAB_LIST && s_exam_count == 0 && !s_nd_task) {
-        nd_render_tabs();
-        nd_status("Fetching exam books...");
-        nd_start(ND_REQ_EXAMS, 0);       /* lazy: only the first List open */
-    } else {
-        nd_render_tabs();
+    if (tab == ND_TAB_LIST && s_exam_count == 0) {
+        if (s_nd_task) {
+            s_exams_deferred = true;    /* P2-1: busy - pick the lazy fetch
+                                          * up in nd_consume once idle */
+        } else {
+            nd_render_tabs();
+            nd_status("Fetching exam books...");
+            nd_start(ND_REQ_EXAMS, 0);   /* lazy: only the first List open */
+            return;
+        }
     }
+    /* acceptance A-2: a transient fetch message from the view being left
+     * (e.g. "Fetching exam book...") must not outlive the tab switch -
+     * an empty target view has no page indicator to overwrite it */
+    if (!nd_render_tabs())
+        nd_status("");
 }
 
 /* ---- keyboard (factory loop) ------------------------------------------------------ */
@@ -682,7 +892,15 @@ void newdict_keyboard_poll(void)
         if (c == '\t' || c == '\v') continue;  /* combo/volume: ignore */
 
         if (s_nd_page == ND_PAGE_DETAIL) {
-            if (c == '\n' || c == '\b') nd_render_tabs();
+            if (c == '+' || c == '-') {  /* local page turn (EPD: re-render) */
+                int np = s_d_page + (c == '+' ? 1 : -1);
+                if (np >= 0 && np < s_d_pages) {
+                    s_d_page = np;
+                    nd_render_detail_page();
+                }
+            } else if (c == '\n' || c == '\b') {
+                nd_render_tabs();
+            }
             continue;
         }
 
@@ -730,41 +948,63 @@ void newdict_keyboard_poll(void)
             continue;
         }
 
-        if ((c == '+' || c == '-') && !s_nd_task) {
+        if (c == '+' || c == '-') {
+            if (s_nd_task) {             /* acceptance 2026-09-19: the old
+                                          * silent drop (only Enter is
+                                          * buffered) read as "broken
+                                          * +/- keys" on HOME */
+                nd_status("busy - wait");
+                continue;
+            }
+            /* page-jump semantics (acceptance A-9: touch picks rows,
+             * +/- turns whole pages - per-row stepping was noise) */
             if (s_tab == ND_TAB_HOME && s_list.count > 0) {
                 if (c == '+') {
-                    if (s_focus + 1 < s_list.count) s_focus++;
-                    else if (s_list.skip + s_list.count < s_list.total)
-                        nd_fetch_list(s_list.skip + s_list.count);
+                    if (s_list.skip + s_list.count < s_list.total)
+                        nd_fetch_list(s_list.skip + PP_WB_ROWS);
+                    else
+                        nd_status("last page");
                 } else {
-                    if (s_focus > 0) s_focus--;
-                    else if (s_list.skip > 0) nd_fetch_list(s_list.skip - PP_WB_ROWS);
+                    if (s_list.skip > 0)
+                        nd_fetch_list(s_list.skip > PP_WB_ROWS ?
+                                      s_list.skip - PP_WB_ROWS : 0);
+                    else
+                        nd_status("first page");
                 }
             } else if (s_tab == ND_TAB_LIST && s_list_sub == ND_LS_EXAMS &&
                        s_exam_count > 0) {
                 if (c == '+') {
-                    if (s_exam_focus + 1 < s_exam_count) s_exam_focus++;
-                    if (s_exam_focus >= s_exam_top + PP_WB_ROWS)
-                        s_exam_top = s_exam_focus - PP_WB_ROWS + 1;
+                    if (s_exam_top + PP_WB_ROWS < s_exam_count) {
+                        s_exam_top += PP_WB_ROWS;
+                        s_exam_focus = s_exam_top;
+                        nd_render_tabs();
+                    } else
+                        nd_status("last page");
                 } else {
-                    if (s_exam_focus > 0) s_exam_focus--;
-                    if (s_exam_focus < s_exam_top) s_exam_top = s_exam_focus;
+                    if (s_exam_top > 0) {
+                        s_exam_top = s_exam_top > PP_WB_ROWS ?
+                                     s_exam_top - PP_WB_ROWS : 0;
+                        s_exam_focus = s_exam_top;
+                        nd_render_tabs();
+                    } else
+                        nd_status("first page");
                 }
             } else if (s_tab == ND_TAB_LIST && s_list_sub == ND_LS_WORDS &&
                        s_exam_list.count > 0) {
                 if (c == '+') {
-                    if (s_exam_list_focus + 1 < s_exam_list.count)
-                        s_exam_list_focus++;
-                    else if (s_exam_list.skip + s_exam_list.count <
-                             s_exam_list.total)
-                        nd_fetch_list(s_exam_list.skip + s_exam_list.count);
+                    if (s_exam_list.skip + s_exam_list.count <
+                        s_exam_list.total)
+                        nd_fetch_list(s_exam_list.skip + PP_WB_ROWS);
+                    else
+                        nd_status("last page");
                 } else {
-                    if (s_exam_list_focus > 0) s_exam_list_focus--;
-                    else if (s_exam_list.skip > 0)
-                        nd_fetch_list(s_exam_list.skip - PP_WB_ROWS);
+                    if (s_exam_list.skip > 0)
+                        nd_fetch_list(s_exam_list.skip > PP_WB_ROWS ?
+                                      s_exam_list.skip - PP_WB_ROWS : 0);
+                    else
+                        nd_status("first page");
                 }
             }
-            if (!s_nd_task) nd_render_tabs();
             continue;
         }
 
@@ -791,6 +1031,7 @@ static void entry_nd(void)
     ui_disp_full_refr();
     s_nd_gen++;                          /* drop any stale in-flight result */
     s_enter_pending = false;
+    s_exams_deferred = false;
     s_nd_page = ND_PAGE_TABS;
     s_tab = ND_TAB_HOME;                 /* search-first (user request) */
     s_list_sub = ND_LS_EXAMS;
@@ -809,9 +1050,8 @@ static void destroy_nd(void)
     s_tab_btn[0] = s_tab_btn[1] = NULL;
     s_search_ta = NULL;
     s_home_head_lab = NULL;
-    s_d_head_lab = s_d_senses_lab = NULL;
-    s_d_ex_lab = s_d_tail_lab = NULL;
-    s_status_lab = s_hint_lab = NULL;
+    s_d_head_lab = s_d_body_lab = s_d_hint_lab = NULL;
+    s_status_lab = NULL;
     for (int i = 0; i < PP_WB_ROWS; i++) s_row[i] = NULL;
 }
 

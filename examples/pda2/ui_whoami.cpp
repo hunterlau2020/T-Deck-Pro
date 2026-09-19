@@ -108,12 +108,14 @@ static void wa_me_status_cached(void)
 enum {
     WA_CFG_FOCUS_BASE = 0,
     WA_CFG_FOCUS_KEY,
+    WA_CFG_FOCUS_GPIN,
     WA_CFG_FOCUS_PROVIDER,
     WA_CFG_FOCUS_NUM
 };
 static int s_cfg_focus = WA_CFG_FOCUS_BASE;
 static lv_obj_t *s_cfg_base_ta = NULL;
 static lv_obj_t *s_cfg_key_ta = NULL;
+static lv_obj_t *s_cfg_gpin_ta = NULL;
 static lv_obj_t *s_cfg_provider_dd = NULL;
 static char s_cfg_provider_options[256] = "";
 static int s_cfg_provider_idx = 0;
@@ -423,15 +425,17 @@ static int wa_cfg_provider_count(void)
 
 static void wa_cfg_status_text(char *buf, int buf_len)
 {
+    /* single line (v1.26): the status box shrank to 2 rows when the Gate
+     * PIN row moved in - the old 3-line "AI: ...\n...\n..." would clip */
     ai_provider_info_t p;
     if (ai_provider_enum(s_cfg_provider_idx, &p)) {
         char base[160] = "", model[80] = "", key[80] = "";
         ai_provider_get(p.name, base, sizeof(base),
                         model, sizeof(model), key, sizeof(key));
-        snprintf(buf, buf_len, "AI: %s\n%s\nkey: %s",
+        snprintf(buf, buf_len, "AI: %s | %s | key %s",
                  p.label, model, key[0] ? "set" : "missing");
     } else {
-        snprintf(buf, buf_len, "AI: custom\n(server default model)");
+        snprintf(buf, buf_len, "AI: custom | server default model");
     }
 }
 
@@ -465,6 +469,10 @@ static void wa_cfg_prefill(void)
     lv_textarea_set_text(s_cfg_key_ta, key_masked);
     s_cfg_key_masked = s_cfg_key_real[0] != '\0';
 
+    char gpin[24];
+    penpal_load_gate_pin(gpin, sizeof(gpin));
+    lv_textarea_set_text(s_cfg_gpin_ta, gpin);
+
     char provider_name[32] = "";
     penpal_load_ai_provider(provider_name, sizeof(provider_name));
     s_cfg_provider_idx = ai_provider_count();   /* custom default */
@@ -496,6 +504,9 @@ static void wa_cfg_save_cb(lv_event_t *e)
         save_key = s_cfg_key_real;         /* untouched mask: keep stored key */
     }
     bool server_ok = penpal_save_config(base, save_key);
+    bool gpin_ok = true;
+    if (s_cfg_gpin_ta)
+        gpin_ok = penpal_save_gate_pin(lv_textarea_get_text(s_cfg_gpin_ta));
     bool prov_ok = false;
     if (server_ok) {
         strncpy(s_cfg_key_real, save_key, sizeof(s_cfg_key_real) - 1);
@@ -508,7 +519,7 @@ static void wa_cfg_save_cb(lv_event_t *e)
         if (ai_provider_enum(s_cfg_provider_idx, &p)) provider_name = p.name;
         prov_ok = penpal_save_ai_provider(provider_name);
     }
-    if (server_ok && prov_ok) {
+    if (server_ok && prov_ok && gpin_ok) {
         wa_cfg_status("saved");
         pp_notify_cfg_changed();           /* PenPal re-syncs with new config */
         /* key may point at another user: drop the cached profile (both the
@@ -517,7 +528,9 @@ static void wa_cfg_save_cb(lv_event_t *e)
         s_profile_fetched = false;
         wa_me_render();
     } else if (server_ok) {
-        wa_cfg_status("server saved; AI provider save failed");
+        wa_cfg_status(!prov_ok && !gpin_ok ? "server saved; provider + gate-pin save failed"
+                    : !prov_ok ? "server saved; AI provider save failed"
+                               : "server saved; gate-pin save failed");
         /* P2-7 residual (Grok): the key is already in NVS even though the
          * provider write failed - the epoch bump and cache drop must not
          * wait for it, or an in-flight old-account profile still matches
@@ -555,16 +568,24 @@ static void wa_cfg_key_focus_cb(lv_event_t *e)
     s_cfg_focus = WA_CFG_FOCUS_KEY;
 }
 
+static void wa_cfg_gpin_focus_cb(lv_event_t *e)
+{
+    (void)e;
+    s_cfg_focus = WA_CFG_FOCUS_GPIN;
+}
+
 static void wa_cfg_build(lv_obj_t *page)
 {
+    /* v1.26: rows tightened to fit the Gate PIN row (y36..y318, was
+     * y40..y318 with 4 rows) - same order: URL, Key, PIN, provider, FW */
     lv_obj_t *bl = lv_label_create(page);
-    lv_obj_align(bl, LV_ALIGN_TOP_LEFT, 6, 40);
+    lv_obj_align(bl, LV_ALIGN_TOP_LEFT, 6, 36);
     lv_label_set_text(bl, "Server URL:");
     lv_obj_set_style_text_font(bl, &lv_font_montserrat_14, 0);
 
     s_cfg_base_ta = lv_textarea_create(page);
-    lv_obj_set_size(s_cfg_base_ta, 228, 34);
-    lv_obj_align(s_cfg_base_ta, LV_ALIGN_TOP_MID, 0, 58);
+    lv_obj_set_size(s_cfg_base_ta, 228, 32);
+    lv_obj_align(s_cfg_base_ta, LV_ALIGN_TOP_MID, 0, 54);
     lv_textarea_set_max_length(s_cfg_base_ta, 95);
     lv_textarea_set_one_line(s_cfg_base_ta, true);
     lv_obj_add_event_cb(s_cfg_base_ta, wa_cfg_base_focus_cb,
@@ -572,27 +593,41 @@ static void wa_cfg_build(lv_obj_t *page)
     lv_obj_set_style_text_font(s_cfg_base_ta, &lv_font_montserrat_14, 0);
 
     lv_obj_t *kl = lv_label_create(page);
-    lv_obj_align(kl, LV_ALIGN_TOP_LEFT, 6, 100);
+    lv_obj_align(kl, LV_ALIGN_TOP_LEFT, 6, 90);
     lv_label_set_text(kl, "Server Key:");
     lv_obj_set_style_text_font(kl, &lv_font_montserrat_14, 0);
 
     s_cfg_key_ta = lv_textarea_create(page);
-    lv_obj_set_size(s_cfg_key_ta, 228, 34);
-    lv_obj_align(s_cfg_key_ta, LV_ALIGN_TOP_MID, 0, 118);
+    lv_obj_set_size(s_cfg_key_ta, 228, 32);
+    lv_obj_align(s_cfg_key_ta, LV_ALIGN_TOP_MID, 0, 108);
     lv_textarea_set_max_length(s_cfg_key_ta, 16);
     lv_textarea_set_one_line(s_cfg_key_ta, true);
     lv_obj_add_event_cb(s_cfg_key_ta, wa_cfg_key_focus_cb,
                         LV_EVENT_FOCUSED, NULL);
     lv_obj_set_style_text_font(s_cfg_key_ta, &lv_font_montserrat_14, 0);
 
+    lv_obj_t *gl = lv_label_create(page);
+    lv_obj_align(gl, LV_ALIGN_TOP_LEFT, 6, 144);
+    lv_label_set_text(gl, "Gate PIN:");
+    lv_obj_set_style_text_font(gl, &lv_font_montserrat_14, 0);
+
+    s_cfg_gpin_ta = lv_textarea_create(page);
+    lv_obj_set_size(s_cfg_gpin_ta, 228, 28);
+    lv_obj_align(s_cfg_gpin_ta, LV_ALIGN_TOP_MID, 0, 162);
+    lv_textarea_set_max_length(s_cfg_gpin_ta, 16);
+    lv_textarea_set_one_line(s_cfg_gpin_ta, true);
+    lv_obj_add_event_cb(s_cfg_gpin_ta, wa_cfg_gpin_focus_cb,
+                        LV_EVENT_FOCUSED, NULL);
+    lv_obj_set_style_text_font(s_cfg_gpin_ta, &lv_font_montserrat_14, 0);
+
     lv_obj_t *pl = lv_label_create(page);
-    lv_obj_align(pl, LV_ALIGN_TOP_LEFT, 6, 160);
+    lv_obj_align(pl, LV_ALIGN_TOP_LEFT, 6, 194);
     lv_label_set_text(pl, "AI Provider:");
     lv_obj_set_style_text_font(pl, &lv_font_montserrat_14, 0);
 
     s_cfg_provider_dd = lv_dropdown_create(page);
-    lv_obj_set_size(s_cfg_provider_dd, 228, 30);
-    lv_obj_align(s_cfg_provider_dd, LV_ALIGN_TOP_MID, 0, 178);
+    lv_obj_set_size(s_cfg_provider_dd, 228, 28);
+    lv_obj_align(s_cfg_provider_dd, LV_ALIGN_TOP_MID, 0, 212);
     lv_obj_set_style_text_font(s_cfg_provider_dd, &lv_font_montserrat_14,
                                LV_PART_MAIN);
     s_cfg_provider_options[0] = '\0';
@@ -613,7 +648,7 @@ static void wa_cfg_build(lv_obj_t *page)
     /* firmware version right below the provider dropdown (user request
      * 2026-09-16) - x.y.build, see fw_version.h for the bump policy */
     lv_obj_t *fw_lab = lv_label_create(page);
-    lv_obj_align(fw_lab, LV_ALIGN_TOP_LEFT, 6, 212);
+    lv_obj_align(fw_lab, LV_ALIGN_TOP_LEFT, 6, 240);
     lv_label_set_text_fmt(fw_lab, "FW: %s", fw_version_string());
     lv_obj_set_style_text_font(fw_lab, &lv_font_montserrat_14, 0);
     /* EPD renders with a hard <128 brightness threshold: palette GREY
@@ -624,25 +659,25 @@ static void wa_cfg_build(lv_obj_t *page)
                                 lv_color_black(), 0);
 
     lv_obj_t *save_btn = lv_btn_create(page);
-    lv_obj_set_size(save_btn, 64, 30);
-    lv_obj_align(save_btn, LV_ALIGN_TOP_LEFT, 6, 232);
+    lv_obj_set_size(save_btn, 64, 28);
+    lv_obj_align(save_btn, LV_ALIGN_TOP_LEFT, 6, 258);
     lv_obj_t *save_lab = lv_label_create(save_btn);
     lv_label_set_text(save_lab, "Save");
     lv_obj_center(save_lab);
     lv_obj_add_event_cb(save_btn, wa_cfg_save_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *test_btn = lv_btn_create(page);
-    lv_obj_set_size(test_btn, 64, 30);
-    lv_obj_align(test_btn, LV_ALIGN_TOP_LEFT, 78, 232);
+    lv_obj_set_size(test_btn, 64, 28);
+    lv_obj_align(test_btn, LV_ALIGN_TOP_LEFT, 78, 258);
     lv_obj_t *test_lab = lv_label_create(test_btn);
     lv_label_set_text(test_lab, "Test");
     lv_obj_center(test_lab);
     lv_obj_add_event_cb(test_btn, wa_cfg_test_cb, LV_EVENT_CLICKED, NULL);
 
     s_cfg_status = lv_label_create(page);
-    lv_obj_align(s_cfg_status, LV_ALIGN_TOP_LEFT, 6, 268);
+    lv_obj_align(s_cfg_status, LV_ALIGN_TOP_LEFT, 6, 290);
     lv_obj_set_width(s_cfg_status, 228);
-    lv_obj_set_height(s_cfg_status, 50);
+    lv_obj_set_height(s_cfg_status, 28);
     lv_label_set_long_mode(s_cfg_status, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_cfg_status, "");
     lv_obj_set_style_text_font(s_cfg_status, &lv_font_montserrat_14, 0);
@@ -687,6 +722,13 @@ static void wa_refresh_cb(lv_event_t *e)
 }
 
 /* ---- keyboard ----------------------------------------------------------- */
+static lv_obj_t *wa_cfg_active_ta(void)
+{
+    if (s_cfg_focus == WA_CFG_FOCUS_KEY) return s_cfg_key_ta;
+    if (s_cfg_focus == WA_CFG_FOCUS_GPIN) return s_cfg_gpin_ta;
+    return s_cfg_base_ta;
+}
+
 static void wa_cfg_key(char c)
 {
     if (c == '\t') {
@@ -705,7 +747,7 @@ static void wa_cfg_key(char c)
         }
         return;
     }
-    lv_obj_t *ta = (s_cfg_focus == WA_CFG_FOCUS_KEY) ? s_cfg_key_ta : s_cfg_base_ta;
+    lv_obj_t *ta = wa_cfg_active_ta();
     if (!ta) return;
     if (c == '\b') {
         const char *txt = lv_textarea_get_text(ta);
@@ -754,8 +796,7 @@ void whoami_keyboard_poll(void)
                 scr_mgr_pop(false);
                 return;
             }
-            const char *t = lv_textarea_get_text(
-                s_cfg_focus == WA_CFG_FOCUS_KEY ? s_cfg_key_ta : s_cfg_base_ta);
+            const char *t = lv_textarea_get_text(wa_cfg_active_ta());
             if (!t || !t[0]) {
                 s_wa_kbd_active = false;
                 scr_mgr_pop(false);
@@ -907,7 +948,8 @@ static void wa_destroy(void)
      * always-running whoami_keyboard_poll */
     s_me_tab_btn = s_cfg_tab_btn = s_me_page = s_cfg_page = NULL;
     s_me_label = s_me_status = NULL;
-    s_cfg_base_ta = s_cfg_key_ta = s_cfg_provider_dd = s_cfg_status = NULL;
+    s_cfg_base_ta = s_cfg_key_ta = s_cfg_gpin_ta = NULL;
+    s_cfg_provider_dd = s_cfg_status = NULL;
     (void)s_wa_gen;
 }
 

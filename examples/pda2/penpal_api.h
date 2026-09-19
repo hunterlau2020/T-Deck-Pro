@@ -142,6 +142,15 @@ void penpal_load_config(char *base, int base_len, char *key, int key_len);
  *  @return false on NVS failure (caller shows it in the Cfg status line). */
 bool penpal_save_config(const char *base, const char *key);
 
+/* ---- gate pin (v1.26; header X-Gate-Pin, DEPLOY_APACHE.md §gate) ----------
+ * Chain: NVS "gpin" -> SPIFFS /env.cfg GATE_PIN -> built-in default.
+ * Defense-in-depth against indiscriminate scans, NOT a security boundary
+ * (extractable from firmware; the real credential stays the API key).
+ * A saved EMPTY value falls through to the chain: an empty header would
+ * 403 at the Apache gate, so empty always means "use the chain value". */
+void penpal_load_gate_pin(char *pin, int pin_len);
+bool penpal_save_gate_pin(const char *pin);
+
 /**
  * @brief Load/save the selected AI provider name in NVS namespace "penpal".
  *        An empty string means "custom / none".  The actual base/model/key
@@ -297,7 +306,10 @@ bool penpal_lt_get_history(const char *base, const char *key,
  *   (candidate values from GET /words/exams). GET /words/{id}/detail ->
  *   the VOCABD-2 detail card (pos-grouped senses, examples, chunks, assoc
  *   groups, tags). */
-#define PP_WB_ROWS      8    /* list rows fetched per page (device screen) */
+#define PP_WB_ROWS      7    /* list rows fetched per page (device screen);
+                              * 7 since v1.27 - user decision: the 8th row
+                              * kept clipping on real hardware, and 7 also
+                              * fits the exam-card window */
 #define PP_WB_SENSE_MAX 6    /* flattened "pos: zh (en)" lines kept */
 #define PP_WB_EX_MAX    2    /* example lines kept */
 #define PP_WB_CHUNK_MAX 2    /* chunk lines kept */
