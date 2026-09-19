@@ -34,8 +34,13 @@ using namespace std;
 
 /* Allow plain-http OTA sources. OFF by default: the manifest signature
  * protects integrity, but plaintext transport leaks the firmware image
- * and URL; enable only for bench testing on an isolated network. */
-// #define OTA_ALLOW_PLAIN_HTTP
+ * and URL; enable only for bench testing on an isolated network
+ * (the pda2_ota_bench build passes -DOTA_ALLOW_PLAIN_HTTP). Value-based
+ * (0/1), never test it with #ifdef - the gate must stay closed in
+ * production builds where only the default 0 define exists. */
+#ifndef OTA_ALLOW_PLAIN_HTTP
+#define OTA_ALLOW_PLAIN_HTTP 0
+#endif
 
 typedef struct {
     string version;

@@ -41,9 +41,32 @@ been removed from HEAD and **treated as COMPROMISED**:
   cleared to a template the same day (OWM key/coords moved to `/env.cfg` too).
 - `config_keys.h` and `/env.cfg` must never be added to git.
 
+## OTA signing key (2026-09-20)
+
+ECDSA P-256 keypair for signed OTA manifests (design
+`ota-update-design.md` §2.1/§2.2; trust anchor baked into
+`examples/pda2/ota_trust_anchor.h` — the PUBLIC half, tracked by design):
+
+- Private key `ota_signing_key.pem` (repo root, **gitignored**) +
+  backup `backups/ota_signing_key-325BDA1A.pem` (gitignored). Both live
+  only on this machine — **a user-held offline copy is still owed**.
+- Current key_id **`325BDA1A`** (rotated 2026-09-20; the original
+  `B09E5CE2` private key was LOST from this machine — every manifest
+  signed by it is invalid, no device ever installed one, zero exposure).
+- Rotation is USB-only (`ota_gen_key.py` regenerates key + anchor header,
+  then every device must be reflashed over USB; "换根仅 USB" §2.2).
+  **Lesson (issue_list §35): generate + backup in the same command
+  sequence** — "lives only on this machine" without an enforced backup
+  step is how the first key was lost.
+- The Apache gate pin (`X-Gate-Pin`) is NOT a secret by owner decision:
+  defense-in-depth against scans, extractable from firmware by design
+  (real credential = per-user API key). Its current value may appear in
+  tracked docs/example files.
+
 ## Release checklist
 
 - [ ] No secrets in `git diff HEAD` (run `git grep` for key patterns)
+- [x] OTA signing key gitignored + `ota_test/` bench dir excluded (2026-09-20)
 - [x] History purged (filter-repo, 2026-08-21)
 - [x] OpenRouter key rotated (2026-08-21; OWM key never leaked — env-chain only)
 - [x] Rewritten `HD-V2-250915` force-pushed and blob-verified (2026-08-21)

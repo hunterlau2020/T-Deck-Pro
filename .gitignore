@@ -34,3 +34,6 @@ docs/review_guide_reference/
 
 # OTA manifest signing key (private) - never commit
 ota_signing_key.pem
+
+# OTA LAN test bench (self-signed TLS key + signed manifest + test firmware)
+ota_test/

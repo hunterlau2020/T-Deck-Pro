@@ -7,10 +7,6 @@
 #include "ota_trust_anchor.h"
 #include "http_utils.h"
 #include "ca_bundle_full.h"
-
-#ifndef OTA_ALLOW_PLAINTEXT
-#define OTA_ALLOW_PLAINTEXT 0    /* lab-only: 1 permits http:// URLs (no TLS) */
-#endif
 #include "env_secrets.h"
 #include "ui_deckpro_port.h"            /* battery getters (precheck) */
 
@@ -73,7 +69,7 @@ static bool ota_url_scheme_ok(const char *url, char *err, int err_len)
     const bool https = (strncmp(url, "https://", 8) == 0);
     const bool http = (strncmp(url, "http://", 7) == 0);
     if (https) return true;
-#ifdef OTA_ALLOW_PLAIN_HTTP
+#if OTA_ALLOW_PLAIN_HTTP                 /* value check: default 0 in prod */
     if (http) return true;
 #endif
     (void)http;
@@ -330,7 +326,7 @@ static void ota_check_task(void *param)
      * behind the compile-time lab macro (default off). */
     bool begun = (strncmp(url, "https://", 8) == 0)
         ? (secure.setCACertBundle(CA_BUNDLE_MOZILLA), http.begin(secure, url))
-        : (OTA_ALLOW_PLAINTEXT ? http.begin(plain, url) : false);
+        : (OTA_ALLOW_PLAIN_HTTP ? http.begin(plain, url) : false);
     if (!begun) {
         r->err = "connect failed (manifest)";
         ota_send_result(r);
@@ -442,7 +438,7 @@ static void ota_update_task(void *param)
     /* same forced-CA policy as the manifest fetch (design v6 §3.1) */
     bool begun = (strncmp(m.url.c_str(), "https://", 8) == 0)
         ? (secure.setCACertBundle(CA_BUNDLE_MOZILLA), http.begin(secure, m.url.c_str()))
-        : (OTA_ALLOW_PLAINTEXT ? http.begin(plain, m.url.c_str()) : false);
+        : (OTA_ALLOW_PLAIN_HTTP ? http.begin(plain, m.url.c_str()) : false);
     if (!begun) {
         r->err = "connect failed (firmware)";
         goto fail;

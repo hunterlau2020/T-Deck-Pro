@@ -11,68 +11,69 @@
 > **串行单机刷写**——一次只刷一台，严禁两台并行（坏镜像不应有同时砖掉
 > 全部设备的机会）。
 
-## 待办（2026-09-16 盘点，按优先级）
+## 待办（2026-09-16 盘点，2026-09-20 更新，按优先级）
 
-- [ ] **v1.21 真机验收**：①new_dict（**第 1 屏** "NewDict"）：Home tab
-      搜索框输入 + Enter 搜索（英文前缀）、+/- 焦点/翻页、触摸/Enter
-      开详情；List tab 列 15 张考试卡 → 点考试名进词书（翻页）→ 退格
-      逐级返回；**详情页双语例句/词块中文必须出字（L1 轮 N1）**；
-      ②Level APP：**起步连按两次 Enter 走完整场，结果页必须停留
-      （L1）**；③ds4 真机反例：直进 4_2 扫描中 Back 再进可扫、扫描完成
-      瞬间 Back ×10 无 `release deferred`、4_2 停留 >30s 退出数秒内
-      恢复 IP、慢扫描环境 F1′ 反例；④其余回归：
-      首次进入一次 Enter 即开测（v1.18）、单题作答题数可变 2..16（v1.17）、
-      中文选项（v1.16）、中途退格放弃不提交、结果页 Enter 重测；③其余
-      回归（三屏菜单 / WiFi / PenPal）。字库缺字逃生通道：题库更新后
-      重跑生成管线（DB 字符集提取 → lv_font_conv → 回读验证，见
-      CHANGELOG v1.16；IPA 字符 ː 与 PUA 私有区两个字形有意不含）。
-      **词库/题库新增内容若超出 3955 字全集会出缺字，需重新生成
-      Font_Hanzi_16**。
-- [ ] **OTA 真机验证矩阵**（实现已落地 `71c09e7`，设计 §8 剩余项）：①
-      校准打点（两机 setup 各段耗时 + `_busy_timeout` 实测）→ 复核 WDT
-      窗口 T=60s 假设、填 `docs/ota-baseline.md`；② 回滚矩阵（自毁固件，
-      先于首次真实 OTA；PENDING_VERIFY 状态链真机未覆盖——2026-09-16
-      已核实回滚机制在位、otadata 现 VALID 态，见设计 §5.1）；③
-      覆盖层吸收 / 断网 45s 重试 / 低电安全阀 / 签名否定用例（大写 hex、
-      前导零、错锚验签）；④ 局域网端到端（HTTP 服务 + 签一份 manifest，
-      走 Check→Install→重启→自证全流程，需临时编 `OTA_ALLOW_PLAIN_HTTP`
-      台架版）。真机已过：自证窗口 `mark valid ok` 一次（机 #3）。
+- [x] **v1.21 真机验收**（2026-09-19/20 完成，issue_list §33/§34）：
+      new_dict 全功能走查 ✅（§33，其间修复布局溢出/页码/整页翻等
+      A-1~A-6）、L1 双 Enter ✅（B1，§34 闭环）、LevelTest 回归组 ✅
+      （v1.16/17/18 各项）。**剩余**：C3 慢扫描 F1′ 反例（需 >6s 慢扫
+      描环境）；C2/C4 串口判据待正式记录；W-2 `scan failed(-2)` 首启
+      快速重试（P3 待办）。字库缺字逃生通道：题库更新后重跑生成管线
+      （DB 字符集提取 → lv_font_conv → 回读验证，见 CHANGELOG v1.16；
+      IPA 字符 ː 与 PUA 私有区两个字形有意不含）。**词库/题库新增内容
+      若超出 3955 字全集会出缺字，需重新生成 Font_Hanzi_16**。
+- [ ] **OTA 真机验证矩阵**（实现已落地 `71c09e7`，设计 §8 剩余项）。
+      **④ 局域网端到端已通过**（2026-09-20，issue_list §35：Check→
+      Install→重启→自证→already up to date 全链路；台架环境
+      `pda2_ota_bench` + `ota_test/` 服务已沉淀；顺带修复台架宏名 P2
+      并完成信任锚换根 `325BDA1A`）。剩余：①校准打点（两机 setup 各段
+      耗时 + `_busy_timeout` 实测）→ 复核 WDT 窗口 T=60s 假设、填
+      `docs/ota-baseline.md`；②回滚矩阵（自毁固件，PENDING_VERIFY →
+      WDT 复位 → 自动回滚，用 `pda2_ota_bench` 台架机做）；③覆盖层
+      吸收 / 断网 45s 重试 / 低电安全阀 / 签名否定用例（大写 hex、
+      前导零、错锚验签）。生产 https OTA 另需：生产站证书续期 +
+      `/firmware/` 端点部署（设备侧已就绪）。真机已过：自证窗口
+      `mark valid ok` 一次（机 #3）+ ④ 全链路（机 #1，2026-09-20）。
 - [ ] **session batch 修复复审**（`095e41a` 修复轮：P1 rollback + 五项
       P2）：按评审指南 §2.5 修复轮安排 delta 复审（核销 71c09e7 四方
       评审发现的修复证据 + 反例击穿）。
-- [ ] **三份在途评审申请待出结果**（2026-09-18 提交，`5d1dbfb`）：
-      ①`session-batch-review-request-bdb75bf..7bab081.md`（五方修复轮
-      delta 复审）；②`...-leveltest-family.md`（v1.13/16/17/18 功能族）；
-      ③`...-newdict-d5755ae.md`。出结果后按结论处置并登记。
-- [ ] **设备版本统一**：`28:37:2f:91:2c:20`（COM5）现烧 **v1.19**
-      （`d5755ae`，2026-09-18 验证 6/6 块 + 串口自证）；`10:20:ba:34:18:5c`
-      （COM7）按用户指令暂留 `71c09e7`；`10:20:ba:34:19:ec` 未连接。
-      是否把 COM7/#3 统一到 v1.19 待用户确认（一条命令）。
-- [ ] **`PENPAL_BASE` 数据源不一致 + 生产站两问题（2026-09-18 更新）**：
-      ①设备 NVS 指向 `https://www.studyreview.net`，`data/env.cfg` 与机 #3
-      仍为旧地址 `192.168.3.186:8000`（现开发机 LAN 已变 **192.168.1.86**）；
-      ②**生产站 `/words` 对 API key 401**——词库 learn-scope 改动（后端
-      "九十八"）未部署到生产，new_dict 真机验收被阻（切 base 到本地
-      `http://192.168.1.86:8000` + 本地 key 可解，或等生产部署）；③**生产站
-      TLS 证书已过期**（2026-09-18 严格校验直连被拒，设备靠 insecure 模式
-      通过）——域名侧需续期。后两项在用户侧，固件侧只跟踪验收解阻。
+- [ ] **v1.24-v1.28 评审申请**：NewDict 修复轮（§32/§33）+ Gate-pin
+      （v1.26）+ OTA 台架与宏名修复（§35），范围按 `first^..last` 含两端
+      记法、逐文件归属表（修正 §32 Nit-4 的申请记法错误）。
+- [x] **三份在途评审申请待出结果**（2026-09-18 提交，`5d1dbfb`）：
+      四份结果已回收并处置——Gemini A / Grok A / Claude C / GPT C，
+      P2-1 等新发现全部落地（issue_list §32，v1.22）。
+- [x] **设备版本统一**：COM5（`28:37:2f:91:2c:20`）已刷 **v1.28**
+      （2026-09-20，串口确认）；COM7（`10:20:ba:34:18:5c`）在 **v1.27**
+      （刷 v1.28 时 CDC 掉口未写入，设备完好）——**待重插 USB 补刷**；
+      `10:20:ba:34:19:ec`（#3）未连接。
+- [ ] **`PENPAL_BASE` 数据源 + 生产站两问题（2026-09-20 更新）**：
+      **new_dict 真机验收已解阻**（搜索/详情/考试卡全通过，§33）——设备
+      当前数据源可用。剩余在用户侧：①生产站 TLS 证书续期（2026-09-18
+      起过期，设备 insecure 模式可过但生产 OTA 的 Mozilla-CA 严格校验
+      会被拒）；②生产站部署 `/firmware/` 端点 + 上传签名 manifest/
+      firmware.bin（OTA_URL 已配 `https://www.studyreview.net/firmware/
+      manifest.json`，端点就绪即生产 OTA 通）。
 - [ ] **读信 TTS**：PenPal THREAD 页加"朗读"——MiniMax t2a 合成（链路已验：
       `minimax_audio.cpp` 的 `minimax_tts()`）→ SPIFFS `/tts.mp3` →
       `connecttoFS` 播放（EPD 抑制 + WDT 窗口语义照搬 AI Chat 语音路径）。
       注意与 OTA 写 flash 的互斥（`ota_busy()` 已导出）。
-- [ ] **PenPal gate-pin 去 hardcode**：`X-Gate-Pin`（现 `49ef146ed5`，硬编码于
-      `penpal_api.cpp`）迁入配置链——NVS → `/env.cfg`（`GATE_PIN=`）→
-      现值作编译期兜底；与 Apache `Require expr` 侧同步轮换（部署文档
-      DEPLOY_APACHE.md；gate-pin 是防扫描纵深层，非安全边界）。
-- [ ] **openrouter Test 证书修复验证**：全量包已补 GlobalSign R1 交叉签锚
-      （v6 轮 AI Config Test 的 X509 失败应已解决）——设备上点一次
-      AI Config → Test 确认（顺手项）。
-- [ ] **OTA 信任锚管理流程**：`ota_signing_key.pem` 仅存本机（gitignored）；
-      建立离线备份位与轮换预案（换根仅 USB，设计 §2.2）。
+- [x] **PenPal gate-pin 去 hardcode**（**v1.26 已落地** 2026-09-19）：
+      `X-Gate-Pin` 迁入配置链 NVS → `/env.cfg GATE_PIN=` → 编译期默认
+      兜底（issue_list 无独立条目，见 CHANGELOG v1.26）；Whoami Cfg 新增
+      Gate PIN 输入行。与 Apache `Require expr` 侧同步轮换时注意：先更
+      服务端再改设备（改错 pin 全部请求 403）。
+- [x] **openrouter Test 证书修复验证**：用户真机确认通过（2026-09-19，
+      AI Config → Test OK；全量包 GlobalSign R1 交叉签锚生效）。
+- [ ] **OTA 信任锚管理流程**（2026-09-20 部分完成）：换根已实跑（旧钥
+      丢失 → `325BDA1A`，见 §35）；新钥已备份 `backups/ota_signing_key-
+      325BDA1A.pem`。**剩余**：用户侧离线副本（密码库/U 盘）；把"生成
+      密钥与备份同命令序列"写进 ota_gen_key.py 或设计 §2.2。
 - [ ] **检查是否需要合并上游 T-Deck-Pro 新 commits**：
       https://github.com/hunterlau2020/T-Deck-Pro/compare/HD-V2-250915...Xinyuan-LilyGO%3AT-Deck-Pro%3AHD-V2-250915
 - [ ] **AI Chat / TTS 返回数据累积检查**（尤其语音；会话数据是否有上限/清理）
-- [ ] **Apache Gate-Pin 双活过渡**：能否同时接受新旧两个 PIN（平滑轮换）
+- [ ] **Apache Gate-Pin 双活过渡**：能否同时接受新旧两个 PIN（平滑轮换）；
+      v1.26 后设备侧改 pin 已免刷机（Whoami Cfg），轮换成本大降
 - [ ] **轮换 PenPal 测试 key**（`89rg35eua2`/`3s60yrgdua` 已入 git 的
       penpal-design.md）并把设计文档里的明文换成占位符
 - [x] **`cursor.show` 直写包 helper**（评审 1561b41..b92d021 Claude Nit）：

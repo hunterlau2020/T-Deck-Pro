@@ -20,6 +20,7 @@ Import("env")
 
 ENV_TO_EXAMPLE = {
     "T-Deck-Pro": "test_GPS",
+    "pda2_ota_bench": "pda2",   # OTA LAN test bench (same app, plain-http flag)
 }
 
 
