@@ -31,6 +31,10 @@
 #include <mbedtls/sha256.h>
 
 #define OTA_MANIFEST_TIMEOUT_MS 20000
+#define OTA_MANIFEST_MAX_BYTES  4096     /* qwen P3-2: a hostile server must
+                                          * not OOM us via getString() before
+                                          * verification - real manifests are
+                                          * ~400 B; 4 KB is 10x headroom */
 #define OTA_IDLE_TIMEOUT_MS     45000     /* read-idle during download */
 #define OTA_DEADLINE_MS         (10UL * 60UL * 1000UL)
 #define OTA_TASK_STACK          (1024 * 16)   /* design §6 exception: 16KB */
@@ -340,6 +344,17 @@ static void ota_check_task(void *param)
     int code = http.GET();
     if (code != 200) {
         r->err = string("HTTP ") + to_string(code) + " (manifest)";
+        http.end();
+        ota_send_result(r);
+        ota_task_exit();
+        return;
+    }
+    /* qwen P3-2: cap the pre-verification body. getString() would allocate
+     * whatever Content-Length claims; a manifest is ~400 B - anything
+     * bigger (or chunked/no length) is refused before any allocation. */
+    int mlen = http.getSize();
+    if (mlen <= 0 || mlen > OTA_MANIFEST_MAX_BYTES) {
+        r->err = "manifest size missing/oversize";
         http.end();
         ota_send_result(r);
         ota_task_exit();
