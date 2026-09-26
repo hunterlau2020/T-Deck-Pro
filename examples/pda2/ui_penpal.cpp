@@ -1102,6 +1102,16 @@ void penpal_keyboard_poll(void)
 
     if (!s_pp_active) return;
 
+    /* leave-COMPOSE confirm: Enter = abandon draft, any other key = keep
+     * (dialog owns the keyboard while up, like the notice box) */
+    if (ppw_leave_open()) {
+        char c;
+        if (!keypad_get_val(&c)) return;
+        keypad_set_flag();
+        ppw_leave_key(c);
+        return;
+    }
+
     /* notice box: +/- scrolls the box (the body label itself does not
      * scroll), any other key closes (the topics suggestion overlay has its
      * own Use/Cancel keys inside ppw_key) */

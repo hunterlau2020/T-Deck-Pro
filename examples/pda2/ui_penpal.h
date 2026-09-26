@@ -214,6 +214,12 @@ bool ppw_send_in_background_hint(void);    /* status line after Close(SEND) */
 void ppw_on_send_result(const pp_result_t *res);
 void ppw_overlays_close(void);
 
+/* Leave-COMPOSE confirm dialog (2026-09-16): open() is true while the
+ * "abandon draft?" box is up; key() consumes Enter = abandon, any other
+ * key = keep writing. */
+bool ppw_leave_open(void);
+void ppw_leave_key(char c);
+
 /* ui_penpal_read.cpp */
 void ppr_build(lv_obj_t *parent);          /* THREAD + FB + PROFILE pages */
 void ppr_key(char c);

@@ -345,10 +345,96 @@ static void ppw_pick_cb(lv_event_t *e) { ppw_pick_click(); }
 
 static void ppw_view_cb(lv_event_t *e) { pp_set_page(PP_PAGE_PROFILE); }
 
+/* ---- leave-COMPOSE confirm (user request 2026-09-16): back with a
+ * non-empty title/body pops an "abandon draft?" dialog - Abandon clears
+ * the boxes and returns HOME, Keep stays. During a SEND flight the old
+ * direct-exit applies (the background send + idempotency own the draft;
+ * clearing the boxes here would break the sent-payload compare). */
+static lv_obj_t *s_leave_box = NULL;
+
+bool ppw_leave_open(void) { return s_leave_box != NULL; }
+
+static void ppw_leave_done(bool abandon)
+{
+    if (s_leave_box) {
+        lv_obj_del(s_leave_box);
+        s_leave_box = NULL;
+    }
+    if (abandon) {
+        lv_textarea_set_text(s_title_ta, "");
+        lv_textarea_set_text(s_body_ta, "");
+        pp.comp_has_topic = false;
+        pp.comp_topic_id = 0;
+        pp.comp_topic_title[0] = 0;
+        ppw_count_update();
+        pp_set_page(PP_PAGE_HOME);
+    }
+}
+
+static void ppw_leave_yes_cb(lv_event_t *e) { (void)e; ppw_leave_done(true); }
+static void ppw_leave_no_cb(lv_event_t *e) { (void)e; ppw_leave_done(false); }
+
+void ppw_leave_key(char c)
+{
+    /* Enter = abandon; any other key = keep writing */
+    ppw_leave_done(c == '\n');
+}
+
 static void ppw_back_cb(lv_event_t *e)
 {
-    /* touch back always returns; the draft lives on in the textareas */
-    pp_set_page(PP_PAGE_HOME);
+    (void)e;
+    const char *t = lv_textarea_get_text(s_title_ta);
+    const char *b = lv_textarea_get_text(s_body_ta);
+    const bool has_draft = (t && t[0]) || (b && b[0]);
+    if (!has_draft || pp.send_lock) {
+        pp_set_page(PP_PAGE_HOME);       /* nothing to lose / flight owns it */
+        return;
+    }
+    if (s_leave_box) return;             /* already asking */
+    s_leave_box = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_leave_box, 220, 150);
+    lv_obj_align(s_leave_box, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(s_leave_box, lv_color_white(), 0);
+    lv_obj_set_style_border_width(s_leave_box, 1, 0);
+    lv_obj_set_style_border_color(s_leave_box, lv_color_black(), 0);
+    lv_obj_set_style_radius(s_leave_box, 6, 0);
+    lv_obj_set_style_pad_all(s_leave_box, 8, 0);
+    lv_obj_set_flex_flow(s_leave_box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_leave_box, 6, 0);
+    lv_obj_clear_flag(s_leave_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lab = lv_label_create(s_leave_box);
+    lv_obj_set_width(lab, lv_pct(100));
+    lv_label_set_long_mode(lab, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(lab, "Abandon this draft?\n\nThe letter is NOT saved.\n"
+                           "Enter = abandon, any key = keep");
+    lv_obj_set_style_text_font(lab, &lv_font_montserrat_14, 0);
+
+    lv_obj_t *row = lv_obj_create(s_leave_box);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, 30);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *yes = lv_btn_create(row);
+    lv_obj_set_size(yes, 70, 28);
+    lv_obj_align(yes, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t *yes_l = lv_label_create(yes);
+    lv_label_set_text(yes_l, "Abandon");
+    lv_obj_center(yes_l);
+    lv_obj_set_style_text_font(yes_l, &lv_font_montserrat_14, 0);
+    lv_obj_add_event_cb(yes, ppw_leave_yes_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *no = lv_btn_create(row);
+    lv_obj_set_size(no, 70, 28);
+    lv_obj_align(no, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_t *no_l = lv_label_create(no);
+    lv_label_set_text(no_l, "Keep");
+    lv_obj_center(no_l);
+    lv_obj_set_style_text_font(no_l, &lv_font_montserrat_14, 0);
+    lv_obj_add_event_cb(no, ppw_leave_no_cb, LV_EVENT_CLICKED, NULL);
 }
 
 /* ---- TOPICS page ----------------------------------------------------------- */
@@ -488,6 +574,10 @@ void ppw_overlays_close(void)
         lv_obj_del(s_top_box);
         s_top_box = NULL;
         s_top_box_idx = -1;
+    }
+    if (s_leave_box) {                   /* leaving the screen = keep draft */
+        lv_obj_del(s_leave_box);
+        s_leave_box = NULL;
     }
 }
 
