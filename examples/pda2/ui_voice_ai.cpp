@@ -111,10 +111,30 @@ struct ui_msg_t { int type; char *text; };
 static QueueHandle_t ui_queue = NULL;
 static lv_timer_t *ui_timer = NULL;
 
-/* Pagination for response display */
-#define RESPONSE_PAGE_CHARS 400
-static int response_page = 0;
-static int response_total_pages = 1;
+/* Conversation display (user request 2026-09-16: scrolling). The full
+ * transcript lives in chat_history (PSRAM); the label shows the LAST
+ * VAI_DISP_MAX chars - the cap keeps the LVGL 64K pool safe on long
+ * sessions (PenPal §15 lesson). The label sits in a scrollable container:
+ * touch scroll suppresses EPD writes and redraws ONCE on release (AI Text
+ * chat pattern); +/- keys scroll when the input box is empty. The old
+ * 400-char pagination (show_response_page) was dead code and is gone. */
+#define VAI_DISP_MAX 4000
+static lv_obj_t *resp_cont = NULL;
+
+static void vai_scroll_begin_cb(lv_event_t *e)
+{
+    if (lv_event_get_indev(e) != NULL) {
+        ui_disp_suppress_flush(true);
+    }
+}
+
+static void vai_scroll_end_cb(lv_event_t *e)
+{
+    if (lv_event_get_indev(e) != NULL) {
+        ui_disp_suppress_flush(false);
+        ui_disp_full_refr();
+    }
+}
 
 static void chat_append(const char *text)
 {
@@ -136,42 +156,18 @@ static void chat_append(const char *text)
         if (chat_history) memcpy(chat_history, text, len + 1);
         else chat_history = strdup(text);
     }
-    /* Show last page */
-    if (chat_history) {
+    /* show the tail of the transcript, scrolled to the bottom */
+    if (chat_history && response_label) {
         size_t total = strlen(chat_history);
-        response_total_pages = (total + RESPONSE_PAGE_CHARS - 1) / RESPONSE_PAGE_CHARS;
-        if (response_total_pages < 1) response_total_pages = 1;
-        response_page = response_total_pages - 1;
-
-        /* Display current page */
-        int start = response_page * RESPONSE_PAGE_CHARS;
-        int len = total - start;
-        if (len > RESPONSE_PAGE_CHARS) len = RESPONSE_PAGE_CHARS;
-        static char page_buf[RESPONSE_PAGE_CHARS + 1];
-        memcpy(page_buf, chat_history + start, len);
-        page_buf[len] = '\0';
-        lv_label_set_text(response_label, page_buf);
+        const char *view = chat_history;
+        if (total > VAI_DISP_MAX) {
+            view += total - VAI_DISP_MAX;
+            while ((*view & 0xC0) == 0x80) view++;   /* UTF-8 boundary */
+        }
+        lv_label_set_text(response_label, view);
+        lv_obj_update_layout(response_label);
+        lv_obj_scroll_to_y(resp_cont, LV_COORD_MAX, LV_ANIM_OFF);
     }
-}
-
-static void show_response_page(int pg)
-{
-    if (!chat_history) return;
-    size_t total = strlen(chat_history);
-    response_total_pages = (total + RESPONSE_PAGE_CHARS - 1) / RESPONSE_PAGE_CHARS;
-    if (pg < 0) pg = 0;
-    if (pg >= response_total_pages) pg = response_total_pages - 1;
-    response_page = pg;
-
-    int start = pg * RESPONSE_PAGE_CHARS;
-    int len = total - start;
-    if (len > RESPONSE_PAGE_CHARS) len = RESPONSE_PAGE_CHARS;
-    static char page_buf[RESPONSE_PAGE_CHARS + 1];
-    memcpy(page_buf, chat_history + start, len);
-    page_buf[len] = '\0';
-    lv_label_set_text(response_label, page_buf);
-    if (status_label)
-        lv_label_set_text_fmt(status_label, "Page %d/%d  W:up S:down", pg + 1, response_total_pages);
 }
 
 static void chat_show_status(const char *s)
@@ -714,6 +710,15 @@ void voiceai_keyboard_poll()
         } else {
             lv_textarea_del_char(input_ta);
         }
+    } else if ((c == '+' || c == '-') && resp_cont) {
+        /* scroll the conversation (input-empty only - '+/-': scroll hint);
+         * programmatic scroll has indev == NULL -> flushes normally */
+        const char *text = lv_textarea_get_text(input_ta);
+        if (!text || text[0] == '\0') {
+            lv_obj_scroll_by(resp_cont, 0, c == '+' ? -120 : 120, LV_ANIM_OFF);
+        } else {
+            lv_textarea_add_char(input_ta, c);
+        }
     } else if (c >= ' ' && c <= '~') {
         lv_textarea_add_char(input_ta, c);
     }
@@ -773,16 +778,26 @@ static void ai_create(lv_obj_t *parent)
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Response area (top, most space) */
-    response_label = lv_label_create(cont);
+    /* Response area (top, most space) - scrollable conversation (2026-09-16) */
+    resp_cont = lv_obj_create(cont);
+    lv_obj_set_width(resp_cont, lv_pct(100));
+    lv_obj_set_flex_grow(resp_cont, 1);
+    lv_obj_set_style_border_width(resp_cont, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(resp_cont, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(resp_cont, 0, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(resp_cont, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scroll_dir(resp_cont, LV_DIR_VER);
+    lv_obj_add_event_cb(resp_cont, vai_scroll_begin_cb, LV_EVENT_SCROLL_BEGIN, NULL);
+    lv_obj_add_event_cb(resp_cont, vai_scroll_end_cb, LV_EVENT_SCROLL_END, NULL);
+
+    response_label = lv_label_create(resp_cont);
     lv_obj_set_width(response_label, lv_pct(100));
-    lv_obj_set_flex_grow(response_label, 1);
-    lv_obj_set_style_text_font(response_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_label_set_long_mode(response_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(response_label, &lv_font_montserrat_14, LV_PART_MAIN);
 
     lv_label_set_text(response_label,
                       "Enter: send text\nV: voice (5s record)\n"
-                      "R: read last response");
+                      "R: read last response\n+/-: scroll (empty box)");
 
     /* Status line */
     status_label = lv_label_create(cont);
@@ -805,8 +820,6 @@ static void ai_create(lv_obj_t *parent)
     lv_obj_set_style_anim_time(input_ta, 0, LV_PART_CURSOR);
     lv_obj_set_style_text_font(input_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
-    response_page = 0;
-    response_total_pages = 1;
     ai_kbd_active = true;
 }
 
@@ -835,6 +848,7 @@ static void ai_destroy(void)
     tts_playing = false;
     tts_auto_read = false;
     response_label = input_ta = status_label = NULL;
+    resp_cont = NULL;
     tts_sw = NULL;
 }
 
