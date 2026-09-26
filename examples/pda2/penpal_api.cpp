@@ -39,22 +39,54 @@ static bool j_bool(cJSON *obj, const char *field, bool def)
     return (it && cJSON_IsBool(it)) ? cJSON_IsTrue(it) : def;
 }
 
-/* "mine" decision (2026-09-26 fix): pals are now REAL USERS whose letters
- * carry THEIR nonzero user id - the old "nonzero = mine" rule misfiled
- * every incoming letter as mine ("To:" instead of "From:"). Compare
- * against OUR id (captured by penpal_get_profile); fall back to the old
- * rule only when the profile hasn't been fetched this boot. */
+/* "mine" decision (2026-09-26 fix, v2 same day): pals are REAL USERS whose
+ * letters carry THEIR nonzero user id - the old "nonzero = mine" rule
+ * misfiled every incoming letter as mine ("To:" instead of "From:").
+ * Own id is captured by penpal_get_profile and PERSISTED in NVS
+ * ("penpal"/my_uid): without persistence the id was only known AFTER the
+ * first Whoami fetch, so entering PenPal first still fell back to the
+ * legacy rule (device report: To: hunter / To: terry right after flash).
+ * Cleared by penpal_my_uid_store(0) when the API key changes (account
+ * switch must not reuse the previous id). */
 static int s_my_user_id = 0;
+static bool s_my_uid_loaded = false;
+
+int penpal_my_user_id(void) { return s_my_user_id; }
+
+/* UI thread (Preferences not re-entrant): lazy-load the persisted id once,
+ * e.g. at PenPal entry, before any worker thread parses letters. */
+void penpal_my_uid_load(void)
+{
+    if (s_my_uid_loaded) return;
+    s_my_uid_loaded = true;
+    Preferences pr;
+    if (pr.begin("penpal", true)) {
+        s_my_user_id = (int)pr.getInt("my_uid", 0);
+        pr.end();
+        Serial.printf("%s my_uid loaded: %d\n", PP_TAG, s_my_user_id);
+    }
+}
+
+/* UI thread: store/clear the persisted id (profile fetched / key changed). */
+void penpal_my_uid_store(int uid)
+{
+    s_my_user_id = uid;
+    Preferences pr;
+    if (pr.begin("penpal", false)) {
+        if (uid != 0) pr.putInt("my_uid", uid);
+        else pr.remove("my_uid");
+        pr.end();
+    }
+    Serial.printf("%s my_uid store: %d\n", PP_TAG, uid);
+}
 
 static bool j_mine(cJSON *obj)
 {
     cJSON *it = obj ? cJSON_GetObjectItem(obj, "sender_user_id") : NULL;
     if (!it || !cJSON_IsNumber(it)) return false;
     if (s_my_user_id != 0) return it->valueint == s_my_user_id;
-    return it->valueint != 0;
+    return it->valueint != 0;           /* unknown id: legacy fallback */
 }
-
-int penpal_my_user_id(void) { return s_my_user_id; }
 
 /* NULL-safe fixed-buffer copy. */
 static void s_copy(char *dst, int dstlen, const char *src)
@@ -333,24 +365,27 @@ static void pp_cache_path(char *buf, int len, const char *kind, int id)
     else        snprintf(buf, len, "/penpal/%s.json", kind);
 }
 
-/* Cache v2 header: "<fetched_at> <base>\n" - the server base the body
- * came from. Binding validity to the base kills cross-era data: switching
- * PENPAL_BASE (LAN -> prod) or a server-side DB rebuild with shifted
- * ids/names invalidates the cache instead of rendering old-world names
- * (device finding 2026-09-26: pre-migration cache said pal 3 = "hunter",
- * current DB says pal 4 = "carlos" -> detail showed "To: hunter").
- * Legacy v1 headers ("<fetched_at>\n", no base) are invalidated too. */
+/* Cache v3 header: "<fetched_at> <base> <key>" - validity is bound to BOTH
+ * the server base and the API key. Binding to base kills LAN<->prod
+ * cross-era data; binding to the key kills same-domain account switches
+ * and server DB rebuilds viewed under a different account (device
+ * finding 2026-09-26: hunter-key-era caches rendered under a carlos key
+ * showed "To: hunter"/"To: terry"). Legacy v1/v2 headers invalidate. */
 
-/* current configured base - UI thread only (Preferences not re-entrant);
- * readers run on the UI thread, writers receive base from the request. */
 static void pp_cache_current_base(char *buf, int len)
 {
     char key[PP_KEY_MAX];
     penpal_load_config(buf, len, key, sizeof(key));
 }
 
+static void pp_cache_current_key(char *buf, int len)
+{
+    char base[PP_BASE_MAX];
+    penpal_load_config(base, sizeof(base), buf, len);
+}
+
 static void pp_cache_write(const char *path, const char *body,
-                           const char *base)
+                           const char *base, const char *key)
 {
     File f = SPIFFS.open(path, FILE_WRITE);
     if (!f) {
@@ -359,7 +394,8 @@ static void pp_cache_write(const char *path, const char *body,
     }
     time_t now = time(nullptr);
     if (now < 1700000000) now = 0;             /* unsynced clock */
-    f.printf("%lu %s\n", (unsigned long)now, base ? base : "");
+    f.printf("%lu %s %s\n", (unsigned long)now,
+             base ? base : "", key ? key : "");
     f.write((const uint8_t *)body, strlen(body));
     f.close();
 }
@@ -384,30 +420,42 @@ static bool pp_cache_read(const char *path, string *body, bool *stale_clock)
     size_t nl = all.find('\n');
     if (nl == string::npos) return false;
 
-    /* header: "<fetched> <base>" (v2) or "<fetched>" (legacy v1 -> miss) */
+    /* header: "<fetched> <base> <key>" (v3); anything older -> miss */
     char head[192];
     size_t hlen = nl < sizeof(head) - 1 ? nl : sizeof(head) - 1;
     memcpy(head, all.c_str(), hlen);
     head[hlen] = '\0';
-    char *sp = strchr(head, ' ');
-    unsigned long fetched = strtoul(head, NULL, 10);
-    const char *stored_base = "";
-    if (sp) {
-        *sp = '\0';
-        stored_base = sp + 1;
-    } else {
-        Serial.printf("%s cache legacy header - invalidated: %s\n",
-                      PP_TAG, path);
-        SPIFFS.remove(path);
-        return false;                          /* v1: no base binding */
+    unsigned long fetched = 0;
+    char stored_base[PP_BASE_MAX] = "", stored_key[PP_KEY_MAX] = "";
+    {
+        /* strtok-style split on spaces; base URLs/keys contain none */
+        char *save = NULL;
+        char *tok = strtok_r(head, " ", &save);
+        if (tok) {
+            fetched = strtoul(tok, NULL, 10);
+            tok = strtok_r(NULL, " ", &save);
+            if (tok) {
+                strncpy(stored_base, tok, sizeof(stored_base) - 1);
+                tok = strtok_r(NULL, " ", &save);
+                if (tok)
+                    strncpy(stored_key, tok, sizeof(stored_key) - 1);
+            }
+        }
+        if (!stored_base[0] || !stored_key[0]) {
+            Serial.printf("%s cache legacy header - invalidated: %s\n",
+                          PP_TAG, path);
+            SPIFFS.remove(path);
+            return false;                      /* v1/v2: no key binding */
+        }
     }
-    fetched = strtoul(head, NULL, 10);
 
     char cur[PP_BASE_MAX];
     pp_cache_current_base(cur, sizeof(cur));
-    if (!cur[0] || strcmp(cur, stored_base) != 0) {
-        Serial.printf("%s cache base mismatch (%s != %s): %s\n",
-                      PP_TAG, stored_base, cur, path);
+    char curk[PP_KEY_MAX];
+    pp_cache_current_key(curk, sizeof(curk));
+    if (!cur[0] || strcmp(cur, stored_base) != 0 ||
+        !curk[0] || strcmp(curk, stored_key) != 0) {
+        Serial.printf("%s cache base/key mismatch: %s\n", PP_TAG, path);
         SPIFFS.remove(path);
         return false;
     }
@@ -483,7 +531,7 @@ bool penpal_get_pals(const char *base, const char *key,
         Serial.printf("%s pals: bad JSON\n", PP_TAG);
         return false;
     }
-    pp_cache_write("/penpal/pals.json", r.body.c_str(), base);
+    pp_cache_write("/penpal/pals.json", r.body.c_str(), base, key);
     return true;
 }
 
@@ -531,9 +579,11 @@ bool penpal_get_profile(const char *base, const char *key,
     /* demo contract (remote_api_demo.py step 0): name/age_band/level are
      * always present; city/interests are nullable and arrive as null */
     cJSON *jid = cJSON_GetObjectItem(root, "id");
-    if (jid && cJSON_IsNumber(jid)) {
+    if (jid && cJSON_IsNumber(jid) && jid->valueint != 0) {
         out->user_id = jid->valueint;
-        s_my_user_id = jid->valueint;   /* fixes letter mine-direction */
+        /* RAM only here - this runs on a worker thread; the UI consumer
+         * (Whoami wa_consume) persists it via penpal_my_uid_store() */
+        s_my_user_id = jid->valueint;
     }
     s_copy(out->name, sizeof(out->name),
            cJSON_GetStringValue(cJSON_GetObjectItem(root, "name")));
@@ -1040,7 +1090,7 @@ bool penpal_get_mailbox(const char *base, const char *key,
         Serial.printf("%s mailbox: bad JSON\n", PP_TAG);
         return false;
     }
-    pp_cache_write("/penpal/mailbox.json", r.body.c_str(), base);
+    pp_cache_write("/penpal/mailbox.json", r.body.c_str(), base, key);
     return true;
 }
 
@@ -1137,7 +1187,7 @@ bool penpal_get_thread(const char *base, const char *key,
     }
     char cpath[40];
     pp_cache_path(cpath, sizeof(cpath), "th", thread_root_id);
-    pp_cache_write(cpath, r.body.c_str(), base);
+    pp_cache_write(cpath, r.body.c_str(), base, key);
     return true;
 }
 

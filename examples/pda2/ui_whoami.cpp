@@ -394,6 +394,9 @@ static void wa_consume(void)
                 s_profile_valid = true;
                 s_profile_fetched = true;
                 wa_cache_save();             /* serve future boots from NVS */
+                /* persist the account id: letter From:/To: direction in
+                 * PenPal depends on it (2026-09-26 v2 fix) */
+                penpal_my_uid_store(m->prof.user_id);
                 wa_me_render();
                 wa_me_status("profile OK");
             } else if (m->ok) {
@@ -505,6 +508,13 @@ static void wa_cfg_save_cb(lv_event_t *e)
         save_key = s_cfg_key_real;         /* untouched mask: keep stored key */
     }
     bool server_ok = penpal_save_config(base, save_key);
+    bool key_changed = server_ok && strcmp(save_key, s_cfg_key_real) != 0;
+    if (server_ok && key_changed) {
+        /* account switch: the stored own-id belongs to the OLD key -
+         * clear it (next profile fetch re-stores); PenPal caches also
+         * re-bind to the new key (cache v3 header) */
+        penpal_my_uid_store(0);
+    }
     bool prov_ok = false;
     if (server_ok) {
         strncpy(s_cfg_key_real, save_key, sizeof(s_cfg_key_real) - 1);

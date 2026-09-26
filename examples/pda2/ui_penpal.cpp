@@ -1175,6 +1175,8 @@ static void pp_entry(void)
     ui_disp_full_refr();
     s_pp_gen++;                           /* invalidate prior-visit results */
     s_pp_active = true;
+    penpal_my_uid_load();                 /* letter From:/To: needs the id
+                                           * before any cache parse runs */
     /* auto-sync on the FIRST entry of a visit, after gen++ so the request
      * carries the generation that will consume it (§4.1, Codex P1).
      * Product request 2026-08-26: render from the 2-day cache instead of

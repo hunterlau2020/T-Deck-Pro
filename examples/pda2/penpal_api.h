@@ -215,6 +215,14 @@ typedef struct {
  *  0 = unknown - letter direction falls back to the legacy rule). */
 int penpal_my_user_id(void);
 
+/** @brief Lazy-load the persisted own-id from NVS (UI thread; call at
+ *  PenPal entry so letter direction works before any profile fetch). */
+void penpal_my_uid_load(void);
+
+/** @brief Persist/clear the own-id (UI thread): store after a successful
+ *  profile fetch; store(0) when the API key changes (account switch). */
+void penpal_my_uid_store(int uid);
+
 /** @brief Fetch the API-key holder's profile. Empty fields arrive as "".
  *  @return true on HTTP 2xx + parse; *err holds the failure line otherwise. */
 bool penpal_get_profile(const char *base, const char *key,
