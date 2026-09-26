@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file      ui_voice_ai.cpp
  * @brief     Voice AI app: MiniMax speech_to_text (ASR) + AI Config chat
  *            provider + MiniMax t2a_v2 (TTS). Google-free per user
@@ -96,6 +96,12 @@ static char *last_response = NULL;
 #define VAI_CTX_BUDGET      4096    /* history bytes sent per request */
 #define VAI_CTX_MAX_MSGS    16
 static vector<pair<string, string> > vai_ctx;
+
+/* Too-short voice filter (user request 2026-09-16): takes below this are
+ * accidental MIC taps / empty recordings and must not reach ASR or the
+ * server. The recorder's own floor is ~700 ms (pdm_record_wav_hold's
+ * early-stop gate), so 1000 ms gives a 300 ms grace band above it. */
+#define VAI_REC_MIN_MS      1000
 
 extern Audio audio;
 
@@ -441,6 +447,23 @@ static void ai_voice_task(void *param)
 
     char text[256] = "";
     if (ok && wav && wav_len > 0) {
+        /* too-short gate (VAI_REC_MIN_MS): an accidental tap yields the
+         * recorder's ~700 ms floor - below the line, dropped locally */
+        uint32_t dur_ms = (uint32_t)((wav_len - 44) / 32);  /* 16 kHz mono 16-bit = 32 B/ms */
+        if (dur_ms < VAI_REC_MIN_MS) {
+            free(wav);
+            char buf[96];
+            snprintf(buf, sizeof(buf),
+                     "> [Voice too short (%lums) - not sent]",
+                     (unsigned long)dur_ms);
+            ui_post(UI_MSG_APPEND, buf);
+            ui_post(UI_MSG_STATUS, "V:voice Enter:text");
+            Serial.printf("[VoiceAI] take %lums < %d ms - dropped\n",
+                          (unsigned long)dur_ms, VAI_REC_MIN_MS);
+            ai_task = NULL;
+            vTaskDelete(NULL);
+            return;
+        }
         ui_post(UI_MSG_STATUS, "ASR (minimax)...");
         char err[128];
         ok = minimax_asr(wav, wav_len, akey, text, sizeof(text),
@@ -504,9 +527,20 @@ static void start_voice_record(bool hold)
         chat_append("WiFi not connected.");
         return;
     }
+    /* TTS playback owns I2S0, and pdm_init() UNINSTALLS that driver for
+     * recording - audio.loop() would then i2s_write into the dead driver
+     * and panic LoadProhibited (device log + backtrace 2026-09-16: MIC
+     * pressed during read-aloud). Stop the player first and release the
+     * EPD it holds. */
+    if (tts_playing) {
+        audio.stopSong();
+        tts_playing = false;
+        ui_disp_suppress_flush(false);
+        Serial.println("[VoiceAI] MIC pressed during TTS - playback stopped");
+    }
     if (!hold) vai_waitbox_show();   /* hold-to-talk: waitbox only after
                                       * the take, posted by the task */
-    xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 16384,
+    xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 12288,
                             hold ? (void *)1 : NULL, 5, &ai_task, 0);
 }
 
@@ -520,7 +554,7 @@ static void ensure_audio_init()
      * tx_desc_auto_clear=true, APLL off) - the previous hand-rolled config
      * (44100, no auto-clear) decoded fine but stayed SILENT. Recipe is
      * device-proven on the audio-variant board 2026-09-10, issue_list
-     * §16.1 rule 2. */
+     * 搂16.1 rule 2. */
     i2s_config_t cfg = {};
     cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
     cfg.sample_rate = 16000;
@@ -545,7 +579,7 @@ static void ensure_audio_init()
     err = i2s_set_pin(I2S_NUM_0, &pins);
     Serial.printf("[VoiceAI] i2s_set_pin: %s\n", esp_err_to_name(err));
 
-    /* Now Audio.setPinout is safe — driver is installed */
+    /* Now Audio.setPinout is safe 鈥?driver is installed */
     audio.setPinout(BOARD_I2S_BCLK, BOARD_I2S_LRC, BOARD_I2S_DOUT);
     audio.setVolume(21);
     Serial.println("[VoiceAI] Audio re-initialized");
@@ -554,6 +588,15 @@ static void ensure_audio_init()
 static void start_tts()
 {
     Serial.println("[VoiceAI] TTS: start_tts called");
+
+    /* R pressed while already reading: stop the running playback first -
+     * ensure_audio_init() below reinstalls I2S0, which must not happen
+     * under a live player (same hazard as the MIC crash, 2026-09-16). */
+    if (tts_playing) {
+        audio.stopSong();
+        tts_playing = false;
+        ui_disp_suppress_flush(false);
+    }
 
     if (!tts_enabled) {
         /* switch OFF: no earphone plugged - skip synthesis AND playback
@@ -628,7 +671,7 @@ static void do_send()
     lv_textarea_set_text(input_ta, "");
     if (prompt) {
         vai_waitbox_show();
-        xTaskCreatePinnedToCore(ai_text_task, "ai_text", 16384, prompt, 5, &ai_task, 0);
+        xTaskCreatePinnedToCore(ai_text_task, "ai_text", 12288, prompt, 5, &ai_task, 0);
     }
 }
 
