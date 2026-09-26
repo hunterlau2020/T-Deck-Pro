@@ -323,7 +323,24 @@ static void pp_cache_path(char *buf, int len, const char *kind, int id)
     else        snprintf(buf, len, "/penpal/%s.json", kind);
 }
 
-static void pp_cache_write(const char *path, const char *body)
+/* Cache v2 header: "<fetched_at> <base>\n" - the server base the body
+ * came from. Binding validity to the base kills cross-era data: switching
+ * PENPAL_BASE (LAN -> prod) or a server-side DB rebuild with shifted
+ * ids/names invalidates the cache instead of rendering old-world names
+ * (device finding 2026-09-26: pre-migration cache said pal 3 = "hunter",
+ * current DB says pal 4 = "carlos" -> detail showed "To: hunter").
+ * Legacy v1 headers ("<fetched_at>\n", no base) are invalidated too. */
+
+/* current configured base - UI thread only (Preferences not re-entrant);
+ * readers run on the UI thread, writers receive base from the request. */
+static void pp_cache_current_base(char *buf, int len)
+{
+    char key[PP_KEY_MAX];
+    penpal_load_config(buf, len, key, sizeof(key));
+}
+
+static void pp_cache_write(const char *path, const char *body,
+                           const char *base)
 {
     File f = SPIFFS.open(path, FILE_WRITE);
     if (!f) {
@@ -332,14 +349,18 @@ static void pp_cache_write(const char *path, const char *body)
     }
     time_t now = time(nullptr);
     if (now < 1700000000) now = 0;             /* unsynced clock */
-    f.printf("%lu\n", (unsigned long)now);
+    f.printf("%lu %s\n", (unsigned long)now, base ? base : "");
     f.write((const uint8_t *)body, strlen(body));
     f.close();
 }
 
-static bool pp_cache_read(const char *path, string *body)
+/* Returns the cached body; *stale_clock (when non-NULL) is set when the
+ * body was served despite an UNSYNCED device clock - the caller should
+ * still fire a network refresh, because age could not be verified. */
+static bool pp_cache_read(const char *path, string *body, bool *stale_clock)
 {
     body->clear();
+    if (stale_clock) *stale_clock = false;
     if (!SPIFFS.exists(path)) return false;
     File f = SPIFFS.open(path, FILE_READ);
     if (!f) return false;
@@ -352,10 +373,44 @@ static bool pp_cache_read(const char *path, string *body)
     f.close();
     size_t nl = all.find('\n');
     if (nl == string::npos) return false;
-    unsigned long fetched = strtoul(all.c_str(), NULL, 10);
+
+    /* header: "<fetched> <base>" (v2) or "<fetched>" (legacy v1 -> miss) */
+    char head[192];
+    size_t hlen = nl < sizeof(head) - 1 ? nl : sizeof(head) - 1;
+    memcpy(head, all.c_str(), hlen);
+    head[hlen] = '\0';
+    char *sp = strchr(head, ' ');
+    unsigned long fetched = strtoul(head, NULL, 10);
+    const char *stored_base = "";
+    if (sp) {
+        *sp = '\0';
+        stored_base = sp + 1;
+    } else {
+        Serial.printf("%s cache legacy header - invalidated: %s\n",
+                      PP_TAG, path);
+        SPIFFS.remove(path);
+        return false;                          /* v1: no base binding */
+    }
+    fetched = strtoul(head, NULL, 10);
+
+    char cur[PP_BASE_MAX];
+    pp_cache_current_base(cur, sizeof(cur));
+    if (!cur[0] || strcmp(cur, stored_base) != 0) {
+        Serial.printf("%s cache base mismatch (%s != %s): %s\n",
+                      PP_TAG, stored_base, cur, path);
+        SPIFFS.remove(path);
+        return false;
+    }
+
     time_t now = time(nullptr);
-    if (fetched != 0 && now >= 1700000000 &&
-        (unsigned long)(now - (time_t)fetched) > PP_CACHE_TTL_S) {
+    if (now < 1700000000) {
+        /* read-side clock hole closed: serve, but flag - the caller must
+         * not treat this as verified-fresh (age unverifiable pre-NTP) */
+        if (stale_clock) *stale_clock = true;
+    } else if (fetched == 0 ||
+               (unsigned long)(now - (time_t)fetched) > PP_CACHE_TTL_S) {
+        /* fetched==0 = written before NTP: unverifiable age, now judged
+         * expired (write-side hole closed) */
         Serial.printf("%s cache expired: %s\n", PP_TAG, path);
         SPIFFS.remove(path);
         return false;
@@ -418,7 +473,7 @@ bool penpal_get_pals(const char *base, const char *key,
         Serial.printf("%s pals: bad JSON\n", PP_TAG);
         return false;
     }
-    pp_cache_write("/penpal/pals.json", r.body.c_str());
+    pp_cache_write("/penpal/pals.json", r.body.c_str(), base);
     return true;
 }
 
@@ -849,11 +904,12 @@ senses_done:
     return true;
 }
 
-bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count)
+bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count,
+                            bool *stale_clock)
 {
     if (count) *count = 0;
     string body;
-    if (!pp_cache_read("/penpal/pals.json", &body)) return false;
+    if (!pp_cache_read("/penpal/pals.json", &body, stale_clock)) return false;
     return pp_parse_pals(body.c_str(), out, max, count);
 }
 
@@ -969,15 +1025,15 @@ bool penpal_get_mailbox(const char *base, const char *key,
         Serial.printf("%s mailbox: bad JSON\n", PP_TAG);
         return false;
     }
-    pp_cache_write("/penpal/mailbox.json", r.body.c_str());
+    pp_cache_write("/penpal/mailbox.json", r.body.c_str(), base);
     return true;
 }
 
 bool penpal_cache_load_mailbox(pp_thread_row_t *out, int max, int *count,
-                               bool *truncated)
+                               bool *truncated, bool *stale_clock)
 {
     string body;
-    if (!pp_cache_read("/penpal/mailbox.json", &body)) return false;
+    if (!pp_cache_read("/penpal/mailbox.json", &body, stale_clock)) return false;
     return pp_parse_mailbox(body.c_str(), out, max, count, truncated);
 }
 
@@ -1066,17 +1122,18 @@ bool penpal_get_thread(const char *base, const char *key,
     }
     char cpath[40];
     pp_cache_path(cpath, sizeof(cpath), "th", thread_root_id);
-    pp_cache_write(cpath, r.body.c_str());
+    pp_cache_write(cpath, r.body.c_str(), base);
     return true;
 }
 
 bool penpal_cache_load_thread(int thread_root_id,
-                              pp_letter_t *out, int max, int *count, int *dropped)
+                              pp_letter_t *out, int max, int *count,
+                              int *dropped, bool *stale_clock)
 {
     char cpath[40];
     pp_cache_path(cpath, sizeof(cpath), "th", thread_root_id);
     string body;
-    if (!pp_cache_read(cpath, &body)) return false;
+    if (!pp_cache_read(cpath, &body, stale_clock)) return false;
     return pp_parse_thread(body.c_str(), thread_root_id, out, max, count, dropped);
 }
 

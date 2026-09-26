@@ -159,16 +159,22 @@ bool penpal_save_ai_provider(const char *name);
 /** @brief Drop the pals + mailbox cache files (manual Sync path). */
 void penpal_cache_drop_home(void);
 
-/** @brief Load pals from cache (false = miss/expired/bad). */
-bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count);
+/** @brief Load pals from cache (false = miss/expired/bad).
+ *  *stale_clock (when non-NULL): body served despite an unsynced device
+ *  clock - age unverifiable, caller should still fire a network refresh.
+ *  Cache v2 headers bind the server base: a different PENPAL_BASE (or a
+ *  legacy v1 header) invalidates the entry (2026-09-26 cross-era fix). */
+bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count,
+                            bool *stale_clock = nullptr);
 
 /** @brief Load the mailbox listing from cache (false = miss/expired/bad). */
 bool penpal_cache_load_mailbox(pp_thread_row_t *out, int max, int *count,
-                               bool *truncated);
+                               bool *truncated, bool *stale_clock = nullptr);
 
 /** @brief Load one thread by its root id from cache (false = miss/expired/bad). */
 bool penpal_cache_load_thread(int thread_root_id,
-                              pp_letter_t *out, int max, int *count, int *dropped);
+                              pp_letter_t *out, int max, int *count, int *dropped,
+                              bool *stale_clock = nullptr);
 
 /* ---- idempotency key (design §2.2) ---------------------------------------- */
 

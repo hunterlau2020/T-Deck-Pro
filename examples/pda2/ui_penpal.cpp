@@ -1188,17 +1188,27 @@ static void pp_entry(void)
          * the second load leaves a half-updated state that the network
          * sync below overwrites anyway. */
         bool trunc = false;
+        bool stale = false;               /* served pre-NTP: age unverified */
         if (penpal_cache_load_mailbox(pp.rows, PP_MAILBOX_MAX,
-                                      &pp.rows_cnt, &trunc) &&
-            penpal_cache_load_pals(pp.pals, PP_PAL_MAX, &pp.pals_cnt)) {
+                                      &pp.rows_cnt, &trunc, &stale) &&
+            penpal_cache_load_pals(pp.pals, PP_PAL_MAX, &pp.pals_cnt,
+                                   &stale)) {
             pp.mailbox_truncated = trunc;
             pp.home_page = 0;
             pp_home_render_pals();
             pp_home_render_rows();
-            pp_status_set("cached - press Sync to refresh");
-            Serial.printf("[PenPal] home served from cache (%d pals, %d rows)\n",
-                          pp.pals_cnt, pp.rows_cnt);
             pp_dbg_pool("cached");
+            Serial.printf("[PenPal] home served from cache (%d pals, %d rows, stale=%d)\n",
+                          pp.pals_cnt, pp.rows_cnt, stale ? 1 : 0);
+            if (stale) {
+                /* cache read before NTP synced: age unverifiable - render
+                 * it, then network-refresh so cross-era names self-heal
+                 * (2026-09-26 "To: hunter" stale-cache finding) */
+                pp_status_set("cached (clock unsynced) - refreshing...");
+                pp_home_sync(false);
+                return;
+            }
+            pp_status_set("cached - press Sync to refresh");
             return;
         }
         char base[PP_BASE_MAX], key[PP_KEY_MAX];
