@@ -39,12 +39,22 @@ static bool j_bool(cJSON *obj, const char *field, bool def)
     return (it && cJSON_IsBool(it)) ? cJSON_IsTrue(it) : def;
 }
 
-/* sender_user_id: null for NPC letters, >=1 for mine (demo step ④). */
+/* "mine" decision (2026-09-26 fix): pals are now REAL USERS whose letters
+ * carry THEIR nonzero user id - the old "nonzero = mine" rule misfiled
+ * every incoming letter as mine ("To:" instead of "From:"). Compare
+ * against OUR id (captured by penpal_get_profile); fall back to the old
+ * rule only when the profile hasn't been fetched this boot. */
+static int s_my_user_id = 0;
+
 static bool j_mine(cJSON *obj)
 {
     cJSON *it = obj ? cJSON_GetObjectItem(obj, "sender_user_id") : NULL;
-    return (it && cJSON_IsNumber(it)) ? (it->valueint != 0) : false;
+    if (!it || !cJSON_IsNumber(it)) return false;
+    if (s_my_user_id != 0) return it->valueint == s_my_user_id;
+    return it->valueint != 0;
 }
+
+int penpal_my_user_id(void) { return s_my_user_id; }
 
 /* NULL-safe fixed-buffer copy. */
 static void s_copy(char *dst, int dstlen, const char *src)
@@ -520,6 +530,11 @@ bool penpal_get_profile(const char *base, const char *key,
     }
     /* demo contract (remote_api_demo.py step 0): name/age_band/level are
      * always present; city/interests are nullable and arrive as null */
+    cJSON *jid = cJSON_GetObjectItem(root, "id");
+    if (jid && cJSON_IsNumber(jid)) {
+        out->user_id = jid->valueint;
+        s_my_user_id = jid->valueint;   /* fixes letter mine-direction */
+    }
     s_copy(out->name, sizeof(out->name),
            cJSON_GetStringValue(cJSON_GetObjectItem(root, "name")));
     s_copy(out->age_band, sizeof(out->age_band),

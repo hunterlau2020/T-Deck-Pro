@@ -203,12 +203,17 @@ bool penpal_test_base(const char *base, const char *key, string *detail);
  * GET /api/v1/users/me/profile - the API-key holder's own record
  * (remote_api_demo.py step 0). */
 typedef struct {
+    int user_id;              /* own id - drives letter From:/To: direction */
     char name[48];
     char age_band[24];
     char level[12];
     char city[48];
     char interests[96];
 } pp_profile_t;
+
+/** @brief Own user id (captured by the last successful profile fetch;
+ *  0 = unknown - letter direction falls back to the legacy rule). */
+int penpal_my_user_id(void);
 
 /** @brief Fetch the API-key holder's profile. Empty fields arrive as "".
  *  @return true on HTTP 2xx + parse; *err holds the failure line otherwise. */
