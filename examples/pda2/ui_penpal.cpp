@@ -894,6 +894,22 @@ static void pp_home_row_cb(lv_event_t *e)
         pp_set_page(PP_PAGE_THREAD);
         Serial.printf("[PenPal] thread %d served from cache (%d letters)\n",
                       pp.thr_root, pp.letters_cnt);
+        /* unread > 0 = new mail since the last fetch (user request
+         * 2026-09-27): auto-refresh this thread in the background - the
+         * cache render shows instantly, the PP_RES_THREAD consumer
+         * re-renders in place when the fresh letters land. Cache-miss
+         * opens already go to the network; unread==0 opens stay
+         * cache-only (manual Sync remains for a forced refresh). */
+        if (pp.rows[idx].unread > 0) {
+            pp_task_req_t rq = {};
+            rq.gen = s_pp_gen;
+            rq.type = PP_RES_THREAD;
+            rq.pen_pal_id = pp.thr_pal;
+            rq.thread_root_id = pp.thr_root;
+            if (pp_start(&rq, false)) {
+                pp_status_set("new mail - refreshing...");
+            }
+        }
         return;
     }
     pp_task_req_t rq = {};
