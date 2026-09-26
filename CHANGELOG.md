@@ -3,6 +3,41 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-26（v1.22：71c09e7 评审收口 + Voice AI 稳定性/滚动 + PenPal 草稿保护）
+
+- **评审遗留收口**（`4d27849`，对应 71c09e7 四方评审残留）：qwen **P3-2**
+  OTA 清单下载加 **4KB 大小封顶**（chunked/超限在验证前拒绝，堵
+  getString() OOM 路径）；**Nit-1** Whoami `s_wa_task` 改 UI 线程所有
+  （worker 阻塞投递，无失败滞留路径）；新建 `docs/ota-baseline.md`
+  ——WDT T=60s 依据：库源码实证单页 `_busy_timeout`=10s
+  （`GxEPD2_310_GDEQ031T10.cpp:17`）+ 三机启动分段耗时，T_min=30s。
+  至此 **71c09e7 全部代码级发现闭合**（P1+5×P2 由 `095e41a` 修复轮
+  核销，P2-6 契约登记同批完成）；遗留仅 G-真机：双机仪器化校准 +
+  自毁固件回滚实测（`verifyRollbackLater` 已修，otadata=VALID 态下
+  真实回滚路径仍未触发过）。
+- **Voice AI 崩溃修复**（`0fd2043`，设备日志 + addr2line 回溯定位）：
+  TTS 朗读中按 MIC → `pdm_init()` 卸载 I2S0 → 播放器 `i2s_write`
+  写死驱动 → LoadProhibited 重启。修复：`start_voice_record`/
+  `start_tts` 先 `stopSong()` 释放播放与 EPD 抑制再动作。
+- **过短录音筛选**（`0fd2043`，用户需求）：时长 < 1s 的录音（误碰
+  约 700ms）本地丢弃不上 ASR/服务器，屏显
+  `[Voice too short (Nms) - not sent]`；任务栈 16K→12K
+  （PenPal 8K 同链路先例）；每次 AI POST 前打印
+  `free/largest_int/psram` 堆诊断（SSL alloc-failure 排查用）。
+- **Voice AI 对话区可滚动**（`a37face`，用户需求）：触摸滚动
+  （滚动中抑制 EPD 刷屏、抬手重绘，AI Text 模式）+ 空输入框时
+  `+`/`-` 键滚动（±120px）；显示最近 4000 字符（UTF-8 安全截断，
+  保护 LVGL 64K 池——§15 教训）；完整历史仍在 PSRAM；删除从未
+  被调用的 400 字符分页死代码（"W:up S:down" 提示从未生效）。
+- **PenPal 草稿保护**（`d68289e`，用户需求）：COMPOSE 标题/正文
+  非空时点返回弹 **"Abandon this draft?"** 确认框——Abandon=清空
+  回主页、Keep=留下；键盘 Enter=放弃/任意键=保留；空框直接返回、
+  **SEND 飞行中维持原行为**（后台发送 + 幂等快照对比拥有草稿）。
+- `01ba2e0`（9-23）：platformio.ini 注释乱码清理（writer 临时 env
+  往返扰动，无构建变更）。
+- 版本 v1.21 → **v1.22**；评审申请
+  `docs/reviews/session-batch-review-request-4d27849..d68289e.md`。
+
 ## 2026-09-18（v1.21：ds4 三段评审处置——L1/N1 两 P2 + F1′/N2 + 3×Nit）
 
 - **评审结论**：三份分段申请全部 **C 部分接受**（`...-bdb75bf..7bab081-ds4.md`
