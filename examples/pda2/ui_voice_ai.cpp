@@ -121,6 +121,8 @@ static lv_timer_t *ui_timer = NULL;
 #define VAI_DISP_MAX 4000
 static lv_obj_t *resp_cont = NULL;
 
+static void vai_playback_stop(void);       /* defined below the waitbox block */
+
 static void vai_scroll_begin_cb(lv_event_t *e)
 {
     if (lv_event_get_indev(e) != NULL) {
@@ -131,12 +133,9 @@ static void vai_scroll_begin_cb(lv_event_t *e)
          * gesture proceeds with normal redraw-on-release (follow-up to
          * review P2-1, user report: "cannot scroll while reading"). */
         if (tts_playing) {
-            audio.stopSong();
-            tts_playing = false;
-            ui_disp_suppress_flush(false);
+            vai_playback_stop();
             if (status_label)
                 lv_label_set_text(status_label, "V:voice R:read Enter:text");
-            Serial.println("[VoiceAI] touch scroll during TTS - playback stopped");
         }
         ui_disp_suppress_flush(true);
     }
@@ -208,6 +207,7 @@ static void ui_post(int type, const char *text)
 }
 
 static void start_tts();
+static void vai_playback_stop(void);   /* defined below the waitbox block */
 
 /* ---- send-wait overlay (user request 2026-09-11, same pattern as the
  * AI Text app): pops on Send/Voice, countdown ticks on second changes
@@ -273,6 +273,34 @@ static void vai_waitbox_tick(void)
     }
 }
 
+/* Single stop-the-take helper (every intervention path shares it):
+ * stopSong + release the EPD suppression + drop the Speaking box.
+ * Order matters: release suppression BEFORE hiding the box so the
+ * deletion can actually repaint (under suppression a hidden box stays
+ * on the glass - that is how "Waiting server reply" outlived the
+ * network stage, user report 2026-09-27). */
+static void vai_playback_stop(void)
+{
+    audio.stopSong();
+    tts_playing = false;
+    ui_disp_suppress_flush(false);
+    vai_waitbox_hide();
+    Serial.println("[VoiceAI] playback stopped");
+}
+
+/* Read-aloud status box: same overlay the wait stage used. The EPD is
+ * suppressed for the whole take, so "hide + repaint" is impossible
+ * mid-playback - the box is REPURPOSED as "Speaking..." and hidden by
+ * the playback-end check (or vai_playback_stop) once flushes are free. */
+static void vai_speakbox_show(void)
+{
+    if (!vai_waitbox) vai_waitbox_show();
+    if (vai_waitbox_body)
+        lv_label_set_text(vai_waitbox_body,
+                          "Speaking...\n(scroll / MIC stops)");
+    vai_wait_last = 0;                   /* tick is idle (ai_task==NULL) */
+}
+
 static void ui_timer_cb(lv_timer_t *t)
 {
     ui_msg_t msg;
@@ -285,8 +313,8 @@ static void ui_timer_cb(lv_timer_t *t)
 
     if (ai_task) {
         vai_waitbox_tick();
-    } else if (vai_waitbox) {
-        vai_waitbox_hide();               /* worker finished */
+    } else if (vai_waitbox && !tts_playing) {
+        vai_waitbox_hide();               /* worker finished, no take up */
     }
 
     if (tts_auto_read && ai_task == NULL) {
@@ -297,6 +325,7 @@ static void ui_timer_cb(lv_timer_t *t)
     if (tts_playing && !audio.isRunning()) {
         tts_playing = false;
         ui_disp_suppress_flush(false);   /* release the EPD held during play */
+        vai_waitbox_hide();              /* Speaking box: glass can repaint */
         if (status_label) lv_label_set_text(status_label, "V:voice R:read Enter:text");
     }
 }
@@ -560,9 +589,7 @@ static void start_voice_record(bool hold)
      * pressed during read-aloud). Stop the player first and release the
      * EPD it holds. */
     if (tts_playing) {
-        audio.stopSong();
-        tts_playing = false;
-        ui_disp_suppress_flush(false);
+        vai_playback_stop();
         Serial.println("[VoiceAI] MIC pressed during TTS - playback stopped");
     }
     if (!hold) vai_waitbox_show();   /* hold-to-talk: waitbox only after
@@ -620,9 +647,7 @@ static void start_tts()
      * ensure_audio_init() below reinstalls I2S0, which must not happen
      * under a live player (same hazard as the MIC crash, 2026-09-16). */
     if (tts_playing) {
-        audio.stopSong();
-        tts_playing = false;
-        ui_disp_suppress_flush(false);
+        vai_playback_stop();
     }
 
     if (!tts_enabled) {
@@ -676,6 +701,11 @@ static void start_tts()
      * and the take plays as choppy noise (same device report) - hold all
      * flushes until the playback-end check in ui_timer_cb releases them */
     if (tts_playing) ui_disp_suppress_flush(true);
+    /* repurpose the overlay: the suppressed EPD cannot repaint a hidden
+     * box, so the wait box becomes the Speaking indicator and is dropped
+     * by the playback-end check / vai_playback_stop (user report
+     * 2026-09-27: stale "Waiting server reply" during read-aloud) */
+    if (tts_playing) vai_speakbox_show();
 }
 
 static void do_send()
@@ -746,12 +776,7 @@ void voiceai_keyboard_poll()
          * programmatic scroll has indev == NULL -> flushes normally.
          * During TTS the same invisibility applies (suppressed repaints),
          * so a keyboard scroll stops the take first - touch variant rule */
-        if (tts_playing) {
-            audio.stopSong();
-            tts_playing = false;
-            ui_disp_suppress_flush(false);
-            Serial.println("[VoiceAI] key scroll during TTS - playback stopped");
-        }
+        if (tts_playing) vai_playback_stop();
         const char *text = lv_textarea_get_text(input_ta);
         if (!text || text[0] == '\0') {
             lv_obj_scroll_by(resp_cont, 0, c == '+' ? -120 : 120, LV_ANIM_OFF);
@@ -867,7 +892,11 @@ static void ai_exit(void)
 {
     /* playback continues after exit (global audio object) - the timer
      * that releases the flush suppression dies with the screen, so do
-     * it here or the EPD stays frozen app-wide */
+     * it here or the EPD stays frozen app-wide. The Speaking box lives
+     * on lv_layer_top (survives screen destroy) - drop it here too or
+     * it stays painted over the menu (same stale-box family, 2026-09-27) */
+    if (tts_playing) vai_playback_stop();
+    else vai_waitbox_hide();
     ui_disp_suppress_flush(false);
     ui_disp_full_refr();
 }
