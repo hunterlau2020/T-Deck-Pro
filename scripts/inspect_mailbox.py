@@ -1,24 +1,40 @@
 """Dump raw PenPal server JSON for mailbox + threads (device-truth check).
 
-Context (user report 2026-09-26): hello thread (2 letters, state pend)
-shows 'hunter' in mailbox but 'To: hunter' in detail - is the server
-data or the client state machine wrong?
+Credentials are NEVER hardcoded (review P0 2026-09-27: this script's
+earlier revision shipped a real key + gate-pin in tracked source):
+  key / gate-pin: --key/--gate or PENPAL_KEY/GATE_PIN env vars
+  base:           --base or PENPAL_BASE (default http://127.0.0.1:8000)
+Rotation of previously shipped values: TODO 'PenPal 测试 key 轮换'.
 """
+import argparse
 import json
+import os
 import ssl
 import urllib.request
 
-BASE = "https://www.studyreview.net"
-KEY = "89rg35eua2"           # hunter test key (device env.cfg PENPAL_KEY)
-GATE = "49ef146ed5"          # X-Gate-Pin (penpal_api.cpp:168)
+ap = argparse.ArgumentParser()
+ap.add_argument("--key", default=os.environ.get("PENPAL_KEY", ""))
+ap.add_argument("--gate", default=os.environ.get("GATE_PIN", ""))
+ap.add_argument("--base",
+                default=os.environ.get("PENPAL_BASE", "http://127.0.0.1:8000"))
+ap.add_argument("--insecure", action="store_true",
+                help="skip TLS verify (self-signed lab only)")
+args = ap.parse_args()
+assert args.key, "need --key or PENPAL_KEY"
 
-ctx = ssl.create_default_context()
+ctx = None
+if args.base.startswith("https://"):
+    ctx = ssl.create_default_context()
+    if args.insecure:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
 
 
 def get(path):
-    req = urllib.request.Request(BASE + path)
-    req.add_header("X-API-Key", KEY)
-    req.add_header("X-Gate-Pin", GATE)
+    req = urllib.request.Request(args.base.rstrip("/") + path)
+    req.add_header("X-API-Key", args.key)
+    if args.gate:
+        req.add_header("X-Gate-Pin", args.gate)
     with urllib.request.urlopen(req, timeout=20, context=ctx) as r:
         return json.loads(r.read().decode())
 
@@ -33,7 +49,6 @@ print("\n== PEN-PALS ==")
 for p in pals:
     print(json.dumps(p, ensure_ascii=False))
 
-# dump every thread referenced by the mailbox (raw letter fields)
 roots = []
 for row in (mb if isinstance(mb, list) else mb.get("rows", mb.get("emails", []))):
     rid = row.get("thread_root_id")

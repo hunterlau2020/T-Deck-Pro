@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file      ui_voice_ai.cpp
  * @brief     Voice AI app: MiniMax speech_to_text (ASR) + AI Config chat
  *            provider + MiniMax t2a_v2 (TTS). Google-free per user
@@ -131,8 +131,16 @@ static void vai_scroll_begin_cb(lv_event_t *e)
 static void vai_scroll_end_cb(lv_event_t *e)
 {
     if (lv_event_get_indev(e) != NULL) {
-        ui_disp_suppress_flush(false);
-        ui_disp_full_refr();
+        /* Grok P2-1 (4d27849..bf0aa72): the flush suppression is a plain
+         * bool shared with TTS playback - releasing it here while a take
+         * is still playing would let the full refresh starve audio.loop()
+         * for 0.3-1 s and re-open the 2026-09-11 choppy-playback defect.
+         * Keep suppressed; the playback-end check in ui_timer_cb is the
+         * sole releaser while tts_playing. */
+        if (!tts_playing) {
+            ui_disp_suppress_flush(false);
+            ui_disp_full_refr();
+        }
     }
 }
 
@@ -404,6 +412,8 @@ static void ai_text_task(void *param)
         ui_post(UI_MSG_STATUS, "V:voice Enter:text");
     }
     free(prompt);
+    Serial.printf("[VoiceAI] text-task stack hwm=%u words\n",
+                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
     ai_task = NULL;
     vTaskDelete(NULL);
 }
@@ -437,14 +447,12 @@ static void ai_voice_task(void *param)
         ? pdm_record_wav_hold(10, 16000, &wav, &wav_len, mic_released)
         : pdm_record_wav(5, 16000, &wav, &wav_len);
     pdm_restore_audio();
-    /* network stages from here on - this is where the wait overlay
-     * belongs (user feedback 2026-09-11: it must not cover recording) */
-    ui_post(UI_MSG_WAITBOX, "");
 
     char text[256] = "";
     if (ok && wav && wav_len > 0) {
         /* too-short gate (VAI_REC_MIN_MS): an accidental tap yields the
-         * recorder's ~700 ms floor - below the line, dropped locally */
+         * recorder's ~700 ms floor - below the line, dropped locally,
+         * BEFORE the wait overlay shows (review Nit: no box flash) */
         uint32_t dur_ms = (uint32_t)((wav_len - 44) / 32);  /* 16 kHz mono 16-bit = 32 B/ms */
         if (dur_ms < VAI_REC_MIN_MS) {
             free(wav);
@@ -456,10 +464,17 @@ static void ai_voice_task(void *param)
             ui_post(UI_MSG_STATUS, "V:voice Enter:text");
             Serial.printf("[VoiceAI] take %lums < %d ms - dropped\n",
                           (unsigned long)dur_ms, VAI_REC_MIN_MS);
+            /* stack high-water probe (review s32.2): every task exit logs
+             * the remaining-head figure so the 12K budget has data */
+            Serial.printf("[VoiceAI] stack hwm=%u words\n",
+                          (unsigned)uxTaskGetStackHighWaterMark(NULL));
             ai_task = NULL;
             vTaskDelete(NULL);
             return;
         }
+        /* network stages from here on - this is where the wait overlay
+         * belongs (user feedback 2026-09-11: it must not cover recording) */
+        ui_post(UI_MSG_WAITBOX, "");
         ui_post(UI_MSG_STATUS, "ASR (minimax)...");
         char err[128];
         ok = minimax_asr(wav, wav_len, akey, text, sizeof(text),
@@ -512,6 +527,8 @@ static void ai_voice_task(void *param)
         ui_post(UI_MSG_APPEND, buf);
     }
     ui_post(UI_MSG_STATUS, "V:voice R:read Enter:text");
+    Serial.printf("[VoiceAI] voice-task stack hwm=%u words\n",
+                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
     ai_task = NULL;
     vTaskDelete(NULL);
 }
@@ -550,7 +567,7 @@ static void ensure_audio_init()
      * tx_desc_auto_clear=true, APLL off) - the previous hand-rolled config
      * (44100, no auto-clear) decoded fine but stayed SILENT. Recipe is
      * device-proven on the audio-variant board 2026-09-10, issue_list
-     * 搂16.1 rule 2. */
+     * 16.1 rule 2 (issue_list) */
     i2s_config_t cfg = {};
     cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
     cfg.sample_rate = 16000;
@@ -575,7 +592,7 @@ static void ensure_audio_init()
     err = i2s_set_pin(I2S_NUM_0, &pins);
     Serial.printf("[VoiceAI] i2s_set_pin: %s\n", esp_err_to_name(err));
 
-    /* Now Audio.setPinout is safe 鈥?driver is installed */
+    /* Now Audio.setPinout is safe - driver is installed */
     audio.setPinout(BOARD_I2S_BCLK, BOARD_I2S_LRC, BOARD_I2S_DOUT);
     audio.setVolume(21);
     Serial.println("[VoiceAI] Audio re-initialized");

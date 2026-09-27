@@ -74,7 +74,12 @@
 - [ ] **AI Chat / TTS 返回数据累积检查**（尤其语音；会话数据是否有上限/清理）
 - [ ] **Apache Gate-Pin 双活过渡**：能否同时接受新旧两个 PIN（平滑轮换）
 - [ ] **轮换 PenPal 测试 key**（`89rg35eua2`/`3s60yrgdua` 已入 git 的
-      penpal-design.md）并把设计文档里的明文换成占位符
+      penpal-design.md）并把设计文档里的明文换成占位符。
+      **scope 扩充（issue_list §32.1，2026-09-27 qwen 评审）**：v1.22–v1.23
+      批次又新增 3 个含明文 key+gate-pin 的 tracked 脚本——
+      `scripts/inspect_mailbox.py`、`scripts/whoami_check.py`、
+      `scripts/mb_check.py`（已推 origin）；轮换时一并参数化（argv/env，
+      先例 `remote_api_demo.py`）或移 gitignored
 - [x] **`cursor.show` 直写包 helper**（评审 1561b41..b92d021 Claude Nit）：
       **v1.15 消解**——ds4 F3 证实该直写不是绘制门（start_cursor_blink
       会打回 1，真正生效的是 CURSOR part bg_opa=TRANSP），4 行直写已删，

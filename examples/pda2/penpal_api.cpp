@@ -54,17 +54,21 @@ static bool s_my_uid_loaded = false;
 int penpal_my_user_id(void) { return s_my_user_id; }
 
 /* UI thread (Preferences not re-entrant): lazy-load the persisted id once,
- * e.g. at PenPal entry, before any worker thread parses letters. */
+ * e.g. at PenPal entry, before any worker thread parses letters. Never
+ * clobbers a nonzero RAM value (Grok question list): the Whoami worker
+ * may have written the id into RAM before its UI-side store() runs. */
 void penpal_my_uid_load(void)
 {
     if (s_my_uid_loaded) return;
     s_my_uid_loaded = true;
+    int saved = 0;
     Preferences pr;
     if (pr.begin("penpal", true)) {
-        s_my_user_id = (int)pr.getInt("my_uid", 0);
+        saved = (int)pr.getInt("my_uid", 0);
         pr.end();
-        Serial.printf("%s my_uid loaded: %d\n", PP_TAG, s_my_user_id);
     }
+    if (s_my_user_id == 0 && saved != 0) s_my_user_id = saved;
+    Serial.printf("%s my_uid loaded: %d\n", PP_TAG, s_my_user_id);
 }
 
 /* UI thread: store/clear the persisted id (profile fetched / key changed). */
@@ -85,7 +89,12 @@ static bool j_mine(cJSON *obj)
     cJSON *it = obj ? cJSON_GetObjectItem(obj, "sender_user_id") : NULL;
     if (!it || !cJSON_IsNumber(it)) return false;
     if (s_my_user_id != 0) return it->valueint == s_my_user_id;
-    return it->valueint != 0;           /* unknown id: legacy fallback */
+    /* uid unknown (fresh flash / key switched, no profile fetch yet):
+     * real-user pals carry THEIR nonzero id, so the legacy nonzero=mine
+     * rule misfiles incoming mail as mine - rather than guess, treat as
+     * NOT mine (Grok P3-1). Fix/Polish gating follows mine and stays
+     * disabled until Whoami fetches the profile. */
+    return false;
 }
 
 /* NULL-safe fixed-buffer copy. */

@@ -1010,6 +1010,50 @@ failed`（F1′）；⑤ LT 起步连按两次 Enter 走完整场，结果页必
 
 ---
 
+## 32. v1.22–v1.23 批次三方评审登记（qwen/Claude/Grok 结果同日到达，2026-09-27）
+
+**结论票型**：qwen **A**（`…-qwen.md`，commit `9dfaa7f`）/ Grok **A**
+（`…-grok.md`）/ Claude **C**（`…-claude.md`，1×P0 当批阻断）。
+分歧点 = 排查脚表明文 key 的定级，**待属主裁决**（见 §32.5）。
+
+| 编号 | 级别 | 内容 | first_commit | 处置 | 门 |
+|---|---|---|---|---|---|
+| §32.1 | P2 应修（根因既有；Claude 判 P0，见 §32.5） | 3 个 tracked 排查脚本硬编码生产站 PenPal key + gate-pin：`scripts/inspect_mailbox.py:12-13`、`scripts/whoami_check.py:3-4`、`scripts/mb_check.py:3,6`——key/gate-pin 暴露状态早于区间（`git grep -l 49ef146ed5 c531d66` = TODO.md + penpal_api.cpp，qwen 复核），本批扩大待轮换清理面且已推远端 | `67acddf`/`77e0634`/`4ca5874` | 脚本改 argv/env 传参（先例 `remote_api_demo.py:78`）或移 gitignored；TODO.md「轮换 PenPal 测试 key」条目 scope 已补 3 脚本路径；**回升条件**：仓库公开或 hunter 账号承载真实数据 → 升阻断 + SECURITY.md 4 步 | G-发布（轮换完成前不清零） |
+| §32.2 | P3 应修 | Voice 双任务栈 16K→12K 无高水位实测（`ui_voice_ai.cpp:539,671`）：下次语音真机回归收尾打印 `uxTaskGetStackHighWaterMark`，≥2K 余量则 12K 入契约表，否则回退 16K（Grok 同项判"不升缺陷、观察"） | `0fd2043` | 一行 PROBE 即闭合 | G-真机 |
+| §32.3 | P3 应修（决策项） | uid==0 时 `j_mine` 回退"非零=mine"（`penpal_api.cpp:83-92`）：fresh-flash/key-change 后先进 PenPal 开线程仍复现"To:" 误判——qwen SIM 反例 + Grok 补强（**网络路径同样中招**：cache-miss → worker `pp_parse_thread:1126` 仍走 j_mine，错方向还会写入 v3 缓存），申请自评第 3 条"cache-miss 不会 parse"不成立 | `77e0634` | 两家收敛同一最小修复：**uid 未知时 j_mine 返回 false**（不显 mine、Fix/Polish 保持禁用）；可选增强 = PenPal 首次 sync 顺带 GET profile | 下一 PenPal 修复轮 |
+| §32.4 | **P2 应修（Grok 命中，qwen 复核 CONFIRMED；qwen 结果漏审该项，盲点已登记）** | Voice AI 触摸滚动抬手**无条件** `ui_disp_suppress_flush(false)` + 全刷（`ui_voice_ai.cpp:134` `vai_scroll_end_cb`），而抑制是**布尔非计数**（`factory.ino:96`）、TTS 播放持抑制（`:647`）→ 朗读中触摸拖动对话区 = EPD 全刷阻塞 loopTask 0.3–1s → `audio.loop()` 断粮，重新打开 2026-09-11 已修的"朗读期断粮"（§5.3/§5.7）。键 `+/-` 路径 indev==NULL 不受影响，仅触摸抬手击穿 | `a37face` | 最小修复：SCROLL_END 若 `tts_playing` 保持抑制、跳过全刷（或抬手后补 `suppress(true)`）；回归 = TTS 朗读中触摸拖动音频不断续 + 朗读结束抬手仍全刷一次。**禁止 RISK_ACCEPTED** | G-真机（下次 Voice AI 改动前闭合） |
+| Nit×5 | — | ① ui_voice_ai.cpp BOM+mojibake（`:553` 搂、`:578` 鈥?，0fd2043 复发，比照 `01ba2e0` 单独清理 commit）；② pp_entry stale 标志第二次读覆盖而非 OR（`ui_penpal.cpp:1191-1196`；Grok 同项）；③ bf0aa72 自动刷新实际弹 READ waitbox 吞键，与"后台"措辞不符（Grok P3-2 主项；可改不弹框变体，busy 仍占）；④ THREAD 消费 `pp.thr_idx=0` 把翻页用户拽回最新（Grok P3-2）；⑤ `pp_home_row_cb:884` 开信缓存不传 `stale_clock`，读侧时钟洞在 thread 文件仍开（Claude+Grok 同项） | — | 顺手修，不绑门（③⑤ 建议随 §32.3 同轮） | — |
+
+**§32.5 分歧登记（脚本 key 定级，待属主裁决）**：Claude 判 **P0 当批阻断**
+（A/1/有声：可执行脚本 + 完整生产凭据 + 已推远端），要求当批服务端轮换 +
+`SECURITY.md` 级清洗评估；qwen/Grok 判**非新 P0**（根因既有：key 早在
+penpal-design.md、gate-pin 早在 `39c7472`/penpal_api.cpp:210 且均已入 TODO
+轮换台账，本批是扩散副本非首次暴露）。**qwen 事实核查**：Claude 证据 #2
+"gate-pin `49ef146ed5` 是本批新出现"与 `git grep -l 49ef146ed5 c531d66`
+（命中 TODO.md + examples/pda2/penpal_api.cpp）**矛盾**——该值在区间基线已
+tracked，"本批新增且更严重的一步"的升级论据部分失实；但"新增 3 份可执行
+副本 + 已推远端"属实。按 §0 原则 2/3：事实已复现、定级分歧交属主。
+**两派共同动作项无分歧**：立即轮换（TODO 既有项提级从速）+ 脚本参数化 +
+penpal-design.md 明文换占位符；分歧仅在"是否阻断本批合入"。
+
+**契约漂移（Grok，随文档 commit 改一句）**：`async_ipc_contract.md` 规则 7
+Whoami 仍写"2000ms 超时自 delete"，`4d27849` 后实为"UI 清句柄 ⇒ 投递必须
+成功（重试循环）"第三变体；另 `penpal_api.h:74` 注释仍是旧方向语义
+（"sender_user_id != null -> letter I wrote"）。
+
+**同轮疑问清单**（不占缺陷）：`dur_ms=(wav_len-44)/32` 无符号下溢依赖录音器
+44B 头契约（qwen+Claude 同判当前实现不可达）；`s_my_user_id` 跨线程普通 int
+（对齐存取实践原子；Claude/Grok 同项，建议 volatile/原子化统一纪律）；
+`penpal_my_user_id()` 零生产调用方；`penpal_my_uid_load` 的
+`s_my_uid_loaded` 门后仍用 NVS 覆盖 RAM 的窄窗口（Grok，折叠进 §32.3）；
+过短录音先闪 waitbox 再本地丢弃（Grok Nit）。
+
+**决策项已裁**：缓存 v3 头带 16 字符 key 明文入 SPIFFS——qwen/Grok 均同意
+作者论证（`/env.cfg` 同分区同 key，无新暴露边界；轮换后旧缓存自动失效），
+登记 RISK_ACCEPTED（属主=用户，范围=SPIFFS 物理接触）。
+
+---
+
 ## 附：键盘实测记录
 
 2026-08-16 使用 `examples/test_keypad`（原始矩阵示例）+ 串口监视器，用户按键实测解码（列镜像换算后）：

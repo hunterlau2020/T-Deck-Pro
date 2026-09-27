@@ -645,16 +645,22 @@ static void pp_consume(pp_result_t *res)
             for (int i = 0; i < res->count; i++) {
                 pp.letters[i] = res->letters[res->count - 1 - i];
             }
-            pp.thr_idx = 0;
-            pp.thr_dropped = res->dropped;
-            if (s_cur_page == PP_PAGE_HOME) {
-                pp_set_page(PP_PAGE_THREAD);
-            } else if (s_cur_page == PP_PAGE_THREAD) {
-                /* in-page Sync button refresh (2026-08-26): the page is
-                 * already up - re-render with the fresh letters */
+            if (s_cur_page == PP_PAGE_THREAD) {
+                /* in-page refresh (Sync button / unread auto-refresh,
+                 * 2026-08-26 + 2026-09-27): the page is already up -
+                 * KEEP the user's scroll position (clamped to the new
+                 * count, Grok P3-2) instead of yanking to the newest */
+                if (pp.thr_idx >= pp.letters_cnt) pp.thr_idx = pp.letters_cnt - 1;
+                if (pp.thr_idx < 0) pp.thr_idx = 0;
                 ppr_show_thread();
                 ui_disp_full_refr();
+            } else {
+                pp.thr_idx = 0;          /* fresh open: newest letter */
+                if (s_cur_page == PP_PAGE_HOME) {
+                    pp_set_page(PP_PAGE_THREAD);
+                }
             }
+            pp.thr_dropped = res->dropped;
         } else {
             pp_status_set("%s", res->err.c_str());
         }
@@ -881,8 +887,10 @@ static void pp_home_row_cb(lv_event_t *e)
     /* thread cache first (product request 2026-08-26): parse straight into
      * the global letters array (64 rows, too fat for the UI stack); the
      * in-page Sync button force-refreshes over the network */
+    bool thr_stale = false;
     if (penpal_cache_load_thread(pp.thr_root, pp.letters, PP_THREAD_MAX,
-                                 &pp.letters_cnt, &pp.thr_dropped)) {
+                                 &pp.letters_cnt, &pp.thr_dropped,
+                                 &thr_stale)) {
         /* cached body is server order (oldest-first) -> store newest-first,
          * exactly like the PP_RES_THREAD consumer below */
         for (int i = 0; i < pp.letters_cnt / 2; i++) {
@@ -899,15 +907,18 @@ static void pp_home_row_cb(lv_event_t *e)
          * cache render shows instantly, the PP_RES_THREAD consumer
          * re-renders in place when the fresh letters land. Cache-miss
          * opens already go to the network; unread==0 opens stay
-         * cache-only (manual Sync remains for a forced refresh). */
-        if (pp.rows[idx].unread > 0) {
+         * cache-only (manual Sync remains for a forced refresh).
+         * thr_stale (pre-NTP thread cache, Grok P3-2) refreshes too -
+         * same policy as the HOME entry path. */
+        if (pp.rows[idx].unread > 0 || thr_stale) {
             pp_task_req_t rq = {};
             rq.gen = s_pp_gen;
             rq.type = PP_RES_THREAD;
             rq.pen_pal_id = pp.thr_pal;
             rq.thread_root_id = pp.thr_root;
             if (pp_start(&rq, false)) {
-                pp_status_set("new mail - refreshing...");
+                pp_status_set(thr_stale ? "clock unsynced - refreshing..."
+                                        : "new mail - refreshing...");
             }
         }
         return;
@@ -1207,10 +1218,14 @@ static void pp_entry(void)
          * sync below overwrites anyway. */
         bool trunc = false;
         bool stale = false;               /* served pre-NTP: age unverified */
+        bool stale_mb = false, stale_pa = false;
         if (penpal_cache_load_mailbox(pp.rows, PP_MAILBOX_MAX,
-                                      &pp.rows_cnt, &trunc, &stale) &&
+                                      &pp.rows_cnt, &trunc, &stale_mb) &&
             penpal_cache_load_pals(pp.pals, PP_PAL_MAX, &pp.pals_cnt,
-                                   &stale)) {
+                                   &stale_pa)) {
+            /* OR, not overwrite (review Nit): each load resets its own
+             * flag on entry - the second call must not clear the first */
+            stale = stale_mb || stale_pa;
             pp.mailbox_truncated = trunc;
             pp.home_page = 0;
             pp_home_render_pals();

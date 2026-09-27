@@ -71,7 +71,8 @@ typedef struct {
 
 typedef struct {
     int id;
-    bool mine;          /* sender_user_id != null -> letter I wrote (Fix/Polish) */
+    bool mine;          /* sender_user_id == OWN id -> letter I wrote
+                           (uid unknown -> false, Grok P3-1; Fix/Polish gate) */
     char sender[24];
     char time[20];      /* created_at "2026-08-20T14:11:11" */
     string content;     /* heap-allocated; <= PP_LETTER_MAX after truncation */
