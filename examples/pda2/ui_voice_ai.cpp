@@ -124,6 +124,20 @@ static lv_obj_t *resp_cont = NULL;
 static void vai_scroll_begin_cb(lv_event_t *e)
 {
     if (lv_event_get_indev(e) != NULL) {
+        /* Scrolling during read-aloud = the user wants to READ elsewhere:
+         * an EPD repaint cannot run under live playback (0.3-1 s flush
+         * starves audio.loop - device-proven 2026-09-11), so the take
+         * stops here (same intervention rule as the MIC key) and the
+         * gesture proceeds with normal redraw-on-release (follow-up to
+         * review P2-1, user report: "cannot scroll while reading"). */
+        if (tts_playing) {
+            audio.stopSong();
+            tts_playing = false;
+            ui_disp_suppress_flush(false);
+            if (status_label)
+                lv_label_set_text(status_label, "V:voice R:read Enter:text");
+            Serial.println("[VoiceAI] touch scroll during TTS - playback stopped");
+        }
         ui_disp_suppress_flush(true);
     }
 }
@@ -729,7 +743,15 @@ void voiceai_keyboard_poll()
         }
     } else if ((c == '+' || c == '-') && resp_cont) {
         /* scroll the conversation (input-empty only - '+/-': scroll hint);
-         * programmatic scroll has indev == NULL -> flushes normally */
+         * programmatic scroll has indev == NULL -> flushes normally.
+         * During TTS the same invisibility applies (suppressed repaints),
+         * so a keyboard scroll stops the take first - touch variant rule */
+        if (tts_playing) {
+            audio.stopSong();
+            tts_playing = false;
+            ui_disp_suppress_flush(false);
+            Serial.println("[VoiceAI] key scroll during TTS - playback stopped");
+        }
         const char *text = lv_textarea_get_text(input_ta);
         if (!text || text[0] == '\0') {
             lv_obj_scroll_by(resp_cont, 0, c == '+' ? -120 : 120, LV_ANIM_OFF);
