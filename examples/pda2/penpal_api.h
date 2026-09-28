@@ -71,7 +71,8 @@ typedef struct {
 
 typedef struct {
     int id;
-    bool mine;          /* sender_user_id != null -> letter I wrote (Fix/Polish) */
+    bool mine;          /* sender_user_id == OWN id -> letter I wrote
+                           (uid unknown -> false, Grok P3-1; Fix/Polish gate) */
     char sender[24];
     char time[20];      /* created_at "2026-08-20T14:11:11" */
     string content;     /* heap-allocated; <= PP_LETTER_MAX after truncation */
@@ -168,16 +169,22 @@ bool penpal_save_ai_provider(const char *name);
 /** @brief Drop the pals + mailbox cache files (manual Sync path). */
 void penpal_cache_drop_home(void);
 
-/** @brief Load pals from cache (false = miss/expired/bad). */
-bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count);
+/** @brief Load pals from cache (false = miss/expired/bad).
+ *  *stale_clock (when non-NULL): body served despite an unsynced device
+ *  clock - age unverifiable, caller should still fire a network refresh.
+ *  Cache v2 headers bind the server base: a different PENPAL_BASE (or a
+ *  legacy v1 header) invalidates the entry (2026-09-26 cross-era fix). */
+bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count,
+                            bool *stale_clock = nullptr);
 
 /** @brief Load the mailbox listing from cache (false = miss/expired/bad). */
 bool penpal_cache_load_mailbox(pp_thread_row_t *out, int max, int *count,
-                               bool *truncated);
+                               bool *truncated, bool *stale_clock = nullptr);
 
 /** @brief Load one thread by its root id from cache (false = miss/expired/bad). */
 bool penpal_cache_load_thread(int thread_root_id,
-                              pp_letter_t *out, int max, int *count, int *dropped);
+                              pp_letter_t *out, int max, int *count, int *dropped,
+                              bool *stale_clock = nullptr);
 
 /* ---- idempotency key (design §2.2) ---------------------------------------- */
 
@@ -206,12 +213,25 @@ bool penpal_test_base(const char *base, const char *key, string *detail);
  * GET /api/v1/users/me/profile - the API-key holder's own record
  * (remote_api_demo.py step 0). */
 typedef struct {
+    int user_id;              /* own id - drives letter From:/To: direction */
     char name[48];
     char age_band[24];
     char level[12];
     char city[48];
     char interests[96];
 } pp_profile_t;
+
+/** @brief Own user id (captured by the last successful profile fetch;
+ *  0 = unknown - letter direction falls back to the legacy rule). */
+int penpal_my_user_id(void);
+
+/** @brief Lazy-load the persisted own-id from NVS (UI thread; call at
+ *  PenPal entry so letter direction works before any profile fetch). */
+void penpal_my_uid_load(void);
+
+/** @brief Persist/clear the own-id (UI thread): store after a successful
+ *  profile fetch; store(0) when the API key changes (account switch). */
+void penpal_my_uid_store(int uid);
 
 /** @brief Fetch the API-key holder's profile. Empty fields arrive as "".
  *  @return true on HTTP 2xx + parse; *err holds the failure line otherwise. */

@@ -291,13 +291,18 @@ static void wa_task_func(void *param)
     Serial.printf("[Whoami] task done ok=%d text=%.80s\n",
                   m->ok ? 1 : 0, m->text);
     delete rq;
+    /* qwen Nit-1/Nit-2: s_wa_task is UI-OWNED (cleared in wa_consume when
+     * the result is consumed) - the worker never writes it. Delivery is
+     * block-until-queued so there is no failure path that could strand the
+     * handle: the queue is drained every loop tick, so this cannot block
+     * in practice. */
     if (s_wa_q) {
-        if (xQueueSend(s_wa_q, &m, pdMS_TO_TICKS(2000)) != pdTRUE)
-            delete m;                   /* Nit-1: documented leak guard */
+        while (xQueueSend(s_wa_q, &m, pdMS_TO_TICKS(2000)) != pdTRUE) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
     } else {
         delete m;
     }
-    s_wa_task = NULL;
     vTaskDelete(NULL);
 }
 
@@ -374,6 +379,10 @@ static void wa_consume(void)
         if (m) {
             Serial.printf("[Whoami] result kind=%d ok=%d\n",
                           m->kind, m->ok ? 1 : 0);
+            /* qwen Nit-1: the busy handle is UI-owned - releasing it here
+             * (result consumed = task done) removes the worker-thread
+             * write entirely. Single-flight means one message per task. */
+            s_wa_task = NULL;
             wa_waitbox_hide();           /* result arrived - drop the box */
             if (m->kind == WA_REQ_PROFILE && m->cfg_gen != s_wa_cfg_gen) {
                 /* config changed since this request launched: a profile for
@@ -387,6 +396,9 @@ static void wa_consume(void)
                 s_profile_valid = true;
                 s_profile_fetched = true;
                 wa_cache_save();             /* serve future boots from NVS */
+                /* persist the account id: letter From:/To: direction in
+                 * PenPal depends on it (2026-09-26 v2 fix) */
+                penpal_my_uid_store(m->prof.user_id);
                 wa_me_render();
                 wa_me_status("profile OK");
             } else if (m->ok) {
@@ -507,6 +519,13 @@ static void wa_cfg_save_cb(lv_event_t *e)
     bool gpin_ok = true;
     if (s_cfg_gpin_ta)
         gpin_ok = penpal_save_gate_pin(lv_textarea_get_text(s_cfg_gpin_ta));
+    bool key_changed = server_ok && strcmp(save_key, s_cfg_key_real) != 0;
+    if (server_ok && key_changed) {
+        /* account switch: the stored own-id belongs to the OLD key -
+         * clear it (next profile fetch re-stores); PenPal caches also
+         * re-bind to the new key (cache v3 header) */
+        penpal_my_uid_store(0);
+    }
     bool prov_ok = false;
     if (server_ok) {
         strncpy(s_cfg_key_real, save_key, sizeof(s_cfg_key_real) - 1);

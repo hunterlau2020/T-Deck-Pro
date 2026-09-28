@@ -11,6 +11,7 @@
 #include <cJSON.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <esp_heap_caps.h>
 
 /* ---- dual-slot config storage (copilot finding 1.2) ---------------------
  * Fields live in slot 0/1 ("base.0", "model.0", "key.0" / "...1"); the
@@ -599,6 +600,16 @@ static bool openai_chat_impl(const ai_message_t *history, int history_count,
     base_url = ep.c_str();
     Serial.printf("[AI] POST %s (model %s, key len %d)\n",
                   base_url, model ? model : "?", (int)strlen(api_key));
+    /* TLS handshake needs ~45 KB of contiguous INTERNAL heap (mbedtls I/O
+     * buffers + X.509 parse); log the budget at request time so a
+     * "SSL - Memory allocation failed" comes with its cause (device report
+     * 2026-09-16: HTTP -1 on minimax chat after the leveltest/newdict
+     * merge). */
+    Serial.printf("[AI] heap: free=%u largest_int=%u psram=%u\n",
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)heap_caps_get_largest_free_block(
+                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     /* reasoning.exclude is an OpenRouter extension; DeepSeek direct and other
      * OpenAI-compatible providers may ignore it or behave unexpectedly. */

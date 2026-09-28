@@ -97,6 +97,12 @@ static char *last_response = NULL;
 #define VAI_CTX_MAX_MSGS    16
 static vector<pair<string, string> > vai_ctx;
 
+/* Too-short voice filter (user request 2026-09-16): takes below this are
+ * accidental MIC taps / empty recordings and must not reach ASR or the
+ * server. The recorder's own floor is ~700 ms (pdm_record_wav_hold's
+ * early-stop gate), so 1000 ms gives a 300 ms grace band above it. */
+#define VAI_REC_MIN_MS      1000
+
 extern Audio audio;
 
 /* Thread-safe UI queue */
@@ -105,10 +111,51 @@ struct ui_msg_t { int type; char *text; };
 static QueueHandle_t ui_queue = NULL;
 static lv_timer_t *ui_timer = NULL;
 
-/* Pagination for response display */
-#define RESPONSE_PAGE_CHARS 400
-static int response_page = 0;
-static int response_total_pages = 1;
+/* Conversation display (user request 2026-09-16: scrolling). The full
+ * transcript lives in chat_history (PSRAM); the label shows the LAST
+ * VAI_DISP_MAX chars - the cap keeps the LVGL 64K pool safe on long
+ * sessions (PenPal §15 lesson). The label sits in a scrollable container:
+ * touch scroll suppresses EPD writes and redraws ONCE on release (AI Text
+ * chat pattern); +/- keys scroll when the input box is empty. The old
+ * 400-char pagination (show_response_page) was dead code and is gone. */
+#define VAI_DISP_MAX 4000
+static lv_obj_t *resp_cont = NULL;
+
+static void vai_playback_stop(void);       /* defined below the waitbox block */
+
+static void vai_scroll_begin_cb(lv_event_t *e)
+{
+    if (lv_event_get_indev(e) != NULL) {
+        /* Scrolling during read-aloud = the user wants to READ elsewhere:
+         * an EPD repaint cannot run under live playback (0.3-1 s flush
+         * starves audio.loop - device-proven 2026-09-11), so the take
+         * stops here (same intervention rule as the MIC key) and the
+         * gesture proceeds with normal redraw-on-release (follow-up to
+         * review P2-1, user report: "cannot scroll while reading"). */
+        if (tts_playing) {
+            vai_playback_stop();
+            if (status_label)
+                lv_label_set_text(status_label, "V:voice R:read Enter:text");
+        }
+        ui_disp_suppress_flush(true);
+    }
+}
+
+static void vai_scroll_end_cb(lv_event_t *e)
+{
+    if (lv_event_get_indev(e) != NULL) {
+        /* Grok P2-1 (4d27849..bf0aa72): the flush suppression is a plain
+         * bool shared with TTS playback - releasing it here while a take
+         * is still playing would let the full refresh starve audio.loop()
+         * for 0.3-1 s and re-open the 2026-09-11 choppy-playback defect.
+         * Keep suppressed; the playback-end check in ui_timer_cb is the
+         * sole releaser while tts_playing. */
+        if (!tts_playing) {
+            ui_disp_suppress_flush(false);
+            ui_disp_full_refr();
+        }
+    }
+}
 
 static void chat_append(const char *text)
 {
@@ -130,42 +177,18 @@ static void chat_append(const char *text)
         if (chat_history) memcpy(chat_history, text, len + 1);
         else chat_history = strdup(text);
     }
-    /* Show last page */
-    if (chat_history) {
+    /* show the tail of the transcript, scrolled to the bottom */
+    if (chat_history && response_label) {
         size_t total = strlen(chat_history);
-        response_total_pages = (total + RESPONSE_PAGE_CHARS - 1) / RESPONSE_PAGE_CHARS;
-        if (response_total_pages < 1) response_total_pages = 1;
-        response_page = response_total_pages - 1;
-
-        /* Display current page */
-        int start = response_page * RESPONSE_PAGE_CHARS;
-        int len = total - start;
-        if (len > RESPONSE_PAGE_CHARS) len = RESPONSE_PAGE_CHARS;
-        static char page_buf[RESPONSE_PAGE_CHARS + 1];
-        memcpy(page_buf, chat_history + start, len);
-        page_buf[len] = '\0';
-        lv_label_set_text(response_label, page_buf);
+        const char *view = chat_history;
+        if (total > VAI_DISP_MAX) {
+            view += total - VAI_DISP_MAX;
+            while ((*view & 0xC0) == 0x80) view++;   /* UTF-8 boundary */
+        }
+        lv_label_set_text(response_label, view);
+        lv_obj_update_layout(response_label);
+        lv_obj_scroll_to_y(resp_cont, LV_COORD_MAX, LV_ANIM_OFF);
     }
-}
-
-static void show_response_page(int pg)
-{
-    if (!chat_history) return;
-    size_t total = strlen(chat_history);
-    response_total_pages = (total + RESPONSE_PAGE_CHARS - 1) / RESPONSE_PAGE_CHARS;
-    if (pg < 0) pg = 0;
-    if (pg >= response_total_pages) pg = response_total_pages - 1;
-    response_page = pg;
-
-    int start = pg * RESPONSE_PAGE_CHARS;
-    int len = total - start;
-    if (len > RESPONSE_PAGE_CHARS) len = RESPONSE_PAGE_CHARS;
-    static char page_buf[RESPONSE_PAGE_CHARS + 1];
-    memcpy(page_buf, chat_history + start, len);
-    page_buf[len] = '\0';
-    lv_label_set_text(response_label, page_buf);
-    if (status_label)
-        lv_label_set_text_fmt(status_label, "Page %d/%d  W:up S:down", pg + 1, response_total_pages);
 }
 
 static void chat_show_status(const char *s)
@@ -184,6 +207,7 @@ static void ui_post(int type, const char *text)
 }
 
 static void start_tts();
+static void vai_playback_stop(void);   /* defined below the waitbox block */
 
 /* ---- send-wait overlay (user request 2026-09-11, same pattern as the
  * AI Text app): pops on Send/Voice, countdown ticks on second changes
@@ -249,6 +273,34 @@ static void vai_waitbox_tick(void)
     }
 }
 
+/* Single stop-the-take helper (every intervention path shares it):
+ * stopSong + release the EPD suppression + drop the Speaking box.
+ * Order matters: release suppression BEFORE hiding the box so the
+ * deletion can actually repaint (under suppression a hidden box stays
+ * on the glass - that is how "Waiting server reply" outlived the
+ * network stage, user report 2026-09-27). */
+static void vai_playback_stop(void)
+{
+    audio.stopSong();
+    tts_playing = false;
+    ui_disp_suppress_flush(false);
+    vai_waitbox_hide();
+    Serial.println("[VoiceAI] playback stopped");
+}
+
+/* Read-aloud status box: same overlay the wait stage used. The EPD is
+ * suppressed for the whole take, so "hide + repaint" is impossible
+ * mid-playback - the box is REPURPOSED as "Speaking..." and hidden by
+ * the playback-end check (or vai_playback_stop) once flushes are free. */
+static void vai_speakbox_show(void)
+{
+    if (!vai_waitbox) vai_waitbox_show();
+    if (vai_waitbox_body)
+        lv_label_set_text(vai_waitbox_body,
+                          "Speaking...\n(scroll / MIC stops)");
+    vai_wait_last = 0;                   /* tick is idle (ai_task==NULL) */
+}
+
 static void ui_timer_cb(lv_timer_t *t)
 {
     ui_msg_t msg;
@@ -261,8 +313,8 @@ static void ui_timer_cb(lv_timer_t *t)
 
     if (ai_task) {
         vai_waitbox_tick();
-    } else if (vai_waitbox) {
-        vai_waitbox_hide();               /* worker finished */
+    } else if (vai_waitbox && !tts_playing) {
+        vai_waitbox_hide();               /* worker finished, no take up */
     }
 
     if (tts_auto_read && ai_task == NULL) {
@@ -273,6 +325,7 @@ static void ui_timer_cb(lv_timer_t *t)
     if (tts_playing && !audio.isRunning()) {
         tts_playing = false;
         ui_disp_suppress_flush(false);   /* release the EPD held during play */
+        vai_waitbox_hide();              /* Speaking box: glass can repaint */
         if (status_label) lv_label_set_text(status_label, "V:voice R:read Enter:text");
     }
 }
@@ -402,6 +455,8 @@ static void ai_text_task(void *param)
         ui_post(UI_MSG_STATUS, "V:voice Enter:text");
     }
     free(prompt);
+    Serial.printf("[VoiceAI] text-task stack hwm=%u words\n",
+                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
     ai_task = NULL;
     vTaskDelete(NULL);
 }
@@ -435,12 +490,34 @@ static void ai_voice_task(void *param)
         ? pdm_record_wav_hold(10, 16000, &wav, &wav_len, mic_released)
         : pdm_record_wav(5, 16000, &wav, &wav_len);
     pdm_restore_audio();
-    /* network stages from here on - this is where the wait overlay
-     * belongs (user feedback 2026-09-11: it must not cover recording) */
-    ui_post(UI_MSG_WAITBOX, "");
 
     char text[256] = "";
     if (ok && wav && wav_len > 0) {
+        /* too-short gate (VAI_REC_MIN_MS): an accidental tap yields the
+         * recorder's ~700 ms floor - below the line, dropped locally,
+         * BEFORE the wait overlay shows (review Nit: no box flash) */
+        uint32_t dur_ms = (uint32_t)((wav_len - 44) / 32);  /* 16 kHz mono 16-bit = 32 B/ms */
+        if (dur_ms < VAI_REC_MIN_MS) {
+            free(wav);
+            char buf[96];
+            snprintf(buf, sizeof(buf),
+                     "> [Voice too short (%lums) - not sent]",
+                     (unsigned long)dur_ms);
+            ui_post(UI_MSG_APPEND, buf);
+            ui_post(UI_MSG_STATUS, "V:voice Enter:text");
+            Serial.printf("[VoiceAI] take %lums < %d ms - dropped\n",
+                          (unsigned long)dur_ms, VAI_REC_MIN_MS);
+            /* stack high-water probe (review s32.2): every task exit logs
+             * the remaining-head figure so the 12K budget has data */
+            Serial.printf("[VoiceAI] stack hwm=%u words\n",
+                          (unsigned)uxTaskGetStackHighWaterMark(NULL));
+            ai_task = NULL;
+            vTaskDelete(NULL);
+            return;
+        }
+        /* network stages from here on - this is where the wait overlay
+         * belongs (user feedback 2026-09-11: it must not cover recording) */
+        ui_post(UI_MSG_WAITBOX, "");
         ui_post(UI_MSG_STATUS, "ASR (minimax)...");
         char err[128];
         ok = minimax_asr(wav, wav_len, akey, text, sizeof(text),
@@ -493,6 +570,8 @@ static void ai_voice_task(void *param)
         ui_post(UI_MSG_APPEND, buf);
     }
     ui_post(UI_MSG_STATUS, "V:voice R:read Enter:text");
+    Serial.printf("[VoiceAI] voice-task stack hwm=%u words\n",
+                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
     ai_task = NULL;
     vTaskDelete(NULL);
 }
@@ -504,9 +583,18 @@ static void start_voice_record(bool hold)
         chat_append("WiFi not connected.");
         return;
     }
+    /* TTS playback owns I2S0, and pdm_init() UNINSTALLS that driver for
+     * recording - audio.loop() would then i2s_write into the dead driver
+     * and panic LoadProhibited (device log + backtrace 2026-09-16: MIC
+     * pressed during read-aloud). Stop the player first and release the
+     * EPD it holds. */
+    if (tts_playing) {
+        vai_playback_stop();
+        Serial.println("[VoiceAI] MIC pressed during TTS - playback stopped");
+    }
     if (!hold) vai_waitbox_show();   /* hold-to-talk: waitbox only after
                                       * the take, posted by the task */
-    xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 16384,
+    xTaskCreatePinnedToCore(ai_voice_task, "ai_voice", 12288,
                             hold ? (void *)1 : NULL, 5, &ai_task, 0);
 }
 
@@ -520,7 +608,7 @@ static void ensure_audio_init()
      * tx_desc_auto_clear=true, APLL off) - the previous hand-rolled config
      * (44100, no auto-clear) decoded fine but stayed SILENT. Recipe is
      * device-proven on the audio-variant board 2026-09-10, issue_list
-     * §16.1 rule 2. */
+     * 16.1 rule 2 (issue_list) */
     i2s_config_t cfg = {};
     cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
     cfg.sample_rate = 16000;
@@ -545,7 +633,7 @@ static void ensure_audio_init()
     err = i2s_set_pin(I2S_NUM_0, &pins);
     Serial.printf("[VoiceAI] i2s_set_pin: %s\n", esp_err_to_name(err));
 
-    /* Now Audio.setPinout is safe — driver is installed */
+    /* Now Audio.setPinout is safe - driver is installed */
     audio.setPinout(BOARD_I2S_BCLK, BOARD_I2S_LRC, BOARD_I2S_DOUT);
     audio.setVolume(21);
     Serial.println("[VoiceAI] Audio re-initialized");
@@ -554,6 +642,13 @@ static void ensure_audio_init()
 static void start_tts()
 {
     Serial.println("[VoiceAI] TTS: start_tts called");
+
+    /* R pressed while already reading: stop the running playback first -
+     * ensure_audio_init() below reinstalls I2S0, which must not happen
+     * under a live player (same hazard as the MIC crash, 2026-09-16). */
+    if (tts_playing) {
+        vai_playback_stop();
+    }
 
     if (!tts_enabled) {
         /* switch OFF: no earphone plugged - skip synthesis AND playback
@@ -606,6 +701,11 @@ static void start_tts()
      * and the take plays as choppy noise (same device report) - hold all
      * flushes until the playback-end check in ui_timer_cb releases them */
     if (tts_playing) ui_disp_suppress_flush(true);
+    /* repurpose the overlay: the suppressed EPD cannot repaint a hidden
+     * box, so the wait box becomes the Speaking indicator and is dropped
+     * by the playback-end check / vai_playback_stop (user report
+     * 2026-09-27: stale "Waiting server reply" during read-aloud) */
+    if (tts_playing) vai_speakbox_show();
 }
 
 static void do_send()
@@ -628,7 +728,7 @@ static void do_send()
     lv_textarea_set_text(input_ta, "");
     if (prompt) {
         vai_waitbox_show();
-        xTaskCreatePinnedToCore(ai_text_task, "ai_text", 16384, prompt, 5, &ai_task, 0);
+        xTaskCreatePinnedToCore(ai_text_task, "ai_text", 12288, prompt, 5, &ai_task, 0);
     }
 }
 
@@ -670,6 +770,18 @@ void voiceai_keyboard_poll()
             scr_mgr_pop(false);
         } else {
             lv_textarea_del_char(input_ta);
+        }
+    } else if ((c == '+' || c == '-') && resp_cont) {
+        /* scroll the conversation (input-empty only - '+/-': scroll hint);
+         * programmatic scroll has indev == NULL -> flushes normally.
+         * During TTS the same invisibility applies (suppressed repaints),
+         * so a keyboard scroll stops the take first - touch variant rule */
+        if (tts_playing) vai_playback_stop();
+        const char *text = lv_textarea_get_text(input_ta);
+        if (!text || text[0] == '\0') {
+            lv_obj_scroll_by(resp_cont, 0, c == '+' ? -120 : 120, LV_ANIM_OFF);
+        } else {
+            lv_textarea_add_char(input_ta, c);
         }
     } else if (c >= ' ' && c <= '~') {
         lv_textarea_add_char(input_ta, c);
@@ -730,16 +842,26 @@ static void ai_create(lv_obj_t *parent)
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Response area (top, most space) */
-    response_label = lv_label_create(cont);
+    /* Response area (top, most space) - scrollable conversation (2026-09-16) */
+    resp_cont = lv_obj_create(cont);
+    lv_obj_set_width(resp_cont, lv_pct(100));
+    lv_obj_set_flex_grow(resp_cont, 1);
+    lv_obj_set_style_border_width(resp_cont, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(resp_cont, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(resp_cont, 0, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(resp_cont, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scroll_dir(resp_cont, LV_DIR_VER);
+    lv_obj_add_event_cb(resp_cont, vai_scroll_begin_cb, LV_EVENT_SCROLL_BEGIN, NULL);
+    lv_obj_add_event_cb(resp_cont, vai_scroll_end_cb, LV_EVENT_SCROLL_END, NULL);
+
+    response_label = lv_label_create(resp_cont);
     lv_obj_set_width(response_label, lv_pct(100));
-    lv_obj_set_flex_grow(response_label, 1);
-    lv_obj_set_style_text_font(response_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_label_set_long_mode(response_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(response_label, &lv_font_montserrat_14, LV_PART_MAIN);
 
     lv_label_set_text(response_label,
                       "Enter: send text\nV: voice (5s record)\n"
-                      "R: read last response");
+                      "R: read last response\n+/-: scroll (empty box)");
 
     /* Status line */
     status_label = lv_label_create(cont);
@@ -762,8 +884,6 @@ static void ai_create(lv_obj_t *parent)
     lv_obj_set_style_anim_time(input_ta, 0, LV_PART_CURSOR);
     lv_obj_set_style_text_font(input_ta, &lv_font_montserrat_14, LV_PART_MAIN);
 
-    response_page = 0;
-    response_total_pages = 1;
     ai_kbd_active = true;
 }
 
@@ -772,7 +892,11 @@ static void ai_exit(void)
 {
     /* playback continues after exit (global audio object) - the timer
      * that releases the flush suppression dies with the screen, so do
-     * it here or the EPD stays frozen app-wide */
+     * it here or the EPD stays frozen app-wide. The Speaking box lives
+     * on lv_layer_top (survives screen destroy) - drop it here too or
+     * it stays painted over the menu (same stale-box family, 2026-09-27) */
+    if (tts_playing) vai_playback_stop();
+    else vai_waitbox_hide();
     ui_disp_suppress_flush(false);
     ui_disp_full_refr();
 }
@@ -792,6 +916,7 @@ static void ai_destroy(void)
     tts_playing = false;
     tts_auto_read = false;
     response_label = input_ta = status_label = NULL;
+    resp_cont = NULL;
     tts_sw = NULL;
 }
 

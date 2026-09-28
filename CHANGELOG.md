@@ -3,6 +3,69 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-09-28（v1.29：双线合并——NewDict/OTA 线 × PenPal/voice-ai 并行线）
+
+- **合并**：两条并行开发线汇合——本线（v1.24-v1.28：NewDict 验收修复
+  ×3 + Gate-pin 配置化 + OTA 台架/换根）× 并行线（1.22′-1.23′：PenPal
+  数据链修复、voice-ai 滚动与修复、OTA review closeout）。fw_version
+  续 **1.29**；并行线编号以 ′ 标注，历史记录不回改。
+- **合并要点**：`ota_update.cpp` 双方改动并存（本线 PLAIN_HTTP 宏统一
+  + 并行线 review closeout 增补）；`docs/ota-baseline.md` 双份合并；
+  `issue_list` 并行线登记重编号为 §36；`penpal_api`/`ui_whoami` 双方
+  改动区域不相交，自动合并后逐处人工核对。
+## 2026-09-27（并行线 1.23′：PenPal 数据修复链——方向判定/缓存 v3/自动刷新）
+
+- **真机驱动的三步收敛**（起点：detail 全显 To: + SPIFFS 分区扫出跨代
+  缓存）：① 缓存 v2 绑定服务器 base + 封堵读/写侧时钟洞（`2760655`）；
+  ② 信件方向按**本人 user id** 判定——旧"非零=我写的"只在 NPC 时代
+  成立，真实用户笔友的来信带对方非零 id 全被误判（`77e0634`）；
+  ③ 本人 id **NVS 持久化**（Whoami 拉到即存、PenPal 进入即载、换 key
+  即清）+ 缓存 v3 `<fetched> <base> <key>` 双绑定——同域名换账号/服务端
+  重建库也失效（v2 只防换域名，本例域未变库变了，盲区实证；
+  `4ca5874`）。设备实为 carlos 账号（NVS key 覆盖 env.cfg 的 hunter
+  测试 key），真机验证方向全对。
+- **未读线程自动刷新**（`bf0aa72`，用户需求）：mailbox 行 `unread>0`
+  时点进详情——缓存秒开 + 自动后台拉新（原地重渲染），免手动 Sync。
+- **排查工具入库**（`67acddf` + `whoami_check/mb_check`）：服务器
+  mailbox/thread 直查、SPIFFS 缓存代际扫描、profile 核对。
+- 评审申请合并重发：`4d27849..d68289e` 版无结果到达，作废并由
+  **`session-batch-review-request-4d27849..bf0aa72.md`** 取代（覆盖
+  v1.22+v1.23 全部内容）；版本 v1.22 → **v1.23**。
+
+## 2026-09-26（并行线 1.22′：71c09e7 评审收口 + Voice AI 稳定性/滚动 + PenPal 草稿保护）
+
+- **评审遗留收口**（`4d27849`，对应 71c09e7 四方评审残留）：qwen **P3-2**
+  OTA 清单下载加 **4KB 大小封顶**（chunked/超限在验证前拒绝，堵
+  getString() OOM 路径）；**Nit-1** Whoami `s_wa_task` 改 UI 线程所有
+  （worker 阻塞投递，无失败滞留路径）；新建 `docs/ota-baseline.md`
+  ——WDT T=60s 依据：库源码实证单页 `_busy_timeout`=10s
+  （`GxEPD2_310_GDEQ031T10.cpp:17`）+ 三机启动分段耗时，T_min=30s。
+  至此 **71c09e7 全部代码级发现闭合**（P1+5×P2 由 `095e41a` 修复轮
+  核销，P2-6 契约登记同批完成）；遗留仅 G-真机：双机仪器化校准 +
+  自毁固件回滚实测（`verifyRollbackLater` 已修，otadata=VALID 态下
+  真实回滚路径仍未触发过）。
+- **Voice AI 崩溃修复**（`0fd2043`，设备日志 + addr2line 回溯定位）：
+  TTS 朗读中按 MIC → `pdm_init()` 卸载 I2S0 → 播放器 `i2s_write`
+  写死驱动 → LoadProhibited 重启。修复：`start_voice_record`/
+  `start_tts` 先 `stopSong()` 释放播放与 EPD 抑制再动作。
+- **过短录音筛选**（`0fd2043`，用户需求）：时长 < 1s 的录音（误碰
+  约 700ms）本地丢弃不上 ASR/服务器，屏显
+  `[Voice too short (Nms) - not sent]`；任务栈 16K→12K
+  （PenPal 8K 同链路先例）；每次 AI POST 前打印
+  `free/largest_int/psram` 堆诊断（SSL alloc-failure 排查用）。
+- **Voice AI 对话区可滚动**（`a37face`，用户需求）：触摸滚动
+  （滚动中抑制 EPD 刷屏、抬手重绘，AI Text 模式）+ 空输入框时
+  `+`/`-` 键滚动（±120px）；显示最近 4000 字符（UTF-8 安全截断，
+  保护 LVGL 64K 池——§15 教训）；完整历史仍在 PSRAM；删除从未
+  被调用的 400 字符分页死代码（"W:up S:down" 提示从未生效）。
+- **PenPal 草稿保护**（`d68289e`，用户需求）：COMPOSE 标题/正文
+  非空时点返回弹 **"Abandon this draft?"** 确认框——Abandon=清空
+  回主页、Keep=留下；键盘 Enter=放弃/任意键=保留；空框直接返回、
+  **SEND 飞行中维持原行为**（后台发送 + 幂等快照对比拥有草稿）。
+- `01ba2e0`（9-23）：platformio.ini 注释乱码清理（writer 临时 env
+  往返扰动，无构建变更）。
+- 版本 v1.21 → **v1.22**；评审申请
+  `docs/reviews/session-batch-review-request-4d27849..d68289e.md`。
 ## 2026-09-20（v1.28：OTA 局域网端到端打通——矩阵④ ✅ + 台架宏名 P2 修复）
 
 - **里程碑**：**OTA 局域网端到端全链路真机通过**（issue_list §35）：

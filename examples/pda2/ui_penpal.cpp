@@ -645,16 +645,22 @@ static void pp_consume(pp_result_t *res)
             for (int i = 0; i < res->count; i++) {
                 pp.letters[i] = res->letters[res->count - 1 - i];
             }
-            pp.thr_idx = 0;
-            pp.thr_dropped = res->dropped;
-            if (s_cur_page == PP_PAGE_HOME) {
-                pp_set_page(PP_PAGE_THREAD);
-            } else if (s_cur_page == PP_PAGE_THREAD) {
-                /* in-page Sync button refresh (2026-08-26): the page is
-                 * already up - re-render with the fresh letters */
+            if (s_cur_page == PP_PAGE_THREAD) {
+                /* in-page refresh (Sync button / unread auto-refresh,
+                 * 2026-08-26 + 2026-09-27): the page is already up -
+                 * KEEP the user's scroll position (clamped to the new
+                 * count, Grok P3-2) instead of yanking to the newest */
+                if (pp.thr_idx >= pp.letters_cnt) pp.thr_idx = pp.letters_cnt - 1;
+                if (pp.thr_idx < 0) pp.thr_idx = 0;
                 ppr_show_thread();
                 ui_disp_full_refr();
+            } else {
+                pp.thr_idx = 0;          /* fresh open: newest letter */
+                if (s_cur_page == PP_PAGE_HOME) {
+                    pp_set_page(PP_PAGE_THREAD);
+                }
             }
+            pp.thr_dropped = res->dropped;
         } else {
             pp_status_set("%s", res->err.c_str());
         }
@@ -881,8 +887,10 @@ static void pp_home_row_cb(lv_event_t *e)
     /* thread cache first (product request 2026-08-26): parse straight into
      * the global letters array (64 rows, too fat for the UI stack); the
      * in-page Sync button force-refreshes over the network */
+    bool thr_stale = false;
     if (penpal_cache_load_thread(pp.thr_root, pp.letters, PP_THREAD_MAX,
-                                 &pp.letters_cnt, &pp.thr_dropped)) {
+                                 &pp.letters_cnt, &pp.thr_dropped,
+                                 &thr_stale)) {
         /* cached body is server order (oldest-first) -> store newest-first,
          * exactly like the PP_RES_THREAD consumer below */
         for (int i = 0; i < pp.letters_cnt / 2; i++) {
@@ -894,6 +902,25 @@ static void pp_home_row_cb(lv_event_t *e)
         pp_set_page(PP_PAGE_THREAD);
         Serial.printf("[PenPal] thread %d served from cache (%d letters)\n",
                       pp.thr_root, pp.letters_cnt);
+        /* unread > 0 = new mail since the last fetch (user request
+         * 2026-09-27): auto-refresh this thread in the background - the
+         * cache render shows instantly, the PP_RES_THREAD consumer
+         * re-renders in place when the fresh letters land. Cache-miss
+         * opens already go to the network; unread==0 opens stay
+         * cache-only (manual Sync remains for a forced refresh).
+         * thr_stale (pre-NTP thread cache, Grok P3-2) refreshes too -
+         * same policy as the HOME entry path. */
+        if (pp.rows[idx].unread > 0 || thr_stale) {
+            pp_task_req_t rq = {};
+            rq.gen = s_pp_gen;
+            rq.type = PP_RES_THREAD;
+            rq.pen_pal_id = pp.thr_pal;
+            rq.thread_root_id = pp.thr_root;
+            if (pp_start(&rq, false)) {
+                pp_status_set(thr_stale ? "clock unsynced - refreshing..."
+                                        : "new mail - refreshing...");
+            }
+        }
         return;
     }
     pp_task_req_t rq = {};
@@ -1102,6 +1129,16 @@ void penpal_keyboard_poll(void)
 
     if (!s_pp_active) return;
 
+    /* leave-COMPOSE confirm: Enter = abandon draft, any other key = keep
+     * (dialog owns the keyboard while up, like the notice box) */
+    if (ppw_leave_open()) {
+        char c;
+        if (!keypad_get_val(&c)) return;
+        keypad_set_flag();
+        ppw_leave_key(c);
+        return;
+    }
+
     /* notice box: +/- scrolls the box (the body label itself does not
      * scroll), any other key closes (the topics suggestion overlay has its
      * own Use/Cancel keys inside ppw_key) */
@@ -1165,6 +1202,8 @@ static void pp_entry(void)
     ui_disp_full_refr();
     s_pp_gen++;                           /* invalidate prior-visit results */
     s_pp_active = true;
+    penpal_my_uid_load();                 /* letter From:/To: needs the id
+                                           * before any cache parse runs */
     /* auto-sync on the FIRST entry of a visit, after gen++ so the request
      * carries the generation that will consume it (§4.1, Codex P1).
      * Product request 2026-08-26: render from the 2-day cache instead of
@@ -1178,17 +1217,31 @@ static void pp_entry(void)
          * the second load leaves a half-updated state that the network
          * sync below overwrites anyway. */
         bool trunc = false;
+        bool stale = false;               /* served pre-NTP: age unverified */
+        bool stale_mb = false, stale_pa = false;
         if (penpal_cache_load_mailbox(pp.rows, PP_MAILBOX_MAX,
-                                      &pp.rows_cnt, &trunc) &&
-            penpal_cache_load_pals(pp.pals, PP_PAL_MAX, &pp.pals_cnt)) {
+                                      &pp.rows_cnt, &trunc, &stale_mb) &&
+            penpal_cache_load_pals(pp.pals, PP_PAL_MAX, &pp.pals_cnt,
+                                   &stale_pa)) {
+            /* OR, not overwrite (review Nit): each load resets its own
+             * flag on entry - the second call must not clear the first */
+            stale = stale_mb || stale_pa;
             pp.mailbox_truncated = trunc;
             pp.home_page = 0;
             pp_home_render_pals();
             pp_home_render_rows();
-            pp_status_set("cached - press Sync to refresh");
-            Serial.printf("[PenPal] home served from cache (%d pals, %d rows)\n",
-                          pp.pals_cnt, pp.rows_cnt);
             pp_dbg_pool("cached");
+            Serial.printf("[PenPal] home served from cache (%d pals, %d rows, stale=%d)\n",
+                          pp.pals_cnt, pp.rows_cnt, stale ? 1 : 0);
+            if (stale) {
+                /* cache read before NTP synced: age unverifiable - render
+                 * it, then network-refresh so cross-era names self-heal
+                 * (2026-09-26 "To: hunter" stale-cache finding) */
+                pp_status_set("cached (clock unsynced) - refreshing...");
+                pp_home_sync(false);
+                return;
+            }
+            pp_status_set("cached - press Sync to refresh");
             return;
         }
         char base[PP_BASE_MAX], key[PP_KEY_MAX];

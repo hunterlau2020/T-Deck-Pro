@@ -39,11 +39,62 @@ static bool j_bool(cJSON *obj, const char *field, bool def)
     return (it && cJSON_IsBool(it)) ? cJSON_IsTrue(it) : def;
 }
 
-/* sender_user_id: null for NPC letters, >=1 for mine (demo step ④). */
+/* "mine" decision (2026-09-26 fix, v2 same day): pals are REAL USERS whose
+ * letters carry THEIR nonzero user id - the old "nonzero = mine" rule
+ * misfiled every incoming letter as mine ("To:" instead of "From:").
+ * Own id is captured by penpal_get_profile and PERSISTED in NVS
+ * ("penpal"/my_uid): without persistence the id was only known AFTER the
+ * first Whoami fetch, so entering PenPal first still fell back to the
+ * legacy rule (device report: To: hunter / To: terry right after flash).
+ * Cleared by penpal_my_uid_store(0) when the API key changes (account
+ * switch must not reuse the previous id). */
+static int s_my_user_id = 0;
+static bool s_my_uid_loaded = false;
+
+int penpal_my_user_id(void) { return s_my_user_id; }
+
+/* UI thread (Preferences not re-entrant): lazy-load the persisted id once,
+ * e.g. at PenPal entry, before any worker thread parses letters. Never
+ * clobbers a nonzero RAM value (Grok question list): the Whoami worker
+ * may have written the id into RAM before its UI-side store() runs. */
+void penpal_my_uid_load(void)
+{
+    if (s_my_uid_loaded) return;
+    s_my_uid_loaded = true;
+    int saved = 0;
+    Preferences pr;
+    if (pr.begin("penpal", true)) {
+        saved = (int)pr.getInt("my_uid", 0);
+        pr.end();
+    }
+    if (s_my_user_id == 0 && saved != 0) s_my_user_id = saved;
+    Serial.printf("%s my_uid loaded: %d\n", PP_TAG, s_my_user_id);
+}
+
+/* UI thread: store/clear the persisted id (profile fetched / key changed). */
+void penpal_my_uid_store(int uid)
+{
+    s_my_user_id = uid;
+    Preferences pr;
+    if (pr.begin("penpal", false)) {
+        if (uid != 0) pr.putInt("my_uid", uid);
+        else pr.remove("my_uid");
+        pr.end();
+    }
+    Serial.printf("%s my_uid store: %d\n", PP_TAG, uid);
+}
+
 static bool j_mine(cJSON *obj)
 {
     cJSON *it = obj ? cJSON_GetObjectItem(obj, "sender_user_id") : NULL;
-    return (it && cJSON_IsNumber(it)) ? (it->valueint != 0) : false;
+    if (!it || !cJSON_IsNumber(it)) return false;
+    if (s_my_user_id != 0) return it->valueint == s_my_user_id;
+    /* uid unknown (fresh flash / key switched, no profile fetch yet):
+     * real-user pals carry THEIR nonzero id, so the legacy nonzero=mine
+     * rule misfiles incoming mail as mine - rather than guess, treat as
+     * NOT mine (Grok P3-1). Fix/Polish gating follows mine and stays
+     * disabled until Whoami fetches the profile. */
+    return false;
 }
 
 /* NULL-safe fixed-buffer copy. */
@@ -360,7 +411,27 @@ static void pp_cache_path(char *buf, int len, const char *kind, int id)
     else        snprintf(buf, len, "/penpal/%s.json", kind);
 }
 
-static void pp_cache_write(const char *path, const char *body)
+/* Cache v3 header: "<fetched_at> <base> <key>" - validity is bound to BOTH
+ * the server base and the API key. Binding to base kills LAN<->prod
+ * cross-era data; binding to the key kills same-domain account switches
+ * and server DB rebuilds viewed under a different account (device
+ * finding 2026-09-26: hunter-key-era caches rendered under a carlos key
+ * showed "To: hunter"/"To: terry"). Legacy v1/v2 headers invalidate. */
+
+static void pp_cache_current_base(char *buf, int len)
+{
+    char key[PP_KEY_MAX];
+    penpal_load_config(buf, len, key, sizeof(key));
+}
+
+static void pp_cache_current_key(char *buf, int len)
+{
+    char base[PP_BASE_MAX];
+    penpal_load_config(base, sizeof(base), buf, len);
+}
+
+static void pp_cache_write(const char *path, const char *body,
+                           const char *base, const char *key)
 {
     File f = SPIFFS.open(path, FILE_WRITE);
     if (!f) {
@@ -369,14 +440,19 @@ static void pp_cache_write(const char *path, const char *body)
     }
     time_t now = time(nullptr);
     if (now < 1700000000) now = 0;             /* unsynced clock */
-    f.printf("%lu\n", (unsigned long)now);
+    f.printf("%lu %s %s\n", (unsigned long)now,
+             base ? base : "", key ? key : "");
     f.write((const uint8_t *)body, strlen(body));
     f.close();
 }
 
-static bool pp_cache_read(const char *path, string *body)
+/* Returns the cached body; *stale_clock (when non-NULL) is set when the
+ * body was served despite an UNSYNCED device clock - the caller should
+ * still fire a network refresh, because age could not be verified. */
+static bool pp_cache_read(const char *path, string *body, bool *stale_clock)
 {
     body->clear();
+    if (stale_clock) *stale_clock = false;
     if (!SPIFFS.exists(path)) return false;
     File f = SPIFFS.open(path, FILE_READ);
     if (!f) return false;
@@ -389,10 +465,56 @@ static bool pp_cache_read(const char *path, string *body)
     f.close();
     size_t nl = all.find('\n');
     if (nl == string::npos) return false;
-    unsigned long fetched = strtoul(all.c_str(), NULL, 10);
+
+    /* header: "<fetched> <base> <key>" (v3); anything older -> miss */
+    char head[192];
+    size_t hlen = nl < sizeof(head) - 1 ? nl : sizeof(head) - 1;
+    memcpy(head, all.c_str(), hlen);
+    head[hlen] = '\0';
+    unsigned long fetched = 0;
+    char stored_base[PP_BASE_MAX] = "", stored_key[PP_KEY_MAX] = "";
+    {
+        /* strtok-style split on spaces; base URLs/keys contain none */
+        char *save = NULL;
+        char *tok = strtok_r(head, " ", &save);
+        if (tok) {
+            fetched = strtoul(tok, NULL, 10);
+            tok = strtok_r(NULL, " ", &save);
+            if (tok) {
+                strncpy(stored_base, tok, sizeof(stored_base) - 1);
+                tok = strtok_r(NULL, " ", &save);
+                if (tok)
+                    strncpy(stored_key, tok, sizeof(stored_key) - 1);
+            }
+        }
+        if (!stored_base[0] || !stored_key[0]) {
+            Serial.printf("%s cache legacy header - invalidated: %s\n",
+                          PP_TAG, path);
+            SPIFFS.remove(path);
+            return false;                      /* v1/v2: no key binding */
+        }
+    }
+
+    char cur[PP_BASE_MAX];
+    pp_cache_current_base(cur, sizeof(cur));
+    char curk[PP_KEY_MAX];
+    pp_cache_current_key(curk, sizeof(curk));
+    if (!cur[0] || strcmp(cur, stored_base) != 0 ||
+        !curk[0] || strcmp(curk, stored_key) != 0) {
+        Serial.printf("%s cache base/key mismatch: %s\n", PP_TAG, path);
+        SPIFFS.remove(path);
+        return false;
+    }
+
     time_t now = time(nullptr);
-    if (fetched != 0 && now >= 1700000000 &&
-        (unsigned long)(now - (time_t)fetched) > PP_CACHE_TTL_S) {
+    if (now < 1700000000) {
+        /* read-side clock hole closed: serve, but flag - the caller must
+         * not treat this as verified-fresh (age unverifiable pre-NTP) */
+        if (stale_clock) *stale_clock = true;
+    } else if (fetched == 0 ||
+               (unsigned long)(now - (time_t)fetched) > PP_CACHE_TTL_S) {
+        /* fetched==0 = written before NTP: unverifiable age, now judged
+         * expired (write-side hole closed) */
         Serial.printf("%s cache expired: %s\n", PP_TAG, path);
         SPIFFS.remove(path);
         return false;
@@ -455,7 +577,7 @@ bool penpal_get_pals(const char *base, const char *key,
         Serial.printf("%s pals: bad JSON\n", PP_TAG);
         return false;
     }
-    pp_cache_write("/penpal/pals.json", r.body.c_str());
+    pp_cache_write("/penpal/pals.json", r.body.c_str(), base, key);
     return true;
 }
 
@@ -502,6 +624,13 @@ bool penpal_get_profile(const char *base, const char *key,
     }
     /* demo contract (remote_api_demo.py step 0): name/age_band/level are
      * always present; city/interests are nullable and arrive as null */
+    cJSON *jid = cJSON_GetObjectItem(root, "id");
+    if (jid && cJSON_IsNumber(jid) && jid->valueint != 0) {
+        out->user_id = jid->valueint;
+        /* RAM only here - this runs on a worker thread; the UI consumer
+         * (Whoami wa_consume) persists it via penpal_my_uid_store() */
+        s_my_user_id = jid->valueint;
+    }
     s_copy(out->name, sizeof(out->name),
            cJSON_GetStringValue(cJSON_GetObjectItem(root, "name")));
     s_copy(out->age_band, sizeof(out->age_band),
@@ -886,11 +1015,12 @@ senses_done:
     return true;
 }
 
-bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count)
+bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count,
+                            bool *stale_clock)
 {
     if (count) *count = 0;
     string body;
-    if (!pp_cache_read("/penpal/pals.json", &body)) return false;
+    if (!pp_cache_read("/penpal/pals.json", &body, stale_clock)) return false;
     return pp_parse_pals(body.c_str(), out, max, count);
 }
 
@@ -1006,15 +1136,15 @@ bool penpal_get_mailbox(const char *base, const char *key,
         Serial.printf("%s mailbox: bad JSON\n", PP_TAG);
         return false;
     }
-    pp_cache_write("/penpal/mailbox.json", r.body.c_str());
+    pp_cache_write("/penpal/mailbox.json", r.body.c_str(), base, key);
     return true;
 }
 
 bool penpal_cache_load_mailbox(pp_thread_row_t *out, int max, int *count,
-                               bool *truncated)
+                               bool *truncated, bool *stale_clock)
 {
     string body;
-    if (!pp_cache_read("/penpal/mailbox.json", &body)) return false;
+    if (!pp_cache_read("/penpal/mailbox.json", &body, stale_clock)) return false;
     return pp_parse_mailbox(body.c_str(), out, max, count, truncated);
 }
 
@@ -1103,17 +1233,18 @@ bool penpal_get_thread(const char *base, const char *key,
     }
     char cpath[40];
     pp_cache_path(cpath, sizeof(cpath), "th", thread_root_id);
-    pp_cache_write(cpath, r.body.c_str());
+    pp_cache_write(cpath, r.body.c_str(), base, key);
     return true;
 }
 
 bool penpal_cache_load_thread(int thread_root_id,
-                              pp_letter_t *out, int max, int *count, int *dropped)
+                              pp_letter_t *out, int max, int *count,
+                              int *dropped, bool *stale_clock)
 {
     char cpath[40];
     pp_cache_path(cpath, sizeof(cpath), "th", thread_root_id);
     string body;
-    if (!pp_cache_read(cpath, &body)) return false;
+    if (!pp_cache_read(cpath, &body, stale_clock)) return false;
     return pp_parse_thread(body.c_str(), thread_root_id, out, max, count, dropped);
 }
 
