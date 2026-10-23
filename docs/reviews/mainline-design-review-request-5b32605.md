@@ -1,8 +1,8 @@
-# 评审申请：mainline（学习主线）设备端设计稿 v1 —— L1 设计评审（G-开工）
+# 评审申请：mainline（学习主线）+ review（复习课）双应用设备端设计稿 v2 —— L1 设计评审（G-开工）
 
 - **申请人**：ZCode（GLM 代理）；**申请日期**：2026-09-28
-- **关联 commit**：`4b16209` — `docs: mainline design v1 - device-side learning-spine app (L1 design draft, pending review)`
-- **关联文档**：[`docs/mainline-design.md`](../mainline-design.md)（v1 设计稿，评审对象全文）
+- **关联 commit**：`5b32605` — `docs: mainline design v2 - review lessons split into a separate Review app (user direction)`（v1 初稿 `4b16209`，v2 按用户指令拆分复习课为独立应用）
+- **关联文档**：[`docs/mainline-design.md`](../mainline-design.md)（**v2 设计稿**，评审对象全文）
 - **评审依据**：`docs/review_guide.md` v1.3 **设计稿口径**——§0-§4、
   **§2.5 收口（强制）**、§6、§9【D】条目、§10；结论 = **L1 是否达标 +
   A/B/C**（设计稿语义，§2.5.2），无需 CODE/HW 证据
@@ -17,17 +17,20 @@
 
 ## 1. 申请事由
 
-设备侧新增"学习主线"应用（消费后端 StudyPlan/主线课链路：今日推荐 →
-开课 → 逐题作答 → 结课得分）。本稿为**首版设计**，寻求 L1 评审以过
-G-开工门禁；实现合同缺口已集中列设计稿 §10，不阻塞开工。
+设备侧新增学习主线能力，按用户指令**拆为两个单一职责应用**：
+mainline（主线课闭环，1.30）与 review（复习课，1.31，复用作答组件）。
+本稿为 **v2 设计**（v1 为单应用形态，未送评审即按用户指令拆分），寻求
+L1 评审以过 G-开工门禁；实现合同缺口已集中列设计稿 §10，不阻塞开工。
 
 ## 2. 设计稿要点（详见关联文档）
 
-- **范围（v1）**：今日推荐页（`GET /plan/next` + `/plan` 进度）→
-  开课（`/lessons/{id}/start`）→ 逐题作答（认读 1-4 选项 / 拼写键盘 /
-  输出文本）→ 结课（`/sessions/{id}/finish`，RESULT 页）。纯复习课
-  （`/reviews/lesson/start`）v1 直接支持。口语题 v1 一律 `skipped=true`
-  （Round 2 接 MiniMax ASR）。
+- **范围（v2，双应用）**：**mainline（1.30）**= 主线课闭环——今日
+  推荐页（`GET /plan/next` + `/plan` 进度）→ 开课（`/lessons/{id}/start`）
+  → 逐题作答（认读 1-4 选项 / 拼写键盘 / 输出文本）→ 结课
+  （`/sessions/{id}/finish`）；`recommend=review` 仅显示指引行。
+  **review（1.31，紧随第二轮）**= 独立复习课应用（
+  `/reviews/lesson/start`），复用 mainline 的作答组件。口语题一律
+  `skipped=true`（Round 2 接 MiniMax ASR）。
 - **定位边界**：设备 = 学习执行端；计划生成/切换/配额为网页
   Bearer-only，设备只读并引导。
 - **架构**：三页 HIDDEN 切换（HOME/SESSION/RESULT）+ `ml_*` 单飞
@@ -48,7 +51,8 @@ G-开工门禁；实现合同缺口已集中列设计稿 §10，不阻塞开工�
    存在卡死/重复提交洞？
 3. **范围边界**：设备=消费端的定位是否漏掉了必须设备侧处理的写面
    （如定级测 learn 可调却不做，是否导致新用户在设备上死路）？
-4. **纯复习课纳入 v1**：是否违反 §2.5 收口（可推迟而未推迟）？
+4. **双应用拆分边界**：mainline/review 各自单 worker、作答组件共享
+   的形态（§4.4/§10）是否会引入状态串扰或重复实现漂移？
 5. **“每日”语义**：设备不本地判日、全信服务端——时钟未同步场景是否
    有残留坑？
 
