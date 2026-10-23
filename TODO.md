@@ -40,6 +40,11 @@
 - [ ] **v1.24-v1.28 评审申请**：NewDict 修复轮（§32/§33）+ Gate-pin
       （v1.26）+ OTA 台架与宏名修复（§35），范围按 `first^..last` 含两端
       记法、逐文件归属表（修正 §32 Nit-4 的申请记法错误）。
+- [ ] **mainline（学习主线）设计评审 + 实现**：设计稿
+      `docs/mainline-design.md` v1（`4b16209`）已提交 L1 设计评审
+      （`docs/reviews/mainline-design-review-request-4b16209.md`，G-开工
+      门禁）。通过后编码 v1.30：今日推荐/开课/逐题作答/结课闭环，
+      口语题 v1 skipped（Round 2 接 ASR）；评审焦点与自评见申请文件。
 - [x] **三份在途评审申请待出结果**（2026-09-18 提交，`5d1dbfb`）：
       四份结果已回收并处置——Gemini A / Grok A / Claude C / GPT C，
       P2-1 等新发现全部落地（issue_list §32，v1.22）。
