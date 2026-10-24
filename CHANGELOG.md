@@ -3,6 +3,25 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-10-24（v1.30：Mainline 学习主线应用——v3.1 设计首轮实现）
+
+- **设计**：`docs/mainline-design.md` v3.1——v2 五方 2A/3C（P1 白名单
+  自相矛盾）→ v3 修正（条件化字段矩阵 + 判型双键）→ **L1 复审四方全
+  A，G-开工通过**；v3.1 吸收复审 IC（start 403 / superseded 优先于
+  missing / 未知类型停卡禁自动 skip / 输出禁 skip / Review 页不建会话）。
+- **penpal_api**：ml 五端点（overview/start/submit/finish/review-start）
+  + **HW-MAINLINE-1 矩阵裁剪解析**——`ml_parse_prompt` 按题型只拷贝
+  渲染集字段，`correct_option/word(拼写)/cloze_word/cloze_forms/tts_text`
+  解析层丢弃永不进结构体；枚举外字段丢弃；开课载荷不打印串口（IC-1）。
+- **ui_mainline**：三页 HIDDEN（HOME 四态卡 / SESSION 题卡 / RESULT
+  得分）；认读 1-4 选项、拼写/完形/输出键盘输入；在飞 Enter 缓冲 +
+  busy 反馈；409 决策表（superseded 回 HOME / 非空跳首缺项 / 空表跳
+  最后未达标输出项）；`ml_*` 单飞 worker（契约表已补行）。
+- **注册**：SCREEN_MAINLINE_ID（page one 167,101）、菜单行、factory
+  poll 钩子。
+- 版本 v1.29 → **v1.30**。待真机：§7 回归清单（四态/四题型/409 三
+  路径/布局遥测）；v1.31 = Review 应用（复用会话组件）。
+
 ## 2026-09-28（v1.29：双线合并——NewDict/OTA 线 × PenPal/voice-ai 并行线）
 
 - **合并**：两条并行开发线汇合——本线（v1.24-v1.28：NewDict 验收修复

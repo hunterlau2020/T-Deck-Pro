@@ -934,6 +934,8 @@ void loop()
     leveltest_keyboard_poll();
     extern void newdict_keyboard_poll();    /* Word Bank app (2026-09-18) */
     newdict_keyboard_poll();
+    extern void mainline_keyboard_poll();   /* Mainline app (v1.30) */
+    mainline_keyboard_poll();
     extern void whoami_keyboard_poll();
     whoami_keyboard_poll();
     extern void shutdown_keyboard_poll();

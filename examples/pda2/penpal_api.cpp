@@ -1015,6 +1015,365 @@ senses_done:
     return true;
 }
 
+/* ---- mainline (learning spine) - design docs/mainline-design.md v3.1 -------
+ * HW-MAINLINE-1: ml_parse_prompt keeps ONLY the per-kind render-set fields.
+ * Answer-bearing fields are dropped HERE (never copied anywhere); extra/
+ * unknown fields are dropped (qwen P3-3); the raw prompt JSON is never
+ * logged (review IC-1: no Serial.printf of the start payload). */
+
+static void ml_kind_of(const cJSON *p, pp_ml_item_t *it)
+{
+    /* dual type keys, fixed order (design §3.1 / IC-1): segment==output
+     * first (task defaults to sentence_making when absent), then task_type */
+    const char *seg = s_lt_str(p, "segment");
+    if (seg && strcmp(seg, "output") == 0) {
+        it->kind = PP_ML_ITEM_OUTPUT;
+        it->is_output = true;
+        return;
+    }
+    const char *tt = s_lt_str(p, "task_type");
+    if (tt && strcmp(tt, "recognition") == 0) it->kind = PP_ML_ITEM_RECOGNITION;
+    else if (tt && strcmp(tt, "recall") == 0) it->kind = PP_ML_ITEM_RECALL;
+    else if (tt && strcmp(tt, "cloze") == 0) it->kind = PP_ML_ITEM_CLOZE;
+    else it->kind = PP_ML_ITEM_UNSUPPORTED;
+}
+
+static void ml_parse_prompt(const cJSON *p, pp_ml_item_t *it)
+{
+    ml_kind_of(p, it);
+    /* render-set ONLY, by kind (matrix §3.2). Everything else - including
+     * correct_option, cloze_word, cloze_forms, tts_text - is intentionally
+     * NOT read for kinds where it is the answer. */
+    switch (it->kind) {
+    case PP_ML_ITEM_RECOGNITION:
+        s_copy(it->word, sizeof(it->word), s_lt_str(p, "word"));
+        s_copy(it->phonetic, sizeof(it->phonetic), s_lt_str(p, "phonetic"));
+        s_copy(it->pos, sizeof(it->pos), s_lt_str(p, "pos"));
+        {
+            int n = 0;
+            cJSON *o;
+            cJSON_ArrayForEach(o, cJSON_GetObjectItem(p, "options")) {
+                if (n >= PP_ML_OPT_MAX) break;
+                if (!cJSON_IsString(o) || !o->valuestring) continue;
+                s_copy(it->options[n], sizeof(it->options[n]),
+                       o->valuestring);
+                n++;
+            }
+            it->option_count = n;
+        }
+        break;
+    case PP_ML_ITEM_RECALL:
+        s_copy(it->meaning_zh, sizeof(it->meaning_zh),
+               s_lt_str(p, "meaning_zh"));
+        s_copy(it->phonetic, sizeof(it->phonetic), s_lt_str(p, "phonetic"));
+        s_copy(it->pos, sizeof(it->pos), s_lt_str(p, "pos"));
+        s_copy(it->meaning_en, sizeof(it->meaning_en),
+               s_lt_str(p, "meaning_en"));        /* server-masked ____ */
+        break;
+    case PP_ML_ITEM_CLOZE:
+        s_copy(it->sentence_en, sizeof(it->sentence_en),
+               s_lt_str(p, "sentence_en"));
+        s_copy(it->sentence_zh, sizeof(it->sentence_zh),
+               s_lt_str(p, "sentence_zh"));
+        s_copy(it->meaning_zh, sizeof(it->meaning_zh),
+               s_lt_str(p, "meaning_zh"));
+        break;
+    case PP_ML_ITEM_OUTPUT:
+        s_copy(it->topic_title, sizeof(it->topic_title),
+               s_lt_str(p, "topic_title"));
+        it->min_scene_words = 1;
+        it->min_chars = 15;
+        {
+            const cJSON *mw = cJSON_GetObjectItem(p, "min_scene_words");
+            if (cJSON_IsNumber(mw)) it->min_scene_words = mw->valueint;
+            const cJSON *mc = cJSON_GetObjectItem(p, "min_chars");
+            if (cJSON_IsNumber(mc)) it->min_chars = mc->valueint;
+            int n = 0;
+            cJSON *w;
+            cJSON_ArrayForEach(w, cJSON_GetObjectItem(p, "scene_words")) {
+                if (n >= PP_ML_SCENE_MAX) break;
+                if (!cJSON_IsString(w) || !w->valuestring) continue;
+                s_copy(it->scene_words[n], sizeof(it->scene_words[n]),
+                       w->valuestring);
+                n++;
+            }
+            it->scene_word_count = n;
+            n = 0;
+            cJSON *pt;
+            cJSON_ArrayForEach(pt, cJSON_GetObjectItem(p, "scene_patterns")) {
+                if (n >= PP_ML_PAT_MAX) break;
+                if (!cJSON_IsString(pt) || !pt->valuestring) continue;
+                s_copy(it->scene_patterns[n], sizeof(it->scene_patterns[n]),
+                       pt->valuestring);
+                n++;
+            }
+            it->scene_pattern_count = n;
+        }
+        break;
+    default:                               /* unsupported: nothing rendered
+                                             * beyond the item counter; UI
+                                             * stays on the card (IC-1) */
+        break;
+    }
+}
+
+/* shared: parse a start payload (lesson or review) into the session */
+static bool ml_parse_start(const pp_http_t &r, pp_ml_session_t *out,
+                           string *err)
+{
+    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!root) {
+        if (err) *err = "bad JSON (lesson start)";
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->session_id = cJSON_GetObjectItem(root, "session_id")->valueint;
+    const char *mode = s_lt_str(root, "mode");
+    out->mode = (mode && strcmp(mode, "review") == 0) ? 1 : 0;
+    int n = 0;
+    cJSON *it;
+    cJSON_ArrayForEach(it, cJSON_GetObjectItem(root, "items")) {
+        if (n >= PP_ML_ITEMS_MAX) {
+            cJSON_Delete(root);
+            if (err) *err = "lesson too large";
+            return false;
+        }
+        pp_ml_item_t *mi = &out->items[n];
+        memset(mi, 0, sizeof(*mi));
+        mi->id = cJSON_GetObjectItem(it, "id")->valueint;
+        const cJSON *sub = cJSON_GetObjectItem(it, "submitted");
+        mi->submitted = cJSON_IsTrue(sub);
+        ml_parse_prompt(cJSON_GetObjectItem(it, "prompt"), mi);
+        n++;
+    }
+    out->item_count = n;
+    cJSON_Delete(root);
+    Serial.printf("%s ml session %d items=%d\n", PP_TAG, out->session_id, n);
+    return true;
+}
+
+bool penpal_ml_overview(const char *base, const char *key,
+                        pp_ml_overview_t *out, string *err)
+{
+    memset(out, 0, sizeof(*out));
+    out->recommend = -1;                  /* default: no plan */
+
+    pp_http_t rn = pp_request("GET", pp_url(base, "/plan/next"),
+                              NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (rn.ok) {
+        cJSON *root = cJSON_Parse(rn.body.c_str());
+        if (root) {
+            const char *rec = s_lt_str(root, "recommend");
+            if (rec && strcmp(rec, "lesson") == 0) out->recommend = 0;
+            else if (rec && strcmp(rec, "review") == 0) out->recommend = 1;
+            else if (rec && strcmp(rec, "done") == 0) out->recommend = 2;
+            const cJSON *dm = cJSON_GetObjectItem(root, "due_minutes");
+            if (cJSON_IsNumber(dm)) out->due_minutes = (int)dm->valuedouble;
+            cJSON *les = cJSON_GetObjectItem(root, "lesson");
+            if (les) {
+                out->lesson_id = cJSON_GetObjectItem(les, "id")->valueint;
+                out->lesson_index =
+                    cJSON_GetObjectItem(les, "lesson_index")->valueint;
+                s_copy(out->lesson_kind, sizeof(out->lesson_kind),
+                       s_lt_str(les, "lesson_kind"));
+                s_copy(out->title, sizeof(out->title), s_lt_str(les, "title"));
+                s_copy(out->scenario_code, sizeof(out->scenario_code),
+                       s_lt_str(les, "scenario_code"));
+                const cJSON *em = cJSON_GetObjectItem(les, "est_minutes");
+                if (cJSON_IsNumber(em)) out->est_minutes = em->valueint;
+            }
+            cJSON_Delete(root);
+        }
+    }
+
+    pp_http_t rp = pp_request("GET", pp_url(base, "/plan"),
+                              NULL, NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (rp.ok) {
+        cJSON *root = cJSON_Parse(rp.body.c_str());
+        if (root) {
+            cJSON *plan = cJSON_GetObjectItem(root, "plan");
+            if (plan) {
+                out->has_plan = true;
+                s_copy(out->goal_exam, sizeof(out->goal_exam),
+                       s_lt_str(plan, "goal_exam"));
+                out->total_lessons =
+                    cJSON_GetObjectItem(plan, "total_lessons")->valueint;
+                out->completed_lessons =
+                    cJSON_GetObjectItem(plan, "completed_lessons")->valueint;
+                out->cursor_lesson =
+                    cJSON_GetObjectItem(plan, "cursor_lesson")->valueint;
+                const cJSON *dt = cJSON_GetObjectItem(plan, "due_total");
+                if (cJSON_IsNumber(dt)) out->due_total = dt->valueint;
+                const cJSON *cc = cJSON_GetObjectItem(plan, "course_completed");
+                out->course_completed = cJSON_IsTrue(cc);
+                const cJSON *cg = cJSON_GetObjectItem(plan, "consolidating");
+                out->consolidating = cJSON_IsTrue(cg);
+            }
+            cJSON_Delete(root);
+        }
+    }
+
+    if (!rn.ok && !rp.ok) {
+        if (err) *err = pp_fail(rn);
+        return false;
+    }
+    return true;
+}
+
+bool penpal_ml_lesson_start(const char *base, const char *key, int lesson_id,
+                            pp_ml_session_t *out, string *err)
+{
+    char path[48];
+    snprintf(path, sizeof(path), "/lessons/%d/start", lesson_id);
+    pp_http_t r = pp_request("POST", pp_url(base, path),
+                             "{}", NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);       /* 403 not-current-plan / 409 done */
+        return false;
+    }
+    return ml_parse_start(r, out, err);
+}
+
+bool penpal_ml_item_submit(const char *base, const char *key, int item_id,
+                           const char *user_input, bool skipped,
+                           pp_ml_submit_t *out, string *err)
+{
+    string body = "{";
+    if (skipped) body += "\"skipped\": true";
+    else {
+        /* minimal JSON string escape (quotes + backslash) */
+        body += "\"user_input\": \"";
+        for (const char *p = user_input ? user_input : ""; *p; p++) {
+            if (*p == '"' || *p == '\\') body += '\\';
+            body += *p;
+        }
+        body += "\"";
+    }
+    body += "}";
+
+    char path[56];
+    snprintf(path, sizeof(path), "/session-items/%d/submit", item_id);
+    pp_http_t r = pp_request("POST", pp_url(base, path),
+                             body.c_str(), NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);       /* 409 plan_superseded: the caller
+                                           * matches this err string */
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->score_write = -1;
+    out->quality = -1;
+    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!root) {
+        if (err) *err = "bad JSON (submit)";
+        return false;
+    }
+    const cJSON *sw = cJSON_GetObjectItem(root, "score_write");
+    if (cJSON_IsNumber(sw)) out->score_write = sw->valueint;
+    out->combined = cJSON_GetObjectItem(root, "combined")->valueint;
+    const cJSON *ps = cJSON_GetObjectItem(root, "passed");
+    if (cJSON_IsBool(ps)) {
+        out->passed_present = true;
+        out->passed = cJSON_IsTrue(ps);
+    }
+    const cJSON *q = cJSON_GetObjectItem(root, "quality");
+    if (cJSON_IsNumber(q)) out->quality = q->valueint;
+    out->is_retry = cJSON_IsTrue(cJSON_GetObjectItem(root, "is_retry"));
+    out->in_errorbook = cJSON_IsTrue(cJSON_GetObjectItem(root, "in_errorbook"));
+    cJSON_Delete(root);
+    return true;
+}
+
+bool penpal_ml_session_finish(const char *base, const char *key,
+                              int session_id, pp_ml_finish_t *out,
+                              pp_ml_finish409_t *miss, string *err)
+{
+    if (miss) memset(miss, 0, sizeof(*miss));
+    char path[48];
+    snprintf(path, sizeof(path), "/sessions/%d/finish", session_id);
+    pp_http_t r = pp_request("POST", pp_url(base, path),
+                             "{}", NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (r.code == 409) {
+            /* decision order (IC-2): superseded FIRST (its body has no
+             * missing_item_ids key - an absent key must not read as []) */
+            cJSON *root = cJSON_Parse(r.body.c_str());
+            if (root) {
+                const cJSON *d = cJSON_GetObjectItem(root, "detail");
+                const cJSON *it = d ? d : root;
+                const char *reason = s_lt_str(it, "reason");
+                const cJSON *msg = cJSON_GetObjectItem(it, "message");
+                if (miss && msg && msg->valuestring)
+                    s_copy(miss->message, sizeof(miss->message),
+                           msg->valuestring);
+                if (miss && reason && strcmp(reason, "plan_superseded") == 0) {
+                    miss->superseded = true;
+                } else if (miss) {
+                    const cJSON *arr = cJSON_GetObjectItem(it,
+                                                           "missing_item_ids");
+                    bool empty = true;
+                    int first = 0;
+                    if (cJSON_IsArray(arr)) {
+                        cJSON *e;
+                        cJSON_ArrayForEach(e, arr) {
+                            if (cJSON_IsNumber(e)) {
+                                empty = false;
+                                if (!first) first = e->valueint;
+                            }
+                        }
+                    }
+                    miss->missing_first = first;
+                    miss->output_rule = empty;  /* empty/absent + not
+                                                 * superseded = capstone
+                                                 * rule (IC-2) */
+                }
+                cJSON_Delete(root);
+            }
+        }
+        if (err) *err = pp_fail(r);
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->xp_awarded = out->correct_items = -1;
+    out->total_items = out->skipped_items = -1;
+    cJSON *root = cJSON_Parse(r.body.c_str());
+    if (!root) {
+        if (err) *err = "bad JSON (finish)";
+        return false;
+    }
+    out->score = cJSON_GetObjectItem(root, "score")->valueint;
+    const cJSON *xi = cJSON_GetObjectItem(root, "xp_awarded");
+    if (cJSON_IsNumber(xi)) out->xp_awarded = xi->valueint;
+    const cJSON *ci = cJSON_GetObjectItem(root, "correct_items");
+    if (cJSON_IsNumber(ci)) out->correct_items = ci->valueint;
+    const cJSON *ti = cJSON_GetObjectItem(root, "total_items");
+    if (cJSON_IsNumber(ti)) out->total_items = ti->valueint;
+    const cJSON *si = cJSON_GetObjectItem(root, "skipped_items");
+    if (cJSON_IsNumber(si)) out->skipped_items = si->valueint;
+    cJSON_Delete(root);
+    return true;
+}
+
+bool penpal_ml_review_start(const char *base, const char *key,
+                            pp_ml_session_t *out, int *due_total, string *err)
+{
+    pp_http_t r = pp_request("POST", pp_url(base, "/reviews/lesson/start"),
+                             "{}", NULL, key, PP_TIMEOUT_CRUD_MS);
+    if (!r.ok) {
+        if (err) *err = pp_fail(r);
+        return false;
+    }
+    if (due_total) {
+        cJSON *root = cJSON_Parse(r.body.c_str());
+        if (root) {
+            const cJSON *dt = cJSON_GetObjectItem(root, "due_total");
+            if (cJSON_IsNumber(dt)) *due_total = dt->valueint;
+            cJSON_Delete(root);
+        }
+    }
+    return ml_parse_start(r, out, err);
+}
+
 bool penpal_cache_load_pals(pp_pal_t *out, int max, int *count,
                             bool *stale_clock)
 {

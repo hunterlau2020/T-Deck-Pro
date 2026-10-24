@@ -384,6 +384,128 @@ bool penpal_wb_exams(const char *base, const char *key,
 bool penpal_wb_detail(const char *base, const char *key, int id,
                       pp_wb_detail_t *out, string *err);
 
+/* ---- mainline (learning spine) API - design docs/mainline-design.md v3.1 ---
+ * Learn channel (X-API-Key learn scope via pp_request). HW-MAINLINE-1: the
+ * prompt parser keeps ONLY the per-type render-set fields of the matrix
+ * (design §3.2); answer-bearing fields (correct_option/word-for-recall/
+ * cloze_word/cloze_forms/tts_text...) are dropped AT THE PARSE LAYER and
+ * never enter any device struct. Extra/unknown fields are dropped (qwen
+ * P3-3). Grading always trusts the submit response. */
+
+#define PP_ML_ITEMS_MAX  20   /* session items cap; larger lessons are
+                               * refused at start (design §10) */
+#define PP_ML_OPT_MAX    4    /* recognition options */
+#define PP_ML_SCENE_MAX  8    /* scene_words kept for output items */
+#define PP_ML_PAT_MAX    4    /* scene_patterns kept */
+
+typedef enum {
+    PP_ML_ITEM_UNSUPPORTED = 0,      /* unknown type: stay on card, NO auto
+                                      * skip (review IC-1) */
+    PP_ML_ITEM_RECOGNITION,
+    PP_ML_ITEM_RECALL,
+    PP_ML_ITEM_CLOZE,
+    PP_ML_ITEM_OUTPUT,
+} pp_ml_kind_t;
+
+typedef struct {
+    int  id;                          /* session-item id (submit target) */
+    bool submitted;                   /* envelope field, kept */
+    pp_ml_kind_t kind;                /* DERIVED, not from the wire */
+    /* render-set only, by kind (matrix §3.2): */
+    char word[40];                    /* recognition stem */
+    char phonetic[40];
+    char pos[24];
+    char options[PP_ML_OPT_MAX][96];  /* recognition */
+    int  option_count;
+    char meaning_zh[96];              /* recall/cloze clue */
+    char meaning_en[96];              /* recall clue (server-masked) */
+    char sentence_en[160];            /* cloze gapped sentence */
+    char sentence_zh[96];             /* cloze translation */
+    char topic_title[96];             /* output */
+    char scene_words[PP_ML_SCENE_MAX][32];
+    int  scene_word_count;
+    char scene_patterns[PP_ML_PAT_MAX][64];
+    int  scene_pattern_count;
+    int  min_scene_words, min_chars;  /* output completion rule (visible) */
+    bool is_output;                   /* segment=="output" (kind==OUTPUT) */
+} pp_ml_item_t;
+
+typedef struct {
+    int  session_id;
+    int  mode;                        /* 0=lesson, 1=review (derived from
+                                       * "mode" string) */
+    int  item_count;
+    pp_ml_item_t items[PP_ML_ITEMS_MAX];
+} pp_ml_session_t;
+
+typedef struct {
+    /* GET /plan/next */
+    int   recommend;                  /* -1=null(no plan) 0=lesson 1=review
+                                       * 2=done */
+    int   due_minutes;
+    int   lesson_id, lesson_index;
+    char  lesson_kind[24];
+    char  title[96];
+    char  scenario_code[32];
+    int   est_minutes;
+    /* GET /plan */
+    bool  has_plan;
+    char  goal_exam[16];
+    int   total_lessons, completed_lessons, cursor_lesson, due_total;
+    bool  course_completed, consolidating;
+} pp_ml_overview_t;
+
+typedef struct {
+    int  score_write;                 /* -1 when null */
+    int  combined;
+    bool passed;                      /* false when null (see kind) */
+    bool passed_present;
+    int  quality;                     /* -1 when null */
+    bool is_retry;
+    bool in_errorbook;
+} pp_ml_submit_t;
+
+typedef struct {
+    int  score;
+    int  xp_awarded, correct_items, total_items, skipped_items; /* -1 null */
+} pp_ml_finish_t;
+
+/* finish 409 detail (session incomplete variants) */
+typedef struct {
+    bool superseded;                  /* reason == plan_superseded (priority
+                                       * over missing list, IC-2) */
+    int  missing_first;               /* first missing item id, 0 = none */
+    bool output_rule;                 /* empty list = output capstone rule;
+                                       * jump to LAST undone output item */
+    char message[160];
+} pp_ml_finish409_t;
+
+/** GET /plan/next + GET /plan in one call (HOME page payload). */
+bool penpal_ml_overview(const char *base, const char *key,
+                        pp_ml_overview_t *out, string *err);
+
+/** POST /lessons/{id}/start (mainline lesson) - prompt fields filtered per
+ *  the §3.2 matrix; >PP_ML_ITEMS_MAX items -> error "lesson too large".
+ *  403 (not-current-plan) / 409 already-completed surface via err string. */
+bool penpal_ml_lesson_start(const char *base, const char *key, int lesson_id,
+                            pp_ml_session_t *out, string *err);
+
+/** POST /session-items/{id}/submit. user_input may be NULL when skipped
+ *  (only for non-output unsupported/speak items - output NEVER skips). */
+bool penpal_ml_item_submit(const char *base, const char *key, int item_id,
+                           const char *user_input, bool skipped,
+                           pp_ml_submit_t *out, string *err);
+
+/** POST /sessions/{id}/finish. ok=false + err="409 ..." fills miss detail
+ *  for the §3.3 decision table (superseded / missing-first / output rule). */
+bool penpal_ml_session_finish(const char *base, const char *key,
+                              int session_id, pp_ml_finish_t *out,
+                              pp_ml_finish409_t *miss, string *err);
+
+/** POST /reviews/lesson/start (Review app, v1.31). */
+bool penpal_ml_review_start(const char *base, const char *key,
+                            pp_ml_session_t *out, int *due_total, string *err);
+
 bool penpal_get_topics(const char *base, const char *key,
                        pp_topic_t *out, int max, int *count, string *err);
 

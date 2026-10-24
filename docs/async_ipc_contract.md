@@ -22,6 +22,7 @@
 | PenPal | `pp_task_func` | `s_pp_q`（一次创建永不删除） | `s_pp_busy` + `s_pp_busy_gen` | `s_pp_gen`（页面代次） |
 | LevelTest | `lt_task_func` | `s_lt_q`（一次创建永不删除） | `s_lt_task`（任务句柄即 busy，单飞，wa 模式） | `s_lt_gen`（屏幕代次，entry/exit 各 +1） |
 | WordBank (new_dict) | `nd_task_func` | `s_nd_q`（一次创建永不删除） | `s_nd_task`（同上） | `s_nd_gen`（同上） |
+| Mainline (v1.30) | `ml_task_func` | `s_ml_q`（一次创建永不删除） | `s_ml_task`（同上） | `s_ml_gen`（同上） |
 
 ## 2. 硬性规则
 

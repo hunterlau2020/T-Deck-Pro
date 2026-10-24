@@ -83,6 +83,8 @@ enum {
     SCREEN_LEVELTEST_ID,
     /* Word Bank app "new_dict" (user request 2026-09-18): menu page two */
     SCREEN_NEWDICT_ID,
+    /* Mainline learning-spine app (docs/mainline-design.md v3.1): page one */
+    SCREEN_MAINLINE_ID,
     /* appended at the END (OTA design §4/§10): Settings' OTA Update page */
     SCREEN2_2_ID,
 };

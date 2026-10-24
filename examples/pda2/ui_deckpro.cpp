@@ -7,7 +7,8 @@
 #include "openai_api.h"     /* openai_stats_flush() at the deep-sleep checkpoint */
 #include "Audio.h"          /* idle auto-sleep guard: audio.isRunning() */
 #include "ui_leveltest.h"   /* LevelTest app (menu page one, 2026-09-18) */
-#include "ui_newdict.h"     /* Word Bank app "new_dict" (menu page two, 2026-09-18) */
+#include "ui_newdict.h"
+#include "ui_mainline.h"     /* Word Bank app "new_dict" (menu page two, 2026-09-18) */
 
 #define SETTING_PAGE_MAX_ITEM 7
 #define GET_BUFF_LEN(a) sizeof(a)/sizeof(a[0])
@@ -276,6 +277,7 @@ static struct menu_btn menu_btn_list[] =
     {SCREEN_LEVELTEST_ID,  &img_test,       "Level",   95,   101, 0},
     {SCREEN_WHOAMI_ID,     &img_touch,      "Whoami",  95,   189, 0},
     {SCREEN_NEWDICT_ID,    &img_dictionary, "NewDict", 23,   189, 0},
+    {SCREEN_MAINLINE_ID,   &img_test,       "Mainline", 167,  101, 0},
     /* Page two: Wifi/Setting/Sleep + the four learning tools */
     {SCREEN4_ID,           &img_wifi,       "Wifi",    23,   13,  1},
     {SCREEN2_ID,           &img_setting,    "Setting", 95,   13,  1},
@@ -5638,7 +5640,8 @@ void ui_deckpro_entry(void)
 
     scr_mgr_register(SCREEN_LEVELTEST_ID, &screen_leveltest);
 
-    scr_mgr_register(SCREEN_NEWDICT_ID, &screen_newdict);
+    scr_mgr_register(SCREEN_NEWDICT_ID, &screen_newdict);    //  - Word Bank
+    scr_mgr_register(SCREEN_MAINLINE_ID, &screen_mainline);  //  - Mainline
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT, LV_SCR_LOAD_ANIM_OVER_LEFT);
