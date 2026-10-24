@@ -1,8 +1,9 @@
-# 学习主线设备端设计（mainline + review 双应用，v3 设计稿）
+# 学习主线设备端设计（mainline + review 双应用，v3.1 设计稿）
 
-> 状态：**v3 设计稿，待 L1 复审（G-开工门槛；codex：复审只核 P1-1 所涉
-> §3/§4/§5 的字段矩阵与题型映射 delta）**。申请人 ZCode（GLM 代理），
-> 2026-10-23。评审依据 `docs/review_guide.md` v1.3 设计稿口径。
+> 状态：**v3.1 设计稿；v3 已过 L1 复审（四方全 A，G-开工通过，不开
+> v4——grok）；本版吸收复审 IC 修正（正文 5 处），无新评审轮，变更随
+> v1.30 代码申请一并核**。申请人 ZCode（GLM 代理），2026-10-24。
+> 评审依据 `docs/review_guide.md` v1.3 设计稿口径。
 > **v1→v2**：复习课拆独立 Review 应用（用户指令）。
 > **v2→v3**：按五方评审（claude/codex/qwen C + deepseek/grok A，2-3 裁决）
 > 修正 P1-1（白名单→条件化显示矩阵 + 判型双键）并同批闭合 qwen
@@ -49,7 +50,9 @@ round 2"；Round 2 接 MiniMax ASR。
 - **输出题判型键 = `segment=="output"` + 独立字段 `task`**
   （`topic_writing` / `sentence_making`）——**不走 `task_type`**，
   不得把 `task` 当未知 `task_type` 误入降级；
-- speak/跟读类与真未知类型 → segment 文本渲染 + skipped 提交路径。
+- **主线装配现网无 speak 项**（grok 复审核实）——speak 行仅作矩阵
+  预备；**真未知类型 → 停在题卡**（显示 segment 文本 + "unsupported
+  type"），**禁止自动 skipped**（IC-1）。
 
 ### 3.2 HW-MAINLINE-1（条件化显示矩阵，替代 v2 平面白名单）
 
@@ -62,8 +65,9 @@ round 2"；Round 2 接 MiniMax ASR。
 | `task_type=recognition` | `word`, `phonetic`, `options[]`, `pos`(可选) | `correct_option`, `meaning_zh`, `meaning_en`, `tts_text` |
 | `task_type=recall`（拼写） | `meaning_zh`, `phonetic`, `pos`, `meaning_en`(服务端已掩码为 `____`) | `word`, `tts_text` |
 | `task_type=cloze`（完形，高频：new_study 课常态 25-50% 项） | `sentence_en`(含空), `sentence_zh`, `meaning_zh` | `word`, `cloze_word`, `cloze_forms`, `tts_text` |
-| `segment=output` + `task` | `topic_title`, `scene_words[]`, `scene_patterns[]`, `min_scene_words`, `min_chars`, `task`(判型), `segment` | —（无词项答案；`scene_words` 是**合法脚手架**非半答案——完课判据要求引用且必须可见，服务端 `studyplan.py:1888-1897`） |
-| speak / 未知 | `segment` 文本 | 其余全部（skipped 路径） |
+| `segment=output`（`task` 缺省按 `sentence_making`，不得因缺 `task` 掉进未知） | `topic_title`, `scene_words[]`, `scene_patterns[]`, `min_scene_words`, `min_chars`, `task`(判型), `segment` | —（无词项答案；`scene_words` 是**合法脚手架**非半答案——完课判据要求引用且必须可见，服务端 `studyplan.py:1888-1897`） |
+| speak（矩阵预备，现网无） | `segment` 文本 | 其余全部（skipped 路径） |
+| 真未知类型 | `segment` 文本 | 其余全部；**停在题卡禁止自动 skipped**（IC-1） |
 
 - `scaffold_level` 现网恒 null（组装处全部 `None`），矩阵留备位。
 - **枚举外字段一律解析层丢弃**（含 `word_id`、start 顶层
@@ -78,9 +82,9 @@ round 2"；Round 2 接 MiniMax ASR。
 |---|---|---|---|
 | `GET /plan/next` | HOME 推荐 | mainline | `recommend(lesson\|review\|done\|**null**)`、`due_minutes`、`lesson{...}`；**null=未建计划（P3-1 第四态）** |
 | `GET /plan` | HOME 进度行 | mainline | `plan{goal_exam, total_lessons, completed_lessons, cursor_lesson, course_completed, consolidating, due_total}`；`plan:null` 引导网页 |
-| `POST /lessons/{id}/start` | 开主线课 | mainline | `session_id, mode, items[]{id, target_layer, prompt, submitted}`（prompt 按 §3.2 矩阵裁剪）；409 already-completed；**409 `plan_superseded`** |
-| `POST /session-items/{id}/submit` | 逐题 | 共享 | body `{user_input?, skipped?}`；响应 `{score_write, combined, passed(**nullable**), quality(**nullable**), is_retry, in_errorbook, mastery_layer}`（P3-2：输出项 passed/quality=null，状态行以 combined/score_write 兜底）；**409 `plan_superseded` → 会话作废 + 回 HOME（P2-3）** |
-| `POST /sessions/{id}/finish` | 结课 | 共享 | `{score, xp_awarded, correct_items, total_items, skipped_items}`；409 `missing_item_ids[]`——**空表=输出强制律（P2-2）：显示 message + 跳回 `segment="output"` 项，不取表首**；非空表=跳回首个未交项；**409 `plan_superseded` → 回 HOME（P2-3）** |
+| `POST /lessons/{id}/start` | 开主线课 | mainline | `session_id, mode, items[]{id, target_layer, prompt, submitted}`（prompt 按 §3.2 矩阵裁剪）；**计划不匹配/无计划 → 403**（`plan.py:370-375`，~~409 plan_superseded~~ v3 笔误，IC-2 修正）；409 already-completed（字符串无 reason 键） |
+| `POST /session-items/{id}/submit` | 逐题 | 共享 | body `{user_input?, skipped?}`；响应 `{score_write, combined, passed(**nullable**), quality(**nullable**), is_retry, in_errorbook, mastery_layer}`（P3-2：输出项 passed/quality=null，状态行以 combined/score_write 兜底）；**输出项禁止 skipped 提交**（skipped 仍会空表 409 且重开循环，claude/grok 复审核实——服务端 `output_fallback_ok("")` 恒假）；**409 `plan_superseded` → 会话作废 + 回 HOME（P2-3）** |
+| `POST /sessions/{id}/finish` | 结课 | 共享 | `{score, xp_awarded, correct_items, total_items, skipped_items}`；409 判定**优先级：`reason==plan_superseded` 优先于 `missing_item_ids`**（superseded 体无该键，**缺键不得当空表**，IC-2）→ 回 HOME；409 非空 `missing_item_ids[]` → 跳首个未交项；409 空表 = 输出强制律 → 显示 message + 跳回**最后一个未达标** `segment=="output"` 项（items 中无 output 项 → 仅显示 message 停 RESULT，qwen Nit-1 兜底） |
 | `POST /reviews/lesson/start` | 开复习会话 | review | `{session_id, mode, items[], due_total}`（`graduated_sampled_word_ids/included_count` 丢弃） |
 
 ## 4. 设备侧架构
@@ -94,8 +98,10 @@ on web" 指引行**（P3-1）+ 进度行）。**SESSION**（题卡，§4.4）。
 
 ### 4.2 review（1.31）
 
-两页：**REVIEW**（due_total + Enter 开会话；due=0 显示 "no review due"）
-→ 复用 SESSION/RESULT（mode=review 无主线进度语义）。
+两页：**REVIEW**（进入仅 `GET /plan` 取 `due_total`——**不创建会话**；
+Enter 才 POST start；due=0 显示 "no review due"；丢响应/重复 Enter
+有限恢复 = IC-ML-02）→ 复用 SESSION/RESULT（mode=review 无主线进度
+语义）。
 
 ### 4.3 异步（wa_* 单飞四件套）
 
@@ -111,7 +117,9 @@ UI 线程静态所有权。
   词形）**（P2-1：与拼写组件同构复用，非 skipped 兜底）；
 - 输出 = textarea（topic_title/scene_words 脚手架可见，造句/话题，完课
   判据须引用 ≥1 场景词——409 空表路径见 §3.3）；
-- speak/未知 = segment 文本 + 自动 skipped；
+- speak（现网无）= segment 文本 + 自动 skipped；**未知类型 = 停在
+  题卡**显示 "unsupported type"，不自动 skipped（IC-1）；**输出项无
+  skip 入口**（只 textarea 一条路径，IC-2）；
 - 在飞 Enter 缓冲、busy 反馈；已提交题 Enter=重提交（`is_retry`）；
 - 409 双路径按 §3.3 表（superseded 回 HOME；missing 空/非空分治）。
 
@@ -152,6 +160,8 @@ pp_ml_submit_t / pp_ml_finish_t / pp_ml_review_t`——纯值成员，prompt
 - prompt 载荷与矩阵的漂移防线：`remote_api_demo --channel learn` 实采
   校准 + 枚举外字段一律丢弃 + 未知题型降级；
 - 双 app 同账号并发开会话服务端语义 → 实现前 demo 验证；
+- **矩阵 vs 后端漂移**：L2 实现申请钉后端 commit SHA（grok IC-8；
+  后端工作树有未提交改动，HEAD 键集与矩阵一致已核）；
 - 认读题"音义"语义（网页 TTS 播音）在设备为文字题干等价——Round 2
   可走 TTS 播 `tts_text`（播放不上屏，不违反矩阵；qwen 属主决策注）。
 
