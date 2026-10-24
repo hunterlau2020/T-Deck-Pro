@@ -359,6 +359,88 @@ void penpal_load_gate_pin(char *pin, int pin_len)
     s_copy(pin, pin_len, g.c_str());
 }
 
+/* ---- mainline HOME overview cache (NVS "mlcache"/"ov", v1.30.5) ------- */
+
+bool penpal_ml_cache_save(const pp_ml_overview_t *ov)
+{
+    if (!ov) return false;
+    char buf[512];
+    int n = snprintf(buf, sizeof(buf),
+        "v1\n%d\n%d\n%d\n%d\n%s\n%s\n%s\n%d\n%d\n%s\n%d\n%d\n%d\n%d\n%d\n%d\n",
+        ov->recommend, ov->due_minutes, ov->lesson_id, ov->lesson_index,
+        ov->lesson_kind, ov->title, ov->scenario_code, ov->est_minutes,
+        ov->has_plan ? 1 : 0, ov->goal_exam, ov->total_lessons,
+        ov->completed_lessons, ov->cursor_lesson, ov->due_total,
+        ov->course_completed ? 1 : 0, ov->consolidating ? 1 : 0);
+    if (n <= 0 || n >= (int)sizeof(buf)) return false;
+    Preferences p;
+    p.begin("mlcache", false);
+    p.putString("ov", buf);
+    p.end();
+    return true;
+}
+
+bool penpal_ml_cache_load(pp_ml_overview_t *ov)
+{
+    if (!ov) return false;
+    memset(ov, 0, sizeof(*ov));
+    ov->recommend = -1;
+    Preferences p;
+    p.begin("mlcache", true);
+    if (!p.isKey("ov")) {
+        p.end();
+        return false;
+    }
+    String raw = p.getString("ov", "");
+    p.end();
+    if (!raw.startsWith("v1\n")) return false;   /* format drift */
+
+    char buf[512];
+    strncpy(buf, raw.c_str(), sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    int rec, dm, lid, lidx, em, hp, tl, cl, cul, dt, cc, cg;
+    char kind[24] = "", title[96] = "", sc[32] = "", goal[16] = "";
+    char *lines[18];
+    int n = 0;
+    for (char *tok = strtok(buf, "\n"); tok && n < 18; tok = strtok(NULL, "\n"))
+        lines[n++] = tok;
+    if (n < 16) return false;
+    if (sscanf(lines[1], "%d", &rec) != 1) return false;
+    if (sscanf(lines[2], "%d", &dm) != 1) dm = 0;
+    if (sscanf(lines[3], "%d", &lid) != 1) lid = 0;
+    if (sscanf(lines[4], "%d", &lidx) != 1) lidx = 0;
+    snprintf(kind, sizeof(kind), "%s", lines[5]);
+    snprintf(title, sizeof(title), "%s", lines[6]);
+    snprintf(sc, sizeof(sc), "%s", lines[7]);
+    if (sscanf(lines[8], "%d", &em) != 1) em = 0;
+    if (sscanf(lines[9], "%d", &hp) != 1) hp = 0;
+    snprintf(goal, sizeof(goal), "%s", lines[10]);
+    if (sscanf(lines[11], "%d", &tl) != 1) tl = 0;
+    if (sscanf(lines[12], "%d", &cl) != 1) cl = 0;
+    if (sscanf(lines[13], "%d", &cul) != 1) cul = 0;
+    if (sscanf(lines[14], "%d", &dt) != 1) dt = 0;
+    if (sscanf(lines[15], "%d", &cc) != 1) cc = 0;
+    if (sscanf(lines[16], "%d", &cg) != 1) cg = 0;
+
+    ov->recommend = rec;
+    ov->due_minutes = dm;
+    ov->lesson_id = lid;
+    ov->lesson_index = lidx;
+    snprintf(ov->lesson_kind, sizeof(ov->lesson_kind), "%s", kind);
+    snprintf(ov->title, sizeof(ov->title), "%s", title);
+    snprintf(ov->scenario_code, sizeof(ov->scenario_code), "%s", sc);
+    ov->est_minutes = em;
+    ov->has_plan = hp != 0;
+    snprintf(ov->goal_exam, sizeof(ov->goal_exam), "%s", goal);
+    ov->total_lessons = tl;
+    ov->completed_lessons = cl;
+    ov->cursor_lesson = cul;
+    ov->due_total = dt;
+    ov->course_completed = cc != 0;
+    ov->consolidating = cg != 0;
+    return true;
+}
+
 bool penpal_save_gate_pin(const char *pin)
 {
     Preferences p;

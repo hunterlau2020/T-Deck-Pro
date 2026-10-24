@@ -58,6 +58,8 @@ static int  s_input_len = 0;
 static int s_pick = 0;
 
 static bool s_enter_pending = false;          /* v1.18: never eat keys */
+static bool s_ov_cached = false;            /* HOME rendered from
+                                              * NVS cache (v1.30.5) */
 static uint32_t s_popup_ms = 0;               /* submit-result popup open
                                               * time; poll closes it after
                                               * 1.8s and advances */
@@ -207,6 +209,15 @@ static void ml_scr_pop_cb(lv_event_t *e)
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) scr_mgr_pop(false);
 }
 
+static void ml_refresh_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (s_ml_page != ML_PAGE_HOME) return;   /* refresh is a HOME action */
+    if (s_ml_task) { ml_status_set("busy - wait"); return; }
+    ml_status_set("Refreshing...");
+    ml_start(ML_REQ_OVERVIEW, 0, 0, NULL, false);
+}
+
 static void ml_opt_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
@@ -250,6 +261,20 @@ static void ml_status_set(const char *txt)
 static void create_ml(lv_obj_t *parent)
 {
     scr_back_btn_create(parent, "Mainline", ml_scr_pop_cb);
+
+    lv_obj_t *rbtn = lv_btn_create(parent);
+    lv_obj_set_size(rbtn, 72, 28);
+    lv_obj_align(rbtn, LV_ALIGN_TOP_RIGHT, -6, 3);
+    lv_obj_set_style_border_width(rbtn, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(rbtn, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(rbtn, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_radius(rbtn, 6, LV_PART_MAIN);
+    lv_obj_add_event_cb(rbtn, ml_refresh_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *rl = lv_label_create(rbtn);
+    lv_obj_set_style_text_font(rl, ML_FONT, LV_PART_MAIN);
+    lv_obj_set_style_text_color(rl, lv_color_black(), LV_PART_MAIN);
+    lv_label_set_text(rl, "Refresh");
+    lv_obj_center(rl);
 
     s_pg_home = lv_obj_create(parent);
     lv_obj_set_size(s_pg_home, lv_pct(100), lv_pct(86));
@@ -556,6 +581,8 @@ static void ml_consume(void)
     if (m->kind == ML_REQ_OVERVIEW) {
         if (m->ok) {
             s_ov = m->ov;
+            s_ov_cached = false;
+            penpal_ml_cache_save(&s_ov);
             ml_render_home();
             ml_page_show(ML_PAGE_HOME);
             ml_status_set(s_ov.has_plan ? "" :
@@ -722,6 +749,10 @@ void mainline_keyboard_poll(void)
                         "nothing to start today" :
                         "no plan - create on web");
                 }
+            } else if (c == '+') {
+                if (s_ml_task) { ml_status_set("busy - wait"); continue; }
+                ml_status_set("Refreshing...");
+                ml_start(ML_REQ_OVERVIEW, 0, 0, NULL, false);
             } else if (c == '\b') {
                 scr_mgr_pop(false);
                 keypad_clear_chars();
@@ -814,10 +845,15 @@ static void entry_ml(void)
     s_ml_page = ML_PAGE_HOME;
     memset(&s_ov, 0, sizeof(s_ov));
     s_ov.recommend = -1;
+    s_ov_cached = penpal_ml_cache_load(&s_ov);   /* instant render (v1.30.5) */
     ml_render_home();
     ml_page_show(ML_PAGE_HOME);
-    ml_status_set("Loading...");
-    ml_start(ML_REQ_OVERVIEW, 0, 0, NULL, false);
+    if (s_ov_cached)
+        ml_status_set("cached - Refresh for latest");
+    else {
+        ml_status_set("Loading...");
+        ml_start(ML_REQ_OVERVIEW, 0, 0, NULL, false);  /* first ever visit */
+    }
 }
 
 static void exit_ml(void)

@@ -3,6 +3,19 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-10-24（v1.30.5：Mainline HOME 缓存——进屏秒开 + Refresh 强刷）
+
+- **需求**（用户）：不用每次进 Mainline 都等计划加载；加 Refresh 按钮
+  强制刷新。
+- **实现**：`penpal_ml_cache_save/load`（NVS `mlcache/ov` 单键纯文本，
+  v1 版本前缀防格式漂移，Whoami profile 缓存同模式）；entry 先读缓存
+  **立即渲染**（状态行 "cached - Refresh for latest"，无网络请求），
+  首次无缓存才自动拉取；overview 拉取成功回写缓存。**Refresh 入口×2**：
+  屏幕右上角按钮（触摸）+ HOME 页 `+` 键（键盘）。
+- **stale 语义**：缓存里的 lesson_id 过期时开课走既有 403/409 错误
+  路径提示（刷新即愈），不做静默重试。
+- 版本保持 v1.30（同日第六批）。
+
 ## 2026-10-24（v1.30.4：Mainline 验收第四批——线索归位 / 回显清场 / 结果弹窗）
 
 - **线索行位置**（用户报告 3 连之二）：LVGL flex 中 `LV_OBJ_FLAG_HIDDEN`

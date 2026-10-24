@@ -496,6 +496,13 @@ typedef struct {
     char message[160];
 } pp_ml_finish409_t;
 
+/* HOME overview NVS cache (v1.30.5, user request): entry renders the
+ * cached card instantly; a Refresh (button / '+' key) refetches and
+ * rewrites the cache. Stale open->start failures surface via the normal
+ * 403/409 paths. Single key, plain text, version-prefixed. */
+bool penpal_ml_cache_save(const pp_ml_overview_t *ov);
+bool penpal_ml_cache_load(pp_ml_overview_t *ov);   /* false = no cache */
+
 /** GET /plan/next + GET /plan in one call (HOME page payload). */
 bool penpal_ml_overview(const char *base, const char *key,
                         pp_ml_overview_t *out, string *err);
