@@ -1,8 +1,9 @@
-# 学习主线设备端设计（mainline + review 双应用，v3.1 设计稿）
+# 学习主线设备端设计（mainline + review 双应用，v3.2 设计稿）
 
-> 状态：**v3.1 设计稿；v3 已过 L1 复审（四方全 A，G-开工通过，不开
-> v4——grok）；本版吸收复审 IC 修正（正文 5 处），无新评审轮，变更随
-> v1.30 代码申请一并核**。申请人 ZCode（GLM 代理），2026-10-24。
+> 状态：**v3.2 设计稿；v3 已过 L1 复审（四方全 A，G-开工通过，不开
+> v4——grok）；v3.1 吸收复审 IC 修正（正文 5 处）；**v3.2 新增 §3.4
+> 答案封存/揭示通道**（真机验收驱动的 HW-MAINLINE-1 语义细化，随
+> v1.30 代码评审一并核）**。申请人 ZCode（GLM 代理），2026-10-24。
 > 评审依据 `docs/review_guide.md` v1.3 设计稿口径。
 > **v1→v2**：复习课拆独立 Review 应用（用户指令）。
 > **v2→v3**：按五方评审（claude/codex/qwen C + deepseek/grok A，2-3 裁决）
@@ -75,6 +76,21 @@ round 2"；Round 2 接 MiniMax ASR。
   `graduated_sampled_word_ids/included_count`——P3-3，已核实无 prompt
   外答案泄漏面）。
 - UI 与解析器**共用同一张表**（单一事实源，实现期以常量表落地）。
+
+### 3.4 答案封存/揭示通道（v3.2；HW-MAINLINE-1 语义细化）
+
+真机验收反馈："提交后的结果弹窗应显示正确答案"。原矩阵"解析层丢弃"
+的本意是**作答前答案不可达 UI**；提交成功后答案已无揭示风险（服务端
+判分已完成，网页端同样于提交后展示正确答案）。v3.2 细化：
+
+- 解析时答案字段（recognition 的 `correct_option`、recall 的 `word`、
+  cloze 的 `cloze_word`；output 无）**封存（seal）**进 penpal_api 内部
+  vault（静态数组，UI 不可见、不可枚举，随会话重建而重置）；
+- 唯一释放路径 `penpal_ml_reveal_answer(item_id)`——调用时机约定为
+  **该 item 的 submit 已成功之后**（UI 侧纪律，评审 L2 核对点）；
+- 判分仍完全信任 submit 响应；答案揭示仅用于结果反馈显示；
+- 不变式：作答前（submit 前）任何 UI/日志路径拿不到答案——原矩阵
+  "丢弃"列对**显示**语义不变，封存是对"显示后"的补充。
 
 ### 3.3 端点表（v3 修订版）
 

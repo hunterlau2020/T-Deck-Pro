@@ -503,6 +503,13 @@ typedef struct {
 bool penpal_ml_cache_save(const pp_ml_overview_t *ov);
 bool penpal_ml_cache_load(pp_ml_overview_t *ov);   /* false = no cache */
 
+/* HW-MAINLINE-1 refinement (design v3.2): answer fields are SEALED at
+ * parse time into an internal vault the UI cannot reach, and released
+ * ONLY via this explicit call - intended to be invoked after that item's
+ * submit succeeded (the answer is meaningless then). Returns "" when the
+ * item has no sealed answer (e.g. output items). */
+const char *penpal_ml_reveal_answer(int item_id);
+
 /** GET /plan/next + GET /plan in one call (HOME page payload). */
 bool penpal_ml_overview(const char *base, const char *key,
                         pp_ml_overview_t *out, string *err);

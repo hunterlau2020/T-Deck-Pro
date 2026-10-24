@@ -1103,6 +1103,38 @@ senses_done:
  * unknown fields are dropped (qwen P3-3); the raw prompt JSON is never
  * logged (review IC-1: no Serial.printf of the start payload). */
 
+/* answer vault (v3.2): sealed per item at parse time, keyed by item id;
+ * one session at a time (a re-start repopulates it in ml_parse_start) */
+static struct { int item_id; char answer[56]; } s_ml_vault[PP_ML_ITEMS_MAX];
+static int s_ml_vault_sid = -1;             /* session the vault belongs to */
+
+static void ml_vault_reset(int session_id)
+{
+    s_ml_vault_sid = session_id;
+    for (int i = 0; i < PP_ML_ITEMS_MAX; i++) s_ml_vault[i].item_id = 0;
+}
+
+static void ml_vault_seal(int item_id, const char *answer)
+{
+    if (!answer || !answer[0]) return;
+    for (int i = 0; i < PP_ML_ITEMS_MAX; i++) {
+        if (s_ml_vault[i].item_id == 0) {
+            s_ml_vault[i].item_id = item_id;
+            s_copy(s_ml_vault[i].answer, sizeof(s_ml_vault[i].answer),
+                   answer);
+            return;
+        }
+    }
+}
+
+const char *penpal_ml_reveal_answer(int item_id)
+{
+    for (int i = 0; i < PP_ML_ITEMS_MAX; i++)
+        if (s_ml_vault[i].item_id == item_id)
+            return s_ml_vault[i].answer;
+    return "";
+}
+
 static void ml_kind_of(const cJSON *p, pp_ml_item_t *it)
 {
     /* dual type keys, fixed order (design §3.1 / IC-1): segment==output
@@ -1128,6 +1160,8 @@ static void ml_parse_prompt(const cJSON *p, pp_ml_item_t *it)
      * NOT read for kinds where it is the answer. */
     switch (it->kind) {
     case PP_ML_ITEM_RECOGNITION:
+        /* seal (not display): correct_option is THIS item's answer */
+        if (it->id) ml_vault_seal(it->id, s_lt_str(p, "correct_option"));
         s_copy(it->u.rec.word, sizeof(it->u.rec.word), s_lt_str(p, "word"));
         s_copy(it->u.rec.phonetic, sizeof(it->u.rec.phonetic),
                s_lt_str(p, "phonetic"));
@@ -1146,6 +1180,7 @@ static void ml_parse_prompt(const cJSON *p, pp_ml_item_t *it)
         }
         break;
     case PP_ML_ITEM_RECALL:
+        if (it->id) ml_vault_seal(it->id, s_lt_str(p, "word"));
         s_copy(it->u.rcl.meaning_zh, sizeof(it->u.rcl.meaning_zh),
                s_lt_str(p, "meaning_zh"));
         s_copy(it->u.rcl.phonetic, sizeof(it->u.rcl.phonetic),
@@ -1155,6 +1190,7 @@ static void ml_parse_prompt(const cJSON *p, pp_ml_item_t *it)
                s_lt_str(p, "meaning_en"));        /* server-masked ____ */
         break;
     case PP_ML_ITEM_CLOZE:
+        if (it->id) ml_vault_seal(it->id, s_lt_str(p, "cloze_word"));
         s_copy(it->u.clz.sentence_en, sizeof(it->u.clz.sentence_en),
                s_lt_str(p, "sentence_en"));
         s_copy(it->u.clz.sentence_zh, sizeof(it->u.clz.sentence_zh),
@@ -1212,6 +1248,7 @@ static bool ml_parse_start(const pp_http_t &r, pp_ml_session_t *out,
     }
     memset(out, 0, sizeof(*out));
     out->session_id = cJSON_GetObjectItem(root, "session_id")->valueint;
+    ml_vault_reset(out->session_id);
     const char *mode = s_lt_str(root, "mode");
     out->mode = (mode && strcmp(mode, "review") == 0) ? 1 : 0;
     int n = 0;

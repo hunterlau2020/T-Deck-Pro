@@ -297,7 +297,7 @@ static void create_ml(lv_obj_t *parent)
     lv_obj_set_style_border_width(s_pg_sess, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(s_pg_sess, 4, LV_PART_MAIN);
     lv_obj_set_flex_flow(s_pg_sess, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_pg_sess, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(s_pg_sess, 2, LV_PART_MAIN);
     lv_obj_clear_flag(s_pg_sess, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_pg_sess, LV_OBJ_FLAG_HIDDEN);
     s_q_kind_lab = ml_label(s_pg_sess);
@@ -431,20 +431,27 @@ static void ml_render_item(void)
         break;
     }
     case PP_ML_ITEM_RECALL:
-        /* compact block (v1.30.6, user feedback): zh clue alone on the
-         * stem line; word class leads the EN definition line */
-        snprintf(buf, sizeof(buf), "Spell it: %s", it->u.rcl.meaning_zh);
-        ml_set_text(s_q_stem_lab, buf);
+        /* v1.30.7: zh + en in ONE two-line label - inter-label flex gaps
+         * were read as blank lines; inside one label only font line
+         * spacing remains */
         if (it->u.rcl.meaning_en[0])
-            snprintf(buf, sizeof(buf), "%s. %s", it->u.rcl.pos,
+            snprintf(buf, sizeof(buf), "Spell it: %s\n%s. %s",
+                     it->u.rcl.meaning_zh, it->u.rcl.pos,
                      it->u.rcl.meaning_en);
         else
-            snprintf(buf, sizeof(buf), "%s.", it->u.rcl.pos);
-        ml_set_text(s_q_clue_lab, buf);
+            snprintf(buf, sizeof(buf), "Spell it: %s\n%s.",
+                     it->u.rcl.meaning_zh, it->u.rcl.pos);
+        ml_set_text(s_q_stem_lab, buf);
+        ml_set_text(s_q_clue_lab, "");
         goto text_opts_hidden;
     case PP_ML_ITEM_CLOZE:
-        ml_set_text(s_q_stem_lab, it->u.clz.sentence_en);
-        ml_set_text(s_q_clue_lab, it->u.clz.sentence_zh);
+        if (it->u.clz.sentence_zh[0])
+            snprintf(buf, sizeof(buf), "%s\n%s", it->u.clz.sentence_en,
+                     it->u.clz.sentence_zh);
+        else
+            snprintf(buf, sizeof(buf), "%s", it->u.clz.sentence_en);
+        ml_set_text(s_q_stem_lab, buf);
+        ml_set_text(s_q_clue_lab, "");
         goto text_opts_hidden;
     case PP_ML_ITEM_OUTPUT: {
         snprintf(buf, sizeof(buf), "%s",
@@ -638,12 +645,21 @@ static void ml_consume(void)
             snprintf(s_popup_feedback, sizeof(s_popup_feedback), "%s", st);
             s_popup_next = nxt;
             s_popup_ms = millis();
-            char body[96];
-            snprintf(body, sizeof(body), "%s\n%s",
-                     m->sub.passed_present
-                         ? (m->sub.passed ? "Correct!" : "Not quite - will retry")
-                         : "Recorded.",
-                     st);
+            char body[160];
+            const char *ans = penpal_ml_reveal_answer(
+                s_sess->items[m->item_idx].id);
+            if (ans && ans[0])
+                snprintf(body, sizeof(body), "%s\n%s\nAnswer: %s",
+                         m->sub.passed_present
+                             ? (m->sub.passed ? "Correct!" : "Not quite")
+                             : "Recorded.",
+                         st, ans);
+            else
+                snprintf(body, sizeof(body), "%s\n%s",
+                         m->sub.passed_present
+                             ? (m->sub.passed ? "Correct!" : "Not quite")
+                             : "Recorded.",
+                         st);
             pp_msgbox_show("Result", body);
         } else {
             if (strstr(m->err, "plan_superseded") ||
