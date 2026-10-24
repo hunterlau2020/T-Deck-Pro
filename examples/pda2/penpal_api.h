@@ -392,8 +392,9 @@ bool penpal_wb_detail(const char *base, const char *key, int id,
  * never enter any device struct. Extra/unknown fields are dropped (qwen
  * P3-3). Grading always trusts the submit response. */
 
-#define PP_ML_ITEMS_MAX  20   /* session items cap; larger lessons are
-                               * refused at start (design §10) */
+#define PP_ML_ITEMS_MAX  72   /* real IELTS quota-20 lesson = 65 items
+                               * (measured live 2026-10-24); per-kind union
+                               * keeps this ~18KB instead of 100KB+ */
 #define PP_ML_OPT_MAX    4    /* recognition options */
 #define PP_ML_SCENE_MAX  8    /* scene_words kept for output items */
 #define PP_ML_PAT_MAX    4    /* scene_patterns kept */
@@ -411,23 +412,38 @@ typedef struct {
     int  id;                          /* session-item id (submit target) */
     bool submitted;                   /* envelope field, kept */
     pp_ml_kind_t kind;                /* DERIVED, not from the wire */
-    /* render-set only, by kind (matrix §3.2): */
-    char word[40];                    /* recognition stem */
-    char phonetic[40];
-    char pos[24];
-    char options[PP_ML_OPT_MAX][96];  /* recognition */
-    int  option_count;
-    char meaning_zh[96];              /* recall/cloze clue */
-    char meaning_en[96];              /* recall clue (server-masked) */
-    char sentence_en[160];            /* cloze gapped sentence */
-    char sentence_zh[96];             /* cloze translation */
-    char topic_title[96];             /* output */
-    char scene_words[PP_ML_SCENE_MAX][32];
-    int  scene_word_count;
-    char scene_patterns[PP_ML_PAT_MAX][64];
-    int  scene_pattern_count;
-    int  min_scene_words, min_chars;  /* output completion rule (visible) */
     bool is_output;                   /* segment=="output" (kind==OUTPUT) */
+    /* render-set only, by kind (matrix §3.2); per-kind union keeps a
+     * 65-item lesson (~18KB) loadable on device (2026-10-24 finding:
+     * flat fields measured 1.6KB/item and a quota-20 lesson hit 65) */
+    union {
+        struct {                      /* recognition */
+            char word[24];
+            char phonetic[20];
+            char pos[8];
+            char options[PP_ML_OPT_MAX][48];
+            uint8_t option_count;
+        } rec;
+        struct {                      /* recall */
+            char meaning_zh[48];
+            char phonetic[20];
+            char pos[8];
+            char meaning_en[48];      /* server-masked ____ */
+        } rcl;
+        struct {                      /* cloze */
+            char sentence_en[128];
+            char sentence_zh[64];
+            char meaning_zh[48];
+        } clz;
+        struct {                      /* output */
+            char topic_title[48];
+            char scene_words[PP_ML_SCENE_MAX][16];
+            uint8_t scene_word_count;
+            char scene_patterns[PP_ML_PAT_MAX][32];
+            uint8_t scene_pattern_count;
+            uint8_t min_scene_words, min_chars;
+        } out;
+    } u;
 } pp_ml_item_t;
 
 typedef struct {

@@ -1046,68 +1046,70 @@ static void ml_parse_prompt(const cJSON *p, pp_ml_item_t *it)
      * NOT read for kinds where it is the answer. */
     switch (it->kind) {
     case PP_ML_ITEM_RECOGNITION:
-        s_copy(it->word, sizeof(it->word), s_lt_str(p, "word"));
-        s_copy(it->phonetic, sizeof(it->phonetic), s_lt_str(p, "phonetic"));
-        s_copy(it->pos, sizeof(it->pos), s_lt_str(p, "pos"));
+        s_copy(it->u.rec.word, sizeof(it->u.rec.word), s_lt_str(p, "word"));
+        s_copy(it->u.rec.phonetic, sizeof(it->u.rec.phonetic),
+               s_lt_str(p, "phonetic"));
+        s_copy(it->u.rec.pos, sizeof(it->u.rec.pos), s_lt_str(p, "pos"));
         {
             int n = 0;
             cJSON *o;
             cJSON_ArrayForEach(o, cJSON_GetObjectItem(p, "options")) {
                 if (n >= PP_ML_OPT_MAX) break;
                 if (!cJSON_IsString(o) || !o->valuestring) continue;
-                s_copy(it->options[n], sizeof(it->options[n]),
+                s_copy(it->u.rec.options[n], sizeof(it->u.rec.options[n]),
                        o->valuestring);
                 n++;
             }
-            it->option_count = n;
+            it->u.rec.option_count = n;
         }
         break;
     case PP_ML_ITEM_RECALL:
-        s_copy(it->meaning_zh, sizeof(it->meaning_zh),
+        s_copy(it->u.rcl.meaning_zh, sizeof(it->u.rcl.meaning_zh),
                s_lt_str(p, "meaning_zh"));
-        s_copy(it->phonetic, sizeof(it->phonetic), s_lt_str(p, "phonetic"));
-        s_copy(it->pos, sizeof(it->pos), s_lt_str(p, "pos"));
-        s_copy(it->meaning_en, sizeof(it->meaning_en),
+        s_copy(it->u.rcl.phonetic, sizeof(it->u.rcl.phonetic),
+               s_lt_str(p, "phonetic"));
+        s_copy(it->u.rcl.pos, sizeof(it->u.rcl.pos), s_lt_str(p, "pos"));
+        s_copy(it->u.rcl.meaning_en, sizeof(it->u.rcl.meaning_en),
                s_lt_str(p, "meaning_en"));        /* server-masked ____ */
         break;
     case PP_ML_ITEM_CLOZE:
-        s_copy(it->sentence_en, sizeof(it->sentence_en),
+        s_copy(it->u.clz.sentence_en, sizeof(it->u.clz.sentence_en),
                s_lt_str(p, "sentence_en"));
-        s_copy(it->sentence_zh, sizeof(it->sentence_zh),
+        s_copy(it->u.clz.sentence_zh, sizeof(it->u.clz.sentence_zh),
                s_lt_str(p, "sentence_zh"));
-        s_copy(it->meaning_zh, sizeof(it->meaning_zh),
+        s_copy(it->u.clz.meaning_zh, sizeof(it->u.clz.meaning_zh),
                s_lt_str(p, "meaning_zh"));
         break;
     case PP_ML_ITEM_OUTPUT:
-        s_copy(it->topic_title, sizeof(it->topic_title),
+        s_copy(it->u.out.topic_title, sizeof(it->u.out.topic_title),
                s_lt_str(p, "topic_title"));
-        it->min_scene_words = 1;
-        it->min_chars = 15;
+        it->u.out.min_scene_words = 1;
+        it->u.out.min_chars = 15;
         {
             const cJSON *mw = cJSON_GetObjectItem(p, "min_scene_words");
-            if (cJSON_IsNumber(mw)) it->min_scene_words = mw->valueint;
+            if (cJSON_IsNumber(mw)) it->u.out.min_scene_words = mw->valueint;
             const cJSON *mc = cJSON_GetObjectItem(p, "min_chars");
-            if (cJSON_IsNumber(mc)) it->min_chars = mc->valueint;
+            if (cJSON_IsNumber(mc)) it->u.out.min_chars = mc->valueint;
             int n = 0;
             cJSON *w;
             cJSON_ArrayForEach(w, cJSON_GetObjectItem(p, "scene_words")) {
                 if (n >= PP_ML_SCENE_MAX) break;
                 if (!cJSON_IsString(w) || !w->valuestring) continue;
-                s_copy(it->scene_words[n], sizeof(it->scene_words[n]),
-                       w->valuestring);
+                s_copy(it->u.out.scene_words[n],
+                       sizeof(it->u.out.scene_words[n]), w->valuestring);
                 n++;
             }
-            it->scene_word_count = n;
+            it->u.out.scene_word_count = n;
             n = 0;
             cJSON *pt;
             cJSON_ArrayForEach(pt, cJSON_GetObjectItem(p, "scene_patterns")) {
                 if (n >= PP_ML_PAT_MAX) break;
                 if (!cJSON_IsString(pt) || !pt->valuestring) continue;
-                s_copy(it->scene_patterns[n], sizeof(it->scene_patterns[n]),
-                       pt->valuestring);
+                s_copy(it->u.out.scene_patterns[n],
+                       sizeof(it->u.out.scene_patterns[n]), pt->valuestring);
                 n++;
             }
-            it->scene_pattern_count = n;
+            it->u.out.scene_pattern_count = n;
         }
         break;
     default:                               /* unsupported: nothing rendered

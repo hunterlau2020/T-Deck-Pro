@@ -3,6 +3,22 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-10-24（v1.30.2：Mainline "lesson too large"——真实课 65 项实测 + item 按题型 union 压缩）
+
+- **现象**（真机）：开课报 "lesson too large"——PP_ML_ITEMS_MAX=20 上限
+  被真实课超过。
+- **实测**（PC 直连生产站，hunter key）：IELTS quota=20 计划的常态课
+  `L4 continuation` = **65 项**（cloze 32 + recall 23 + recognition 10）
+  ——设计 v3.1 自评 2 的担忧（课项分布未统计）实锤，20 上限假设错误。
+- **修复**：`pp_ml_item_t` 平铺全字段（1.6KB/项）改**按题型 union**
+  （认读 245B / 拼写 130B / 完形 216B / 输出 ~210B，union 取最大）；
+  上限 20→**72**；堆上一份 session ≈ 18KB（v1.30.1 指针化已保证单份）。
+  RAM 维持 58.7%。设计 §10 的 PP_ML_ITEMS_MAX 值随本条更新。
+- **交互提示**：quota=20 的计划一节常态课 65 题——设备如实逐题呈现；
+  若后续产品上要"轻量课"（如设备模式只做热身+前 N 项），属服务端
+  装配策略（另议）。
+- 版本保持 v1.30（同日第三批热修）。
+
 ## 2026-10-24（v1.30.1：Mainline TLS 内存回归热修——session 指针化）
 
 - **现象**（真机首测）：WiFi 切网后 Whoami Test 报 `SSL - memory

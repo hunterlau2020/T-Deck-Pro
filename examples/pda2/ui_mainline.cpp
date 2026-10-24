@@ -370,13 +370,14 @@ static void ml_render_item(void)
                                                                     : 0;
     switch (it->kind) {
     case PP_ML_ITEM_RECOGNITION: {
-        snprintf(buf, sizeof(buf), "%s  %s %s", it->word, it->phonetic,
-                 it->pos);
+        snprintf(buf, sizeof(buf), "%s  %s %s", it->u.rec.word,
+                 it->u.rec.phonetic, it->u.rec.pos);
         ml_set_text(s_q_stem_lab, buf);
         for (int i = 0; i < PP_ML_OPT_MAX; i++) {
-            if (i < it->option_count) {
+            if (i < it->u.rec.option_count) {
                 snprintf(buf, sizeof(buf), "%d %s %s", i + 1,
-                         (i + 1 == s_pick) ? ">" : " ", it->options[i]);
+                         (i + 1 == s_pick) ? ">" : " ",
+                         it->u.rec.options[i]);
                 ml_set_text(s_q_opts[i], buf);
                 lv_obj_clear_flag(s_q_opts[i], LV_OBJ_FLAG_HIDDEN);
             } else {
@@ -387,30 +388,31 @@ static void ml_render_item(void)
         break;
     }
     case PP_ML_ITEM_RECALL:
-        snprintf(buf, sizeof(buf), "Spell it: %s  %s", it->meaning_zh,
-                 it->pos);
+        snprintf(buf, sizeof(buf), "Spell it: %s  %s", it->u.rcl.meaning_zh,
+                 it->u.rcl.pos);
         ml_set_text(s_q_stem_lab, buf);
-        if (it->meaning_en[0]) {
-            ml_set_text(s_q_input_lab, it->meaning_en);
+        if (it->u.rcl.meaning_en[0]) {
+            ml_set_text(s_q_input_lab, it->u.rcl.meaning_en);
         }
         goto text_opts_hidden;
     case PP_ML_ITEM_CLOZE:
-        ml_set_text(s_q_stem_lab, it->sentence_en);
-        if (it->sentence_zh[0]) {
-            snprintf(buf, sizeof(buf), "%s", it->sentence_zh);
+        ml_set_text(s_q_stem_lab, it->u.clz.sentence_en);
+        if (it->u.clz.sentence_zh[0]) {
+            snprintf(buf, sizeof(buf), "%s", it->u.clz.sentence_zh);
             ml_set_text(s_q_input_lab, buf);
         }
         goto text_opts_hidden;
     case PP_ML_ITEM_OUTPUT: {
-        int off = snprintf(buf, sizeof(buf), "%s",
-                           it->topic_title[0] ? it->topic_title
-                                              : "Write with scene words");
+        snprintf(buf, sizeof(buf), "%s",
+                 it->u.out.topic_title[0] ? it->u.out.topic_title
+                                          : "Write with scene words");
         ml_set_text(s_q_stem_lab, buf);
-        off = 0;
-        for (int i = 0; i < it->scene_word_count && off < (int)sizeof(buf) - 34;
+        int off = 0;
+        for (int i = 0;
+             i < it->u.out.scene_word_count && off < (int)sizeof(buf) - 20;
              i++)
             off += snprintf(buf + off, sizeof(buf) - off, "%s ",
-                            it->scene_words[i]);
+                            it->u.out.scene_words[i]);
         ml_set_text(s_q_input_lab, buf);
         goto text_opts_hidden;
     }
@@ -723,7 +725,7 @@ void mainline_keyboard_poll(void)
             continue;
         }
         if (it->kind == PP_ML_ITEM_RECOGNITION && !it->submitted) {
-            if (c >= '1' && c <= '4' && (c - '0') <= it->option_count) {
+            if (c >= '1' && c <= '4' && (c - '0') <= it->u.rec.option_count) {
                 s_pick = c - '0';
                 ml_render_item();
             }
