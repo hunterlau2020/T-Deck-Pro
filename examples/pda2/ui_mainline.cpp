@@ -66,7 +66,7 @@ struct ml_msg_t {
     uint32_t gen;
     int kind;
     bool ok;
-    int  item_idx;                            /* SUBMIT: which item this was */
+    int  item_idx = -1;                       /* SUBMIT: which item this was */
     char err[160];
     pp_ml_overview_t ov;                      /* OVERVIEW */
     pp_ml_session_t *sess = NULL;             /* START: heap; ownership
@@ -97,7 +97,7 @@ static uint32_t s_ml_gen = 0;
 static void ml_task_func(void *param)
 {
     ml_req_t *rq = (ml_req_t *)param;
-    ml_msg_t *m = new ml_msg_t;
+    ml_msg_t *m = new ml_msg_t();       /* zero-init everything */
     m->gen = rq->gen;
     m->kind = rq->kind;
     m->item_idx = rq->item_idx;
@@ -138,7 +138,8 @@ static void ml_task_func(void *param)
 }
 
 static bool ml_start(int kind, int lesson_id, int item_id,
-                     const char *user_input, bool skipped)
+                     const char *user_input, bool skipped,
+                     int item_idx = -1)
 {
     if (s_ml_task) {
         ml_status_set("busy - wait");
@@ -160,7 +161,8 @@ static bool ml_start(int kind, int lesson_id, int item_id,
         return false;
     }
 
-    ml_req_t *rq = new ml_req_t;
+    ml_req_t *rq = new ml_req_t();      /* () zeroes: item_idx
+                                           * MUST start at 0, not garbage */
     rq->gen = s_ml_gen;
     rq->kind = kind;
     rq->base = base;
@@ -168,6 +170,7 @@ static bool ml_start(int kind, int lesson_id, int item_id,
     rq->lesson_id = lesson_id;
     rq->item_id = item_id;
     rq->skipped = skipped;
+    rq->item_idx = item_idx;
     snprintf(rq->user_input, sizeof(rq->user_input), "%s",
              user_input ? user_input : "");
 
@@ -186,7 +189,9 @@ static bool ml_start(int kind, int lesson_id, int item_id,
 static lv_obj_t *s_pg_home, *s_pg_sess, *s_pg_res;
 static lv_obj_t *s_h_line[6];                 /* HOME stacked lines */
 static lv_obj_t *s_q_kind_lab, *s_q_stem_lab, *s_q_opts[PP_ML_OPT_MAX];
-static lv_obj_t *s_q_input_lab;               /* typed answer echo */
+static lv_obj_t *s_q_clue_lab;                /* extra clue line
+                                              * (meaning_en / sentence_zh) */
+static lv_obj_t *s_q_echo_lab;                /* typed answer echo */
 static lv_obj_t *s_r_lab, *s_r_lab2;
 static lv_obj_t *s_status_lab;
 
@@ -280,7 +285,8 @@ static void create_ml(lv_obj_t *parent)
         lv_obj_set_style_text_color(l, lv_color_black(), LV_PART_MAIN);
         s_q_opts[i] = l;
     }
-    s_q_input_lab = ml_label(s_pg_sess);
+    s_q_clue_lab = ml_label(s_pg_sess);
+    s_q_echo_lab = ml_label(s_pg_sess);
 
     s_pg_res = lv_obj_create(parent);
     lv_obj_set_size(s_pg_res, lv_pct(100), lv_pct(86));
@@ -384,23 +390,20 @@ static void ml_render_item(void)
                 lv_obj_add_flag(s_q_opts[i], LV_OBJ_FLAG_HIDDEN);
             }
         }
-        ml_set_text(s_q_input_lab, "");
+        ml_set_text(s_q_clue_lab, "");
+        ml_set_text(s_q_echo_lab, "");
         break;
     }
     case PP_ML_ITEM_RECALL:
         snprintf(buf, sizeof(buf), "Spell it: %s  %s", it->u.rcl.meaning_zh,
                  it->u.rcl.pos);
         ml_set_text(s_q_stem_lab, buf);
-        if (it->u.rcl.meaning_en[0]) {
-            ml_set_text(s_q_input_lab, it->u.rcl.meaning_en);
-        }
+        ml_set_text(s_q_clue_lab, it->u.rcl.meaning_en);   /* clue line,
+                                                             * NOT the echo */
         goto text_opts_hidden;
     case PP_ML_ITEM_CLOZE:
         ml_set_text(s_q_stem_lab, it->u.clz.sentence_en);
-        if (it->u.clz.sentence_zh[0]) {
-            snprintf(buf, sizeof(buf), "%s", it->u.clz.sentence_zh);
-            ml_set_text(s_q_input_lab, buf);
-        }
+        ml_set_text(s_q_clue_lab, it->u.clz.sentence_zh);
         goto text_opts_hidden;
     case PP_ML_ITEM_OUTPUT: {
         snprintf(buf, sizeof(buf), "%s",
@@ -413,12 +416,13 @@ static void ml_render_item(void)
              i++)
             off += snprintf(buf + off, sizeof(buf) - off, "%s ",
                             it->u.out.scene_words[i]);
-        ml_set_text(s_q_input_lab, buf);
+        ml_set_text(s_q_clue_lab, buf);
         goto text_opts_hidden;
     }
     default:
         ml_set_text(s_q_stem_lab, "Unsupported item type");
-        ml_set_text(s_q_input_lab, "Enter: submit as skipped");
+        ml_set_text(s_q_clue_lab, "");
+        ml_set_text(s_q_echo_lab, "Enter: submit as skipped");
         goto text_opts_hidden;
     }
 text_opts_hidden:
@@ -437,7 +441,7 @@ static void ml_render_input_echo(void)
                                                  * output keeps scene words */
     char buf[160];
     snprintf(buf, sizeof(buf), "> %s", s_input);
-    ml_set_text(s_q_input_lab, buf);
+    ml_set_text(s_q_echo_lab, buf);
 }
 
 static void ml_render_result(void)
@@ -466,7 +470,7 @@ static bool ml_all_submitted(void)
     return true;
 }
 
-static void ml_goto_item(int idx)
+static void ml_goto_item(int idx, const char *feedback = NULL)
 {
     if (!s_sess || idx < 0 || idx >= s_sess->item_count) return;
     s_cur = idx;
@@ -474,9 +478,13 @@ static void ml_goto_item(int idx)
     s_input[0] = '\0';
     s_pick = 0;
     ml_render_item();
-    char st[48];
-    snprintf(st, sizeof(st), "item %d/%d - Enter: submit",
-             s_cur + 1, s_sess->item_count);
+    char st[96];
+    if (feedback && feedback[0])
+        snprintf(st, sizeof(st), "%s | item %d/%d", feedback,
+                 s_cur + 1, s_sess->item_count);
+    else
+        snprintf(st, sizeof(st), "item %d/%d - Enter: submit",
+                 s_cur + 1, s_sess->item_count);
     ml_status_set(st);
 }
 
@@ -515,7 +523,7 @@ static void ml_submit_current(void)
         }
     }
     ml_status_set("Submitting...");
-    ml_start(ML_REQ_SUBMIT, 0, it->id, s_input, skip);
+    ml_start(ML_REQ_SUBMIT, 0, it->id, s_input, skip, s_cur);
 }
 
 static void ml_consume(void)
@@ -566,7 +574,7 @@ static void ml_consume(void)
                 s_sess->items[m->item_idx].submitted = true;
             char st[64];
             if (m->sub.passed_present)
-                snprintf(st, sizeof(st), "%s  q=%d%s",
+                snprintf(st, sizeof(st), "%s q=%d%s",
                          m->sub.passed ? "PASS" : "retry",
                          m->sub.quality,
                          m->sub.in_errorbook ? " +book" : "");
@@ -574,7 +582,6 @@ static void ml_consume(void)
                 snprintf(st, sizeof(st), "score %d",
                          m->sub.score_write >= 0 ? m->sub.score_write
                                                  : m->sub.combined);
-            ml_status_set(st);
             /* advance to the next undone item, or finish */
             int nxt = -1;
             for (int i = 0; i < s_sess->item_count; i++)
@@ -582,8 +589,11 @@ static void ml_consume(void)
                     nxt = i;
                     break;
                 }
-            if (nxt >= 0) ml_goto_item(nxt);
-            else ml_try_finish();
+            if (nxt >= 0) ml_goto_item(nxt, st);
+            else {
+                ml_status_set(st);
+                ml_try_finish();
+            }
         } else {
             if (strstr(m->err, "plan_superseded") ||
                 strstr(m->err, "superseded")) {
@@ -774,7 +784,8 @@ static void destroy_ml(void)
 {
     s_pg_home = s_pg_sess = s_pg_res = NULL;
     s_q_kind_lab = s_q_stem_lab = NULL;
-    s_q_input_lab = NULL;
+    s_q_clue_lab = NULL;
+    s_q_echo_lab = NULL;
     s_r_lab = s_r_lab2 = NULL;
     s_status_lab = NULL;
     for (int i = 0; i < PP_ML_OPT_MAX; i++) s_q_opts[i] = NULL;

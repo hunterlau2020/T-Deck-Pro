@@ -3,6 +3,22 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-10-24（v1.30.3：Mainline 拼写题 UX 三处——线索/回显分行 + 提交不推进 bug）
+
+- **拼写题排版**：英文释义（meaning_en）与输入回显共用了同一个
+  label，敲字母即被覆盖——拆为独立线索行（s_q_clue_lab）+ 输入回显
+  行（s_q_echo_lab），完形中文译文/输出场景词同走线索行。
+- **提交不推进（P1 bug）**：`new ml_req_t`（无括号）不零初始化，
+  提交结果里的题号为垃圾值 → 当前题未标记已提交 → "下一题"仍是
+  当前题，且跳转覆盖了 PASS/retry 反馈。修复：`new ml_req_t()` /
+  `new ml_msg_t()` 零初始化 + item_idx 显式随请求传递；提交反馈
+  （`PASS q=4` / `retry q=2 +book` / `score N`）并入跳转后的状态行
+  （`PASS q=4 | item 5/65`）。
+- **TTS 发音**：用户诉求登记——排 **Round 2 音频轮**（与口语 ASR
+  同批，走已验证的 MiniMax TTS 链路）；注意 tts_text 播放按题型定
+  安全性（认读=题干可播，拼写的 word 是答案**提交前禁播**）。
+- 版本保持 v1.30（同日第四批热修）。
+
 ## 2026-10-24（v1.30.2：Mainline "lesson too large"——真实课 65 项实测 + item 按题型 union 压缩）
 
 - **现象**（真机）：开课报 "lesson too large"——PP_ML_ITEMS_MAX=20 上限
