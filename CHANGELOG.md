@@ -3,6 +3,20 @@
 本文件记录 pda2 预研（T-Deck-Pro HD-V2，分支 `HD-V2-250915`）的主要工作。
 评审细节见 `docs/reviews/`（每轮 = 申请 + 双评审结果，按 commit 范围命名）。
 
+## 2026-10-24（v1.30.1：Mainline TLS 内存回归热修——session 指针化）
+
+- **现象**（真机首测）：WiFi 切网后 Whoami Test 报 `SSL - memory
+  allocation failed`——TLS 握手无堆可用。
+- **根因**：v1.30 的 `pp_ml_session_t`（20 items × ~1.6KB ≈ 32KB）在
+  `ui_mainline` 静态一份 + worker `ml_msg_t` 值拷贝一份，RAM 57.8% →
+  **68.4%**，静态 BSS 挤掉 ~35KB 系统堆（mbedtls 握手需 ~45KB 连续堆）。
+- **修复**：session 改**指针所有权交接**（worker `new` → 队列传指针 →
+  consume 接管/迟到释放——契约规则 1 的 OTA 纯指针通道模式）；entry
+  释放上次会话；全路径 NULL 守卫。RAM 回 **58.7%**。
+- **教训**：>10KB 的载荷结构严禁 UI 静态 + msg 值拷贝双份——新增大
+  结构时必须跑一次 `pio run` 看 RAM 增量（本轮就是漏看了 size）。
+- 版本保持 **v1.30**（构建日期区分；CHANGELOG 单列热修记录）。
+
 ## 2026-10-24（v1.30：Mainline 学习主线应用——v3.1 设计首轮实现）
 
 - **设计**：`docs/mainline-design.md` v3.1——v2 五方 2A/3C（P1 白名单

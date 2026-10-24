@@ -41,7 +41,10 @@ static void ml_status_set(const char *txt);
 static void ml_render_item(void);
 
 static pp_ml_overview_t s_ov;                 /* HOME payload */
-static pp_ml_session_t s_sess;                /* SESSION items (UI owned) */
+static pp_ml_session_t *s_sess = NULL;  /* heap; ownership moved from the
+                                          * worker msg (v1.30.1: the by-value
+                                          * copy ate 32KB static RAM and
+                                          * starved TLS allocations) */
 static int s_cur = 0;                         /* current item index */
 static bool s_finishing = false;
 static bool s_finish_sent = false;
@@ -66,7 +69,9 @@ struct ml_msg_t {
     int  item_idx;                            /* SUBMIT: which item this was */
     char err[160];
     pp_ml_overview_t ov;                      /* OVERVIEW */
-    pp_ml_session_t sess;                     /* START */
+    pp_ml_session_t *sess = NULL;             /* START: heap; ownership
+                                               * moves to the consumer
+                                               * (contract rule 1) */
     pp_ml_submit_t sub;                       /* SUBMIT */
     pp_ml_finish_t fin;                       /* FINISH */
     pp_ml_finish409_t miss;                   /* FINISH 409 detail */
@@ -103,8 +108,13 @@ static void ml_task_func(void *param)
     if (rq->kind == ML_REQ_OVERVIEW) {
         m->ok = penpal_ml_overview(base, key, &m->ov, &err);
     } else if (rq->kind == ML_REQ_START) {
+        m->sess = new pp_ml_session_t;        /* consumer deletes (rule 1) */
         m->ok = penpal_ml_lesson_start(base, key, rq->lesson_id,
-                                       &m->sess, &err);
+                                       m->sess, &err);
+        if (!m->ok) {
+            delete m->sess;
+            m->sess = NULL;
+        }
     } else if (rq->kind == ML_REQ_SUBMIT) {
         m->ok = penpal_ml_item_submit(base, key, rq->item_id,
                                       rq->skipped ? NULL
@@ -189,7 +199,7 @@ static void ml_opt_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     if (s_ml_page != ML_PAGE_SESSION || s_ml_task) return;
-    const pp_ml_item_t *it = &s_sess.items[s_cur];
+    const pp_ml_item_t *it = &s_sess->items[s_cur];
     if (it->kind != PP_ML_ITEM_RECOGNITION || it->submitted) return;
     s_pick = (int)(intptr_t)lv_event_get_user_data(e);
     ml_render_item();
@@ -348,11 +358,12 @@ static void ml_render_home(void)
 
 static void ml_render_item(void)
 {
-    const pp_ml_item_t *it = &s_sess.items[s_cur];
+    if (!s_sess) return;
+    const pp_ml_item_t *it = &s_sess->items[s_cur];
     char buf[192];
 
     snprintf(buf, sizeof(buf), "item %d/%d  %s", s_cur + 1,
-             s_sess.item_count, it->submitted ? "(done)" : "");
+             s_sess->item_count, it->submitted ? "(done)" : "");
     ml_set_text(s_q_kind_lab, buf);
 
     s_pick = (it->kind == PP_ML_ITEM_RECOGNITION && !it->submitted) ? s_pick
@@ -417,7 +428,8 @@ text_opts_hidden:
 /* typed-echo line for text answers: shown while typing */
 static void ml_render_input_echo(void)
 {
-    const pp_ml_item_t *it = &s_sess.items[s_cur];
+    if (!s_sess) return;
+    const pp_ml_item_t *it = &s_sess->items[s_cur];
     if (it->kind == PP_ML_ITEM_RECOGNITION || it->kind == PP_ML_ITEM_OUTPUT)
         return;                               /* recognition shows options;
                                                  * output keeps scene words */
@@ -446,14 +458,15 @@ static void ml_render_result(void)
 
 static bool ml_all_submitted(void)
 {
-    for (int i = 0; i < s_sess.item_count; i++)
-        if (!s_sess.items[i].submitted) return false;
+    if (!s_sess) return false;
+    for (int i = 0; i < s_sess->item_count; i++)
+        if (!s_sess->items[i].submitted) return false;
     return true;
 }
 
 static void ml_goto_item(int idx)
 {
-    if (idx < 0 || idx >= s_sess.item_count) return;
+    if (!s_sess || idx < 0 || idx >= s_sess->item_count) return;
     s_cur = idx;
     s_input_len = 0;
     s_input[0] = '\0';
@@ -461,7 +474,7 @@ static void ml_goto_item(int idx)
     ml_render_item();
     char st[48];
     snprintf(st, sizeof(st), "item %d/%d - Enter: submit",
-             s_cur + 1, s_sess.item_count);
+             s_cur + 1, s_sess->item_count);
     ml_status_set(st);
 }
 
@@ -469,8 +482,8 @@ static void ml_try_finish(void)
 {
     if (!ml_all_submitted()) {
         /* skip already-done prefix forward */
-        for (int i = 0; i < s_sess.item_count; i++) {
-            if (!s_sess.items[i].submitted) {
+        for (int i = 0; i < s_sess->item_count; i++) {
+            if (!s_sess->items[i].submitted) {
                 ml_goto_item(i);
                 ml_status_set("finish blocked: item left");
                 return;
@@ -485,7 +498,7 @@ static void ml_try_finish(void)
 
 static void ml_submit_current(void)
 {
-    pp_ml_item_t *it = &s_sess.items[s_cur];
+    pp_ml_item_t *it = &s_sess->items[s_cur];
     bool skip = (it->kind == PP_ML_ITEM_UNSUPPORTED);
     /* output items NEVER skip (IC-2); recognition needs a pick */
     if (it->kind == PP_ML_ITEM_RECOGNITION && s_pick == 0) {
@@ -511,6 +524,7 @@ static void ml_consume(void)
     while (xQueueReceive(s_ml_q, &p, 0) == pdTRUE) {
         m = (ml_msg_t *)p;
         if (m->gen == s_ml_gen) break;
+        if (m->sess) { delete m->sess; m->sess = NULL; }
         delete m;
         m = NULL;
     }
@@ -528,12 +542,14 @@ static void ml_consume(void)
         }
     } else if (m->kind == ML_REQ_START) {
         if (m->ok) {
-            s_sess = m->sess;
+            delete s_sess;                    /* previous session, if any */
+            s_sess = m->sess;                 /* ownership moved */
+            m->sess = NULL;
             s_finishing = false;
             s_finish_sent = false;
             int first = 0;
-            for (int i = 0; i < s_sess.item_count; i++)
-                if (!s_sess.items[i].submitted) {
+            for (int i = 0; i < s_sess->item_count; i++)
+                if (!s_sess->items[i].submitted) {
                     first = i;
                     break;
                 }
@@ -544,8 +560,8 @@ static void ml_consume(void)
         }
     } else if (m->kind == ML_REQ_SUBMIT) {
         if (m->ok) {
-            if (m->item_idx >= 0 && m->item_idx < s_sess.item_count)
-                s_sess.items[m->item_idx].submitted = true;
+            if (m->item_idx >= 0 && m->item_idx < s_sess->item_count)
+                s_sess->items[m->item_idx].submitted = true;
             char st[64];
             if (m->sub.passed_present)
                 snprintf(st, sizeof(st), "%s  q=%d%s",
@@ -559,8 +575,8 @@ static void ml_consume(void)
             ml_status_set(st);
             /* advance to the next undone item, or finish */
             int nxt = -1;
-            for (int i = 0; i < s_sess.item_count; i++)
-                if (!s_sess.items[i].submitted) {
+            for (int i = 0; i < s_sess->item_count; i++)
+                if (!s_sess->items[i].submitted) {
                     nxt = i;
                     break;
                 }
@@ -590,9 +606,9 @@ static void ml_consume(void)
                 /* capstone rule: jump to the LAST undone output item
                  * (design §3.3 / IC-2); none -> stay with the message */
                 int last_out = -1;
-                for (int i = 0; i < s_sess.item_count; i++)
-                    if (s_sess.items[i].is_output &&
-                        !s_sess.items[i].submitted)
+                for (int i = 0; i < s_sess->item_count; i++)
+                    if (s_sess->items[i].is_output &&
+                        !s_sess->items[i].submitted)
                         last_out = i;
                 if (last_out >= 0) {
                     ml_goto_item(last_out);
@@ -603,8 +619,8 @@ static void ml_consume(void)
                     ml_status_set(m->miss.message);
                 }
             } else if (m->miss.missing_first > 0) {
-                for (int i = 0; i < s_sess.item_count; i++)
-                    if (s_sess.items[i].id == m->miss.missing_first) {
+                for (int i = 0; i < s_sess->item_count; i++)
+                    if (s_sess->items[i].id == m->miss.missing_first) {
                         ml_goto_item(i);
                         break;
                     }
@@ -669,7 +685,8 @@ void mainline_keyboard_poll(void)
         }
 
         /* SESSION */
-        const pp_ml_item_t *it = &s_sess.items[s_cur];
+        if (!s_sess) { ml_status_set("no session"); continue; }
+        const pp_ml_item_t *it = &s_sess->items[s_cur];
         if (c == '\n') {
             if (s_ml_task) {
                 s_enter_pending = true;
@@ -734,6 +751,8 @@ static void entry_ml(void)
     ui_disp_full_refr();
     s_ml_gen++;
     s_enter_pending = false;
+    delete s_sess;                            /* previous visit's session */
+    s_sess = NULL;
     s_ml_page = ML_PAGE_HOME;
     memset(&s_ov, 0, sizeof(s_ov));
     s_ov.recommend = -1;
