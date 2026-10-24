@@ -18,6 +18,7 @@
 #include "ui_mainline.h"
 #include "ui_deckpro_port.h"
 #include "penpal_api.h"
+#include "ui_penpal.h"        /* pp_msgbox (submit-result popup) */
 #include "peripheral.h"
 #include "src/assets.h"
 #include <string>
@@ -57,6 +58,12 @@ static int  s_input_len = 0;
 static int s_pick = 0;
 
 static bool s_enter_pending = false;          /* v1.18: never eat keys */
+static uint32_t s_popup_ms = 0;               /* submit-result popup open
+                                              * time; poll closes it after
+                                              * 1.8s and advances */
+static char s_popup_feedback[64];             /* feedback shown in popup */
+static int  s_popup_next = -1;                /* item to goto on close, or
+                                              * -1 = finish */
 
 /* ---- async glue (wa_* pattern) -------------------------------------------- */
 
@@ -371,6 +378,8 @@ static void ml_render_item(void)
     snprintf(buf, sizeof(buf), "item %d/%d  %s", s_cur + 1,
              s_sess->item_count, it->submitted ? "(done)" : "");
     ml_set_text(s_q_kind_lab, buf);
+    ml_set_text(s_q_echo_lab, "");           /* stale echo must not leak
+                                              * into the next item */
 
     s_pick = (it->kind == PP_ML_ITEM_RECOGNITION && !it->submitted) ? s_pick
                                                                     : 0;
@@ -386,8 +395,10 @@ static void ml_render_item(void)
                          it->u.rec.options[i]);
                 ml_set_text(s_q_opts[i], buf);
                 lv_obj_clear_flag(s_q_opts[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(s_q_opts[i], LV_OBJ_FLAG_IGNORE_LAYOUT);
             } else {
                 lv_obj_add_flag(s_q_opts[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_q_opts[i], LV_OBJ_FLAG_IGNORE_LAYOUT);
             }
         }
         ml_set_text(s_q_clue_lab, "");
@@ -426,8 +437,10 @@ static void ml_render_item(void)
         goto text_opts_hidden;
     }
 text_opts_hidden:
-    for (int i = 0; i < PP_ML_OPT_MAX; i++)
+    for (int i = 0; i < PP_ML_OPT_MAX; i++) {
         lv_obj_add_flag(s_q_opts[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_q_opts[i], LV_OBJ_FLAG_IGNORE_LAYOUT);
+    }
     ml_page_show(ML_PAGE_SESSION);
 }
 
@@ -582,18 +595,24 @@ static void ml_consume(void)
                 snprintf(st, sizeof(st), "score %d",
                          m->sub.score_write >= 0 ? m->sub.score_write
                                                  : m->sub.combined);
-            /* advance to the next undone item, or finish */
+            /* result popup (user request): show 1.8s, the poll loop
+             * closes it and advances */
             int nxt = -1;
             for (int i = 0; i < s_sess->item_count; i++)
                 if (!s_sess->items[i].submitted) {
                     nxt = i;
                     break;
                 }
-            if (nxt >= 0) ml_goto_item(nxt, st);
-            else {
-                ml_status_set(st);
-                ml_try_finish();
-            }
+            snprintf(s_popup_feedback, sizeof(s_popup_feedback), "%s", st);
+            s_popup_next = nxt;
+            s_popup_ms = millis();
+            char body[96];
+            snprintf(body, sizeof(body), "%s\n%s",
+                     m->sub.passed_present
+                         ? (m->sub.passed ? "Correct!" : "Not quite - will retry")
+                         : "Recorded.",
+                     st);
+            pp_msgbox_show("Result", body);
         } else {
             if (strstr(m->err, "plan_superseded") ||
                 strstr(m->err, "superseded")) {
@@ -650,6 +669,30 @@ static void ml_consume(void)
 void mainline_keyboard_poll(void)
 {
     if (!s_status_lab) return;
+
+    /* submit-result popup: auto-close after 1.8s, then advance */
+    if (s_popup_ms) {
+        bool timeout = millis() - s_popup_ms > 1800;
+        bool key = false;
+        char c;
+        if (keypad_get_val(&c)) {
+            keypad_set_flag();
+            key = true;
+        }
+        if (timeout || key) {
+            pp_msgbox_close();
+            s_popup_ms = 0;
+            if (s_popup_next >= 0)
+                ml_goto_item(s_popup_next, s_popup_feedback);
+            else {
+                ml_status_set(s_popup_feedback);
+                ml_try_finish();
+            }
+            return;                          /* one action per frame */
+        }
+        return;                              /* popup absorbs input */
+    }
+
     ml_consume();
 
     if (s_enter_pending && !s_ml_task) {
@@ -763,6 +806,9 @@ static void entry_ml(void)
     ui_disp_full_refr();
     s_ml_gen++;
     s_enter_pending = false;
+    s_popup_ms = 0;
+    s_popup_next = -1;
+    if (pp_msgbox_open()) pp_msgbox_close();
     delete s_sess;                            /* previous visit's session */
     s_sess = NULL;
     s_ml_page = ML_PAGE_HOME;
