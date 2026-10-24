@@ -431,11 +431,16 @@ static void ml_render_item(void)
         break;
     }
     case PP_ML_ITEM_RECALL:
-        snprintf(buf, sizeof(buf), "Spell it: %s  %s", it->u.rcl.meaning_zh,
-                 it->u.rcl.pos);
+        /* compact block (v1.30.6, user feedback): zh clue alone on the
+         * stem line; word class leads the EN definition line */
+        snprintf(buf, sizeof(buf), "Spell it: %s", it->u.rcl.meaning_zh);
         ml_set_text(s_q_stem_lab, buf);
-        ml_set_text(s_q_clue_lab, it->u.rcl.meaning_en);   /* clue line,
-                                                             * NOT the echo */
+        if (it->u.rcl.meaning_en[0])
+            snprintf(buf, sizeof(buf), "%s. %s", it->u.rcl.pos,
+                     it->u.rcl.meaning_en);
+        else
+            snprintf(buf, sizeof(buf), "%s.", it->u.rcl.pos);
+        ml_set_text(s_q_clue_lab, buf);
         goto text_opts_hidden;
     case PP_ML_ITEM_CLOZE:
         ml_set_text(s_q_stem_lab, it->u.clz.sentence_en);
